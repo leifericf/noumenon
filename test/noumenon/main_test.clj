@@ -58,10 +58,10 @@
     (is (str/includes? stderr "Missing"))))
 
 (deftest unknown-flag
-  (let [{:keys [exit stdout stderr]} (run-capturing ["import" "--verbose" "/tmp"])]
+  (let [{:keys [exit stdout stderr]} (run-capturing ["import" "--frobnicate" "/tmp"])]
     (is (= 1 exit))
     (is (str/blank? stdout))
-    (is (str/includes? stderr "Unknown option: --verbose"))))
+    (is (str/includes? stderr "Unknown option: --frobnicate"))))
 
 (deftest missing-db-dir-value
   (let [{:keys [exit stdout stderr]} (run-capturing ["import" "--db-dir"])]
@@ -132,9 +132,9 @@
     (is (str/includes? stderr "Missing"))))
 
 (deftest benchmark-unknown-flag
-  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--verbose" "."])]
+  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--frobnicate" "."])]
     (is (= 1 exit))
-    (is (str/includes? stderr "Unknown option: --verbose"))))
+    (is (str/includes? stderr "Unknown option: --frobnicate"))))
 
 (deftest benchmark-resume-defaults-to-latest
   ;; --resume without value defaults to "latest"
@@ -342,35 +342,74 @@
     (is (= 1 exit))
     (is (str/includes? stderr "No runs found"))))
 
+;; --- Help and version ---
+
+(deftest global-help
+  (let [{:keys [exit stdout stderr]} (run-capturing ["--help"])]
+    (is (= 0 exit))
+    (is (str/includes? stdout "Usage"))
+    (is (str/includes? stdout "import"))
+    (is (str/includes? stdout "benchmark"))
+    (is (str/blank? stderr))))
+
+(deftest global-help-short
+  (let [{:keys [exit stdout]} (run-capturing ["-h"])]
+    (is (= 0 exit))
+    (is (str/includes? stdout "Usage"))))
+
+(deftest subcommand-help
+  (let [{:keys [exit stdout stderr]} (run-capturing ["benchmark" "--help"])]
+    (is (= 0 exit))
+    (is (str/includes? stdout "benchmark"))
+    (is (str/includes? stdout "--skip-raw"))
+    (is (str/blank? stderr))))
+
+(deftest agent-help
+  (let [{:keys [exit stdout]} (run-capturing ["agent" "--help"])]
+    (is (= 0 exit))
+    (is (str/includes? stdout "--question"))))
+
+(deftest longbench-help
+  (let [{:keys [exit stdout]} (run-capturing ["longbench" "--help"])]
+    (is (= 0 exit))
+    (is (str/includes? stdout "download"))
+    (is (str/includes? stdout "run"))))
+
+(deftest version-flag
+  (let [{:keys [exit stdout stderr]} (run-capturing ["--version"])]
+    (is (= 0 exit))
+    (is (not (str/blank? stdout)))
+    (is (str/blank? stderr))))
+
 ;; --- Agent subcommand ---
 
-(deftest agent-missing-args
-  (let [{:keys [exit stderr]} (run-capturing ["agent"])]
+(deftest agent-missing-question
+  (let [{:keys [exit stderr]} (run-capturing ["agent" repo-path])]
     (is (= 1 exit))
-    (is (str/includes? stderr "Usage: agent"))))
+    (is (str/includes? stderr "Missing -q"))))
 
 (deftest agent-missing-repo-path
-  (let [{:keys [exit stderr]} (run-capturing ["agent" "some question"])]
+  (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "some question"])]
     (is (= 1 exit))
-    (is (str/includes? stderr "Usage: agent"))))
+    (is (str/includes? stderr "Missing"))))
 
 (deftest agent-invalid-max-iterations
-  (let [{:keys [exit stderr]} (run-capturing ["agent" "q" "/tmp" "--max-iterations" "abc"])]
+  (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "q" "--max-iterations" "abc" "/tmp"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Invalid --max-iterations"))))
 
 (deftest agent-missing-max-iterations-value
-  (let [{:keys [exit stderr]} (run-capturing ["agent" "q" "/tmp" "--max-iterations"])]
+  (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "q" "--max-iterations"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Missing value for --max-iterations"))))
 
 (deftest agent-unknown-flag
-  (let [{:keys [exit stderr]} (run-capturing ["agent" "q" "/tmp" "--unknown"])]
+  (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "q" "--unknown" "/tmp"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Unknown option"))))
 
 (deftest agent-no-database
-  (let [{:keys [exit stderr]} (run-capturing ["agent" "question" "/tmp/nonexistent-repo-xyz"])]
+  (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "question" "/tmp/nonexistent-repo-xyz"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Path does not exist"))))
 

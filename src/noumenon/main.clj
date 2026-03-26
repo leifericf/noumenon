@@ -1,5 +1,6 @@
 (ns noumenon.main
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
@@ -27,8 +28,8 @@
       (str (.getAbsolutePath (io/file "data" "datomic")))))
 
 (def ^:private default-provider-by-command
-  {"analyze" "claude"
-   "agent" llm/default-provider
+  {"agent" llm/default-provider
+   "analyze" llm/default-provider
    "benchmark" llm/default-provider
    "longbench" llm/default-provider})
 
@@ -39,63 +40,12 @@
 (defn- parse-args [args]
   (cli/parse-args args))
 
-(def ^:private usage-text
-  (str/join "\n"
-            ["Usage: clj -M:run <subcommand> [options] <repo-path>"
-             ""
-             "Subcommands:"
-             "  import     Import git history and file structure into Datomic"
-             "  analyze    Enrich imported files with LLM-driven semantic analysis"
-             "  query      Run a named Datalog query against the knowledge graph"
-             "  status     Show import counts for a repository"
-             "  agent      Ask a question about a repository using AI-powered querying"
-             "  benchmark  Run benchmark suite against a repository"
-             "  longbench  Run LongBench v2 standard benchmark"
-             ""
-             "Options:"
-             "  --db-dir <dir>        Override default storage directory (default: data/datomic/)"
-             "  --model <alias>       Model alias (e.g. sonnet, haiku)"
-             "  --provider <name>     Provider: glm (default), claude, claude-api, or claude-cli"
-             ""
-             "Agent options:"
-             "  --max-iterations <n>  Max query iterations (default: 10)"
-             "  --max-cost <dollars>  Stop when session cost exceeds threshold"
-             "  -v                    Verbose: log iterations to stderr"
-             ""
-             "Benchmark options:"
-             "  --skip-raw            Omit raw-context condition (halves LLM calls)"
-             "  --skip-judge          Skip LLM judge stages (deterministic scores only)"
-             "  --fast                Sugar for --skip-raw --skip-judge"
-             "  --canary              Run q01+q02 first as canary; warn if both fail"
-             "  --resume [run-id]     Resume from checkpoint (default: latest)"
-             "  --max-questions <n>   Stop after n questions"
-             "  --stop-after <secs>   Stop after n seconds"
-             "  --max-cost <dollars>  Stop when session cost exceeds threshold"
-             "  --judge-model <alias> Model alias for judge stages"
-             "  --concurrency <n>    Parallel pair workers, 1-20 (default: 4)"
-             "  --min-delay <ms>     Min delay between LLM requests (default: 0)"
-             ""
-             "LongBench subcommands:"
-             "  longbench download              Download LongBench v2 dataset"
-             "  longbench run [options]          Run benchmark"
-             "  longbench results [run-id]       Show results"
-             ""
-             "LongBench run options:"
-             "  --resume [run-id]     Resume from checkpoint (default: latest)"
-             "  --max-questions <n>   Stop after n questions"
-             "  --stop-after <secs>   Stop after n seconds"
-             "  --max-cost <dollars>  Stop when session cost exceeds threshold"
-             "  --model <alias>       Model alias (e.g. sonnet, haiku, opus)"
-             "  --provider <name>     Provider: glm (default), claude, claude-api, or claude-cli"
-             "  --concurrency <n>    Parallel workers, 1-20 (default: 4)"
-             "  --min-delay <ms>     Min delay between LLM requests (default: 0)"
-             ""
-             "LongBench results options:"
-             "  --detail              Show per-question detail table"]))
+(defn- read-version []
+  (:version (edn/read-string (slurp (io/resource "version.edn")))))
 
 (defn- print-usage! []
   (binding [*out* *err*]
-    (println usage-text)))
+    (println (cli/format-global-help))))
 
 (defn- print-error! [msg]
   (binding [*out* *err*]
@@ -500,7 +450,8 @@
    :longbench-no-subcommand      "Missing longbench subcommand. Usage: longbench <download|run|results>"
    :longbench-unknown-subcommand #(str "Unknown longbench subcommand: " (:longbench-command %)
                                        ". Usage: longbench <download|run|results>")
-   :agent-missing-args           "Usage: agent <question> <repo-path> [options]"
+   :agent-missing-args           "Usage: agent -q <question> [options] <repo-path>"
+   :agent-missing-question        "Missing -q <question> argument."
    :invalid-max-iterations       #(str "Invalid --max-iterations value: " (:value %))
    :missing-max-iterations-value "Missing value for --max-iterations."})
 
@@ -513,13 +464,26 @@
   "Main dispatch. Returns {:exit n :result map-or-nil}."
   [args]
   (let [parsed (parse-args args)]
-    (if-let [err (:error parsed)]
-      (do (when-let [msg-or-fn (error-messages err)]
+    (cond
+      (:version parsed)
+      (do (println (read-version)) {:exit 0})
+
+      (:help parsed)
+      (let [h (:help parsed)]
+        (println (if (= :global h)
+                   (cli/format-global-help)
+                   (cli/format-subcommand-help h)))
+        {:exit 0})
+
+      (:error parsed)
+      (do (when-let [msg-or-fn (error-messages (:error parsed))]
             (let [msg (if (fn? msg-or-fn) (msg-or-fn parsed) msg-or-fn)]
               (print-error! msg)))
-          (when (errors-with-usage err)
+          (when (errors-with-usage (:error parsed))
             (print-usage!))
           {:exit 1})
+
+      :else
       (let [result (case (:subcommand parsed)
                      "import"    (do-import parsed)
                      "analyze"   (do-analyze parsed)
