@@ -3,7 +3,7 @@
 
 File: {{file-path}}
 Lines: {{line-count}}
-
+{{imports}}{{imported-by}}
 ```{{lang-name}}
 {{content}}
 ```

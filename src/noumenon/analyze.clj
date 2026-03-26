@@ -67,20 +67,47 @@
   [template-str]
   (subs (sha256-hex template-str) 0 16))
 
+(defn- format-import-context
+  "Format resolved imports and reverse imports as context strings.
+   Returns a map with :imports and :imported-by strings, or empty strings if none."
+  [db file-path]
+  (let [forward (->> (d/pull db [{:file/imports [:file/path]}] [:file/path file-path])
+                     :file/imports
+                     (mapv :file/path)
+                     sort)
+        reverse (->> (d/q '[:find ?p
+                            :in $ ?target
+                            :where
+                            [?other :file/imports ?target]
+                            [?other :file/path ?p]]
+                          db [:file/path file-path])
+                     (mapv first)
+                     sort)]
+    {:imports     (if (seq forward) (str/join "\n" forward) "")
+     :imported-by (if (seq reverse) (str/join "\n" reverse) "")}))
+
 (defn render-prompt
   "Substitute template variables into the prompt template string.
    Content is escaped and wrapped in delimiters to prevent prompt injection."
-  [template {:keys [file-path lang line-count content repo-name]}]
+  [template {:keys [file-path lang line-count content repo-name imports imported-by]}]
   (let [safe-content (str "<file-content>\n"
                           (escape-template-vars content)
-                          "\n</file-content>")]
+                          "\n</file-content>")
+        imports-section (if (str/blank? imports)
+                          ""
+                          (str "\nKnown imports (resolved file paths):\n" imports "\n"))
+        imported-by-section (if (str/blank? imported-by)
+                              ""
+                              (str "\nFiles that depend on this file:\n" imported-by "\n"))]
     (-> template
         (str/replace "{{file-path}}" (escape-template-vars (or file-path "")))
         (str/replace "{{lang}}" (name (or lang :unknown)))
         (str/replace "{{lang-name}}" (name (or lang :unknown)))
         (str/replace "{{line-count}}" (str (or line-count 0)))
         (str/replace "{{content}}" safe-content)
-        (str/replace "{{repo-name}}" (escape-template-vars (or repo-name ""))))))
+        (str/replace "{{repo-name}}" (escape-template-vars (or repo-name "")))
+        (str/replace "{{imports}}" imports-section)
+        (str/replace "{{imported-by}}" imported-by-section))))
 
 ;; --- Defensive EDN parsing ---
 
@@ -289,20 +316,25 @@
 
 (defn analyze-file!
   "Analyze a single file. Returns {:status :ok/:parse-error/:error, :usage map-or-nil}.
-   Retries once on parse errors (unparseable LLM response)."
+   Retries once on parse errors (unparseable LLM response).
+   When enriched data (`:file/imports`) is available, includes it as context."
   [conn repo-path file-map {:keys [prompt-template prompt-hash-val invoke-llm]}]
   (let [{:keys [file/path file/lang]} file-map
         repo-name  (repo-name repo-path)
         usage-atom (atom nil)]
     (try
-      (let [raw-content          (git-show repo-path path)
+      (let [db                   (d/db conn)
+            raw-content          (git-show repo-path path)
             [content truncated?] (truncate-content raw-content)
+            {:keys [imports imported-by]} (format-import-context db path)
             prompt   (render-prompt prompt-template
-                                    {:file-path  path
-                                     :lang       lang
-                                     :line-count (count (str/split-lines content))
-                                     :content    content
-                                     :repo-name  repo-name})
+                                    {:file-path    path
+                                     :lang         lang
+                                     :line-count   (count (str/split-lines content))
+                                     :content      content
+                                     :repo-name    repo-name
+                                     :imports      imports
+                                     :imported-by  imported-by})
             try-invoke (fn []
                          (let [{:keys [text usage resolved-model]} (invoke-llm prompt)]
                            (reset! usage-atom usage)
