@@ -106,12 +106,23 @@
     [(str base ".clj") (str base ".cljc") (str base ".cljs")]))
 
 (defn- resolve-clj-import
-  "Try to resolve a Clojure namespace to a repo file path."
+  "Try to resolve a Clojure namespace to a repo file path.
+   Handles mono-repos by matching any path ending with the namespace-derived
+   suffix (e.g., ring.util.codec -> */ring/util/codec.clj)."
   [ns-str all-paths]
   (let [candidates (ns->paths ns-str)
+        ;; First try direct prefixed candidates (fast path)
         prefixed   (mapcat (fn [c] [(str "src/" c) (str "test/" c) (str "dev/" c) c])
-                           candidates)]
-    (first (filter all-paths prefixed))))
+                           candidates)
+        direct     (first (filter all-paths prefixed))]
+    (or direct
+        ;; Fall back to suffix matching for mono-repos with subproject dirs
+        (let [suffixes (mapcat (fn [c] [(str "/src/" c) (str "/test/" c) (str "/dev/" c)])
+                               candidates)]
+          (first (for [suffix suffixes
+                       p      all-paths
+                       :when  (str/ends-with? p suffix)]
+                   p))))))
 
 (defmethod resolve-import :clojure [_ import-name _source-path all-paths]
   (resolve-clj-import import-name all-paths))
@@ -146,9 +157,15 @@ print(json.dumps(imports))")
     (catch Exception _ [])))
 
 (defn- resolve-python-import [import-name all-paths]
-  (let [base (str/replace import-name "." "/")]
-    (first (filter all-paths [(str base ".py")
-                              (str base "/__init__.py")]))))
+  (let [base     (str/replace import-name "." "/")
+        suffixes [(str base ".py") (str base "/__init__.py")]
+        direct   (first (filter all-paths suffixes))]
+    (or direct
+        ;; Handle src-layout projects (src/pkg/...) and other prefixed layouts
+        (first (for [suffix (map #(str "/" %) suffixes)
+                     p      all-paths
+                     :when  (str/ends-with? p suffix)]
+                 p)))))
 
 (defmethod resolve-import :python [_ import-name _source-path all-paths]
   (resolve-python-import import-name all-paths))
@@ -291,7 +308,14 @@ end")
      (str base ".exs")]))
 
 (defmethod resolve-import :elixir [_ import-name _source-path all-paths]
-  (first (filter all-paths (elixir-module->paths import-name))))
+  (let [candidates (elixir-module->paths import-name)
+        direct     (first (filter all-paths candidates))]
+    (or direct
+        ;; Handle umbrella apps with subproject prefixes (apps/myapp/lib/...)
+        (first (for [c candidates
+                     p all-paths
+                     :when (str/ends-with? p (str "/" c))]
+                 p)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Erlang — include directives
@@ -342,7 +366,9 @@ end")
 
 (defn- resolve-java-import [import-name all-paths]
   (let [path (str (str/replace import-name "." "/") ".java")]
-    (when (all-paths path) path)))
+    (or (all-paths path)
+        ;; Handle Maven/Gradle layout: src/main/java/..., src/test/java/...
+        (first (for [p all-paths :when (str/ends-with? p (str "/" path))] p)))))
 
 (defmethod resolve-import :java [_ import-name _source-path all-paths]
   (resolve-java-import import-name all-paths))
