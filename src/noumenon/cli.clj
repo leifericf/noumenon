@@ -125,6 +125,46 @@
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
+(def ^:private sync-command-spec
+  {:flags (vec (concat
+                [{:flag "--analyze" :key :analyze :parse :bool
+                  :desc "Also run LLM analysis on changed files"}
+                 {:flag "--model" :key :model :parse :string
+                  :desc "Model alias (e.g. sonnet, haiku, opus)"
+                  :error-missing :missing-model-value}
+                 {:flag "--provider" :key :provider :parse :string
+                  :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
+                  :valid all-valid-providers
+                  :error-invalid :invalid-provider
+                  :error-missing :missing-provider-value}
+                 db-dir-flag
+                 {:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
+                  :desc "Parallel workers, 1-20 (default: 8)"
+                  :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value}]))
+   :initial {}
+   :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
+
+(def ^:private watch-command-spec
+  {:flags [{:flag "--interval" :key :interval :parse :pos-int
+            :desc "Polling interval in seconds (default: 30)"
+            :error-invalid :invalid-interval :error-missing :missing-interval-value}
+           {:flag "--analyze" :key :analyze :parse :bool
+            :desc "Also run LLM analysis on changed files"}
+           {:flag "--model" :key :model :parse :string
+            :desc "Model alias (e.g. sonnet, haiku, opus)"
+            :error-missing :missing-model-value}
+           {:flag "--provider" :key :provider :parse :string
+            :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
+            :valid all-valid-providers
+            :error-invalid :invalid-provider
+            :error-missing :missing-provider-value}
+           db-dir-flag
+           {:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
+            :desc "Parallel workers, 1-20 (default: 8)"
+            :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value}]
+   :initial {}
+   :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
+
 (def ^:private databases-command-spec
   {:flags [db-dir-flag
            {:flag "--delete" :key :delete :parse :string
@@ -230,6 +270,14 @@
                    :summary "Extract cross-file import graph deterministically"
                    :usage "postprocess [options] <repo-path>"
                    :epilog "Parses source code imports and resolves them to repo files.\nFull support: Clojure. Import extraction: Elixir, Python, JS/TS, C/C++, Go, Rust, Java, Erlang.\nOther languages are skipped. External tools (elixir, python3, node, etc.) required on PATH."}
+   "sync"      {:spec sync-command-spec
+                :summary "Sync knowledge graph with latest git state"
+                :usage "sync [options] <repo-path>"
+                :epilog "Detects changes since last sync via git HEAD SHA.\nFirst run: performs full import + postprocess.\nSubsequent runs: incrementally updates changed/added/deleted files.\nPass --analyze to also re-analyze changed files (requires LLM)."}
+   "watch"     {:spec watch-command-spec
+                :summary "Watch a repository and auto-sync on new commits"
+                :usage "watch [options] <repo-path>"
+                :epilog "Polls git HEAD every --interval seconds (default: 30).\nRuns sync automatically when new commits are detected.\nPass --analyze to also re-analyze changed files."}
    "query"     {:spec query-command-spec
                 :summary "Run a named Datalog query against the knowledge graph"
                 :usage "query [options] <query-name> <repo-path>"}
@@ -256,7 +304,9 @@
                                 :error-missing :missing-provider-value}
                                {:flag "--model" :key :model :parse :string
                                 :desc "Model alias for ask tool"
-                                :error-missing :missing-model-value}]
+                                :error-missing :missing-model-value}
+                               {:flag "--no-auto-sync" :key :no-auto-sync :parse :bool
+                                :desc "Disable automatic sync before queries (default: enabled)"}]
                        :initial {:subcommand "serve"}
                        :positionals {:required 0 :error nil :keys []}}
                 :summary "Start MCP server (JSON-RPC over stdio)"
@@ -273,7 +323,7 @@
                 :usage "longbench <download|run|results> [options]"}})
 
 (def ^:private command-order
-  ["import" "analyze" "postprocess" "query" "status" "databases" "agent" "serve" "benchmark" "longbench"])
+  ["import" "analyze" "postprocess" "sync" "watch" "query" "status" "databases" "agent" "serve" "benchmark" "longbench"])
 
 ;; --- Help text generation ---
 
@@ -481,6 +531,8 @@
                  "query"       query-command-spec
                  "analyze"     analyze-command-spec
                  "postprocess" postprocess-command-spec
+                 "sync"        sync-command-spec
+                 "watch"       watch-command-spec
                  simple-command-spec)
           result (parse-command spec args)]
       (assoc result :subcommand sub))))
@@ -515,6 +567,6 @@
                         (let [result (parse-command databases-command-spec rest-args)]
                           (if (:error result) result
                               (assoc result :subcommand "databases"))))
-          (if (#{"import" "status" "analyze" "postprocess" "query"} sub)
+          (if (#{"import" "status" "analyze" "postprocess" "query" "sync" "watch"} sub)
             (parse-simple-args sub rest-args)
             {:error :unknown-subcommand :subcommand sub}))))))

@@ -9,6 +9,7 @@
             [noumenon.git :as git]
             [noumenon.llm :as llm]
             [noumenon.query :as query]
+            [noumenon.sync :as sync]
             [noumenon.util :as util :refer [log!]])
   (:import [java.io BufferedReader PrintWriter]))
 
@@ -100,6 +101,13 @@
     :inputSchema {:type "object"
                   :properties repo-path-prop
                   :required ["repo_path"]}}
+   {:name "noumenon_sync"
+    :description "Sync the knowledge graph with the latest git state. Runs import + postprocess for changed files. Fast and cheap (no LLM calls by default). Pass analyze=true to also re-analyze changed files with LLM. Works as a first-time setup too — if no database exists, runs the full pipeline."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"analyze" {:type "boolean"
+                                                 :description "Also run LLM analysis on changed files (default: false)"}})
+                  :required ["repo_path"]}}
    {:name "noumenon_ask"
     :description "Ask a question about a repository using AI-powered iterative Datalog querying"
     :inputSchema {:type "object"
@@ -113,7 +121,8 @@
 ;; --- Tool handlers ---
 
 (defn- with-conn
-  "Resolve db-dir and db-name from arguments, get/create connection, call f with conn and db."
+  "Resolve db-dir and db-name from arguments, get/create connection, call f with conn and db.
+   When auto-sync is enabled (default), transparently syncs stale databases before returning."
   [args defaults f]
   (let [repo-path (args "repo_path")]
     (validate-repo-path! repo-path)
@@ -121,6 +130,12 @@
                       (str (.getAbsolutePath (io/file "data" "datomic"))))
           db-name (derive-db-name repo-path)
           conn    (get-or-create-conn db-dir db-name)
+          _       (when (:auto-sync defaults true)
+                    (let [db (d/db conn)]
+                      (when (sync/stale? db repo-path)
+                        (log! "auto-sync" "HEAD changed, syncing...")
+                        (let [repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))]
+                          (sync/sync-repo! conn repo-path repo-uri {:concurrency 8})))))
           db      (d/db conn)]
       (f {:conn conn :db db :repo-path repo-path :db-name db-name}))))
 
@@ -169,6 +184,29 @@
     (fn [{:keys [db]}]
       (tool-result (query/schema-summary db)))))
 
+(defn- handle-sync [args defaults]
+  (let [repo-path (args "repo_path")]
+    (validate-repo-path! repo-path)
+    (let [db-dir   (or (:db-dir defaults)
+                       (str (.getAbsolutePath (io/file "data" "datomic"))))
+          db-name  (derive-db-name repo-path)
+          conn     (get-or-create-conn db-dir db-name)
+          repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
+          analyze? (args "analyze")
+          opts     (cond-> {:concurrency 8}
+                     analyze?
+                     (assoc :analyze? true
+                            :model-id (llm/model-alias->id
+                                       (or (:model defaults) llm/default-model-alias))
+                            :invoke-llm (llm/make-prompt-fn
+                                         (llm/make-invoke-fn
+                                          (llm/provider->kw
+                                           (or (:provider defaults) llm/default-provider))
+                                          {:model (llm/model-alias->id
+                                                   (or (:model defaults) llm/default-model-alias))}))))
+          result   (sync/sync-repo! conn repo-path repo-uri opts)]
+      (tool-result (pr-str result)))))
+
 (defn- handle-ask [args defaults]
   (with-conn args defaults
     (fn [{:keys [db db-name]}]
@@ -193,6 +231,7 @@
    "noumenon_query"        handle-query
    "noumenon_list_queries" handle-list-queries
    "noumenon_schema"       handle-schema
+   "noumenon_sync"         handle-sync
    "noumenon_ask"          handle-ask})
 
 ;; --- MCP method handlers ---
@@ -256,7 +295,8 @@
   (log! "noumenon MCP server starting")
   (let [reader   (BufferedReader. (io/reader System/in))
         writer   (PrintWriter. System/out true)
-        defaults (select-keys opts [:db-dir :provider :model])]
+        defaults (cond-> (select-keys opts [:db-dir :provider :model])
+                   (:no-auto-sync opts) (assoc :auto-sync false))]
     (log! "noumenon MCP server ready")
     (loop []
       (when-let [line (try

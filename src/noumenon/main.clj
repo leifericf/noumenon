@@ -15,6 +15,7 @@
             [noumenon.longbench :as longbench]
             [noumenon.mcp :as mcp]
             [noumenon.query :as query]
+            [noumenon.sync :as sync]
             [noumenon.util :as util :refer [log!]]))
 
 ;; --- Helpers ---
@@ -112,7 +113,10 @@
       (let [conn     (db/connect-and-ensure-schema db-dir db-name)
             repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
             git-r    (git/import-commits! conn repo-path repo-uri)
-            files-r  (files/import-files! conn repo-path repo-uri)]
+            files-r  (files/import-files! conn repo-path repo-uri)
+            head-sha (git/head-sha repo-path)]
+        (when head-sha
+          (d/transact conn {:tx-data [{:repo/uri repo-uri :repo/head-sha head-sha}]}))
         (log! (str "Next: run '" cli/program-name " analyze " repo-path
                    "' to add semantic metadata."))
         {:exit   0
@@ -160,6 +164,57 @@
             (log! (str "Next: run '" cli/program-name " query file-imports "
                        repo-path "' to explore the import graph."))
             {:exit 0 :result result}))))))
+
+(defn do-sync
+  "Run the sync subcommand. Returns {:exit n :result map-or-nil}."
+  [{:keys [analyze model provider concurrency] :as opts}]
+  (with-valid-repo
+    (update opts :repo-path resolve-repo-path)
+    (fn [{:keys [repo-path db-dir db-name]}]
+      (let [conn     (db/connect-and-ensure-schema db-dir db-name)
+            repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
+            sync-opts (cond-> {:concurrency (or concurrency 8)}
+                        analyze
+                        (assoc :analyze? true
+                               :model-id (llm/model-alias->id
+                                          (or model llm/default-model-alias))
+                               :invoke-llm (llm/make-prompt-fn
+                                            (llm/make-invoke-fn
+                                             (llm/provider->kw
+                                              (or provider llm/default-provider))
+                                             {:model (llm/model-alias->id
+                                                      (or model llm/default-model-alias))}))))
+            result (sync/sync-repo! conn repo-path repo-uri sync-opts)]
+        {:exit 0 :result result}))))
+
+(defn do-watch
+  "Run the watch subcommand. Polls git HEAD and syncs on changes."
+  [{:keys [interval analyze model provider concurrency] :as opts}]
+  (with-valid-repo
+    opts
+    (fn [{:keys [repo-path db-dir db-name]}]
+      (let [conn       (db/connect-and-ensure-schema db-dir db-name)
+            repo-uri   (.getCanonicalPath (java.io.File. (str repo-path)))
+            interval-s (or interval 30)
+            sync-opts  (cond-> {:concurrency (or concurrency 8)}
+                         analyze
+                         (assoc :analyze? true
+                                :model-id (llm/model-alias->id
+                                           (or model llm/default-model-alias))
+                                :invoke-llm (llm/make-prompt-fn
+                                             (llm/make-invoke-fn
+                                              (llm/provider->kw
+                                               (or provider llm/default-provider))
+                                              {:model (llm/model-alias->id
+                                                       (or model llm/default-model-alias))}))))]
+        (log! (str "Watching " repo-path " (polling every " interval-s "s)"))
+        (loop []
+          (try
+            (sync/sync-repo! conn repo-path repo-uri sync-opts)
+            (catch Exception e
+              (log! (str "Sync error: " (.getMessage e)))))
+          (Thread/sleep (* interval-s 1000))
+          (recur))))))
 
 (defn- do-query-list
   "List available named queries with descriptions."
@@ -633,6 +688,8 @@
                      "import"    (do-import parsed)
                      "analyze"      (do-analyze parsed)
                      "postprocess" (do-postprocess parsed)
+                     "sync"        (do-sync parsed)
+                     "watch"       (do-watch parsed)
                      "query"       (do-query parsed)
                      "agent"     (do-agent parsed)
                      "status"    (do-status parsed)
@@ -641,7 +698,7 @@
                      "longbench" (do-longbench parsed)
                      "serve"     (do (mcp/serve! parsed) {:exit 0}))]
         (when (and (:result result)
-                   (not (#{"benchmark" "longbench" "serve" "status" "databases"} (:subcommand parsed))))
+                   (not (#{"benchmark" "longbench" "serve" "status" "databases" "watch"} (:subcommand parsed))))
           (prn (:result result)))
         result))))
 

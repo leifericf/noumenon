@@ -58,7 +58,7 @@ All commands use deps.edn aliases from the project root:
 
 | Command | Purpose |
 |---------|---------|
-| `clj -M:run` | Run CLI — subcommands: import, analyze, postprocess, query, agent, status, serve |
+| `clj -M:run` | Run CLI — subcommands: import, analyze, postprocess, sync, watch, query, agent, status, serve |
 | `clj -M:test` | Run test suite (Cognitect test-runner) |
 | `clj -M:lint` | Lint with clj-kondo |
 | `clj -M:fmt check` | Check formatting with cljfmt |

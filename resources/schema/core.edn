@@ -17,6 +17,11 @@
   :db/unique      :db.unique/identity
   :db/doc         "Repository URI"}
 
+ {:db/ident       :repo/head-sha
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Git HEAD SHA at last sync — used for staleness detection"}
+
  {:db/ident       :repo/commits
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/many

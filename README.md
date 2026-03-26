@@ -134,6 +134,20 @@ Notes:
 clj -M:run postprocess /path/to/repo
 ```
 
+### Keep the graph in sync
+
+As the codebase changes, sync the knowledge graph with the latest git state:
+
+```bash
+clj -M:run sync /path/to/repo                   # fast: import + postprocess only
+clj -M:run sync /path/to/repo --analyze          # also re-analyze changed files (LLM)
+clj -M:run watch /path/to/repo --interval 30     # auto-sync every 30s on new commits
+```
+
+`sync` works as a first-time setup too — if no database exists, it runs the full import pipeline. On subsequent runs it detects changes via git HEAD SHA and incrementally updates only what changed.
+
+The MCP server also auto-syncs before queries when HEAD changes (disable with `--no-auto-sync`).
+
 ### 4) Inspect status, databases, and queries
 
 ```bash
@@ -156,6 +170,8 @@ flowchart LR
   A[Import\nGit history + file structure] --> B[Analyze\nLLM semantic annotations]
   B --> C[Postprocess\nDeterministic import graph]
 
+  S[Sync / Watch\nIncremental refresh] -.->|detects changes| A
+
   C --> D[Query\nNamed Datalog queries]
   C --> E[Agent\nIterative query + LLM reasoning]
   C --> F[Serve\nMCP tools for external agents]
@@ -167,7 +183,7 @@ flowchart LR
   C --> H[Benchmark / LongBench\nEvaluation workflows]
 ```
 
-`postprocess` is optional but recommended when you want deterministic dependency and test-impact analysis.
+`postprocess` is optional but recommended when you want deterministic dependency and test-impact analysis. `sync` can replace the manual `import` + `postprocess` workflow and handles incremental updates.
 
 ## CLI Overview
 
@@ -184,6 +200,8 @@ Run `clj -M:run --help` for global help, or `clj -M:run <subcommand> --help` for
 | `import` | Import Git history and file structure into Datomic |
 | `analyze` | Enrich files with LLM-generated semantic metadata |
 | `postprocess` | Extract deterministic cross-file import graph |
+| `sync` | Sync knowledge graph with latest git state |
+| `watch` | Watch a repository and auto-sync on new commits |
 | `query` | Run a named query (`query list` to enumerate) |
 | `status` | Show imported entity counts for a repo |
 | `databases` | List all databases or delete one |
@@ -237,7 +255,7 @@ Noumenon combines four sources:
 
 | Entity | Identity | Key attributes |
 |---|---|---|
-| `repo` | `:repo/uri` | `:repo/commits` |
+| `repo` | `:repo/uri` | `:repo/commits`, `:repo/head-sha` |
 | `commit` | `:git/sha` (`:git/type :commit`) | `:commit/message`, `:commit/kind`, `:commit/authored-at`, `:commit/committed-at`, `:commit/additions`, `:commit/deletions` |
 | `person` | `:person/email` | `:person/name` |
 | `file` | `:file/path` | `:file/ext`, `:file/lang`, `:file/lines`, `:file/size`, `:file/imports`, `:sem/*` |
@@ -329,6 +347,7 @@ You do not need extra skills, custom sub-agents, or special `CLAUDE.md` wiring j
 - `noumenon_query`
 - `noumenon_list_queries`
 - `noumenon_schema`
+- `noumenon_sync`
 - `noumenon_ask`
 
 ## Benchmarks

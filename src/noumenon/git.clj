@@ -35,6 +35,12 @@
       (throw (ex-info (str "git clone failed: " (str/trim err))
                       {:exit exit :url url :target target-dir})))))
 
+(defn head-sha
+  "Return the current HEAD SHA for a git repository, or nil on failure."
+  [repo-path]
+  (let [{:keys [exit out]} (shell/sh "git" "-C" (str repo-path) "rev-parse" "HEAD")]
+    (when (zero? exit) (str/trim out))))
+
 ;; Git log format: %x01 = record separator, %x00 = field separator.
 ;; %B (raw body) can contain arbitrary text including blank lines,
 ;; so we bracket it with %x00 to make parsing unambiguous.
