@@ -1,307 +1,257 @@
-# UX / Usability Issue List
+# UX/UI Issue Discovery — Pass 1
 
-Scope: full repo under `src/`. Interfaces examined: CLI (all subcommands) and MCP server tools.
+**Scope:** Full repo — CLI and MCP interfaces
+**Commit:** e63cd59
+**Date:** 2026-03-26
+
+## Summary
+
+| Severity | Count |
+|----------|-------|
+| Critical | 0     |
+| Major    | 6     |
+| Minor    | 11    |
+| Cosmetic | 2     |
+
+## Issues
+
+### UX-001: `watch` error loop — repeated sync failures silently accumulate with no escalation
+- **Severity:** Major
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:196-200`
+- **Description:** When `sync-repo!` throws inside the `watch` poll loop, the error is caught, logged once, and the loop continues. There is no failure counter, no backoff, and no stop condition. A broken database or network failure produces a new error log line every 30 seconds forever with no suggestion of what to do.
+- **Evidence:** `(catch Exception e (log! (str "Update error: " (.getMessage e))))` followed immediately by `(Thread/sleep ...)` and `(recur)` — no state tracking, no escalation.
+- **Suggestion:** Track consecutive failure count. After N failures (e.g. 5), log a prominent actionable message: "Repeated errors — check logs. Run `noumenon import <repo-path>` to reset." Consider exponential backoff.
+- **Confidence:** High
+
+### UX-002: `query list` sub-subcommand is absent from help text — undiscoverable
+- **Severity:** Major
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/cli.clj:277` and `/Users/leif/Code/noumenon/src/noumenon/main.clj:203-212`
+- **Description:** `query list` is handled via a special case in `parse-simple-args` but the `command-registry` entry for `query` documents usage only as `query [options] <query-name> <repo-path>`. Running `clj -M:run query --help` shows no mention of the `list` subform. Users cannot discover available named queries without reading source code.
+- **Evidence:** `command-registry` "query" entry has `:usage "query [options] <query-name> <repo-path>\n       query list"` — the `query list` form is included in the usage string but the epilog and flag descriptions provide no further guidance on what the list shows or when to use it.
+- **Suggestion:** Add an epilog: "Use `query list` (no repo-path) to show available named queries with descriptions."
+- **Confidence:** High
+
+### UX-003: `ask` command requires `-q` / `--question` but gives no hint when missing
+- **Severity:** Major
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:558-559` and `/Users/leif/Code/noumenon/src/noumenon/cli.clj:225-251`
+- **Description:** Running `clj -M:run ask /path/to/repo` without `-q` produces `"Error: Missing -q <question> argument."` The `ask` usage string is `ask -q <question> [options] <repo-path>`, which means the question flag must come before the repo path — a non-obvious constraint. The error message `:ask-missing-question` is in `errors-with-subcommand-usage` so subcommand help is shown, but the help does not explain that `-q` must precede positionals.
+- **Evidence:** `validate-ask-question` returns `{:error :ask-missing-question}` with no positional hint. The `--resume` flag has explicit placement guidance in its description; `-q` does not.
+- **Suggestion:** Add placement note to flag description: `"Question to ask (must come before <repo-path>)"`.
+- **Confidence:** High
+
+### UX-004: `list-databases --delete` is immediately destructive with no confirmation or cost warning
+- **Severity:** Major
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:344-357`
+- **Description:** `do-list-databases` deletes the named database immediately upon finding it. The success message says `"Re-import: clj -M:run import <repo-path>"` but does not mention that all LLM analysis data (potentially costing $10s–$100s of dollars in API calls) is destroyed and must be re-run. A typo in the database name could silently destroy a wrong database entry (though derive-db-name sanitization reduces that risk).
+- **Evidence:** `(db/delete-db client db-name)` is called unconditionally after the `db-exists?` check. No `--force` flag, no `--dry-run`, no prompt.
+- **Suggestion:** Add a warning line before deletion listing the cost/analyze stats for the database being deleted. Consider requiring `--force` flag or printing "Pass --force to confirm deletion." A `--dry-run` flag showing what would be deleted is also useful.
+- **Confidence:** High
+
+### UX-005: MCP `noumenon_ask` returns `nil` text when agent exhausts budget — breaks MCP protocol
+- **Severity:** Major
+- **Surface:** MCP
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:303-304`
+- **Description:** When the agent exhausts its iteration budget, `(:answer result)` is `nil`. The handler uses `(tool-result (or (:answer result) (str "No answer found (status: " (name (:status result)) ")")))` — this is actually already handled with the `or`. However, the `:budget-exhausted` status is not surfaced as an `isError` response. An AI assistant receives a success-looking tool result with "No answer found" text but no machine-readable signal that the budget was exhausted vs. a genuine "no information in graph" answer.
+- **Evidence:** `(tool-result (or (:answer result) (str "No answer found (status: " (name (:status result)) ")")))` — `tool-result` always sets `:isError false`. A `tool-error` would be more appropriate for `:budget-exhausted`.
+- **Suggestion:** When `(:status result)` is `:budget-exhausted`, return `(tool-error (str "Budget exhausted after " max-iter " iterations — no answer found. Try increasing max_iterations or narrowing the question."))` so the AI assistant knows to retry with different parameters.
+- **Confidence:** High
+
+### UX-006: MCP auto-update blocks all tool responses synchronously with no timeout or progress
+- **Severity:** Major
+- **Surface:** MCP
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:200-207`
+- **Description:** When `(sync/stale? db repo-path)` is true, `with-conn` calls `sync/update-repo!` synchronously before returning any result to the MCP client. For large repositories this can take minutes. The MCP client receives no keepalive, no progress indication, and may time out. The `log!` call goes to stderr (invisible to the MCP client). There is no configurable timeout.
+- **Evidence:** `(when (:auto-update defaults true) (let [db (d/db conn)] (when (sync/stale? db repo-path) (log! "auto-update" "HEAD changed, updating...") (sync/update-repo! conn repo-path repo-uri {:concurrency 8}))))` — fully blocking, no timeout, no intermediate response.
+- **Suggestion:** Either make auto-update asynchronous (update in background, return possibly-stale results immediately), or add a configurable `:auto-update-timeout-ms` that falls back to returning stale results with a warning if exceeded.
+- **Confidence:** High
+
+### UX-007: `--interval` and `--concurrency` validation errors missing from `error-messages` map — produce blank errors
+- **Severity:** Major
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:534-565`
+- **Description:** `watch-command-spec` declares `:error-invalid :invalid-interval` and `:error-missing :missing-interval-value`. Neither keyword appears in the `error-messages` map. When a user passes `--interval bad`, the `when-let` in `run` finds no match and produces no error message — the CLI fails silently (prints nothing, exits 1). Same gap: `:invalid-interval`, `:missing-interval-value` are missing.
+- **Evidence:** `error-messages` map at lines 534–565 contains entries for `invalid-concurrency`, `missing-concurrency-value`, `invalid-min-delay`, `missing-min-delay-value`, `invalid-max-iterations`, but has no `:invalid-interval` or `:missing-interval-value` entries.
+- **Suggestion:** Add to `error-messages`: `:invalid-interval #(str "Invalid --interval value: " (:value %) ". Must be a positive integer.")` and `:missing-interval-value "Missing value for --interval."`. Also add both to `errors-with-subcommand-usage`.
+- **Confidence:** High
+
+### UX-008: `--concurrency` default documented as "default varies: analyze=3, others=8" only in shared flag but per-command help says "default: 8" inconsistently
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/cli.clj:69-74`
+- **Description:** The shared `concurrency-flags` description says "default varies: analyze=3, others=8". However `enrich-command-spec`, `update-command-spec`, and `watch-command-spec` each define their own `--concurrency` flag with `:desc "Parallel workers, 1-20 (default: 8)"`. Running `--help` on those subcommands shows "default: 8" without the caveat. Running `--help` on `benchmark` shows "default varies: analyze=3, others=8". The actual analyze default is 3 (set at line 126 of main.clj), benchmark is 3 (line 374). Users reading the enrich/update/watch help get an accurate "8" but users of analyze or benchmark must know to look elsewhere.
+- **Evidence:** `concurrency-flags` at line 69: `"Parallel workers, 1-20 (default varies: analyze=3, others=8)"`. `enrich-command-spec` at line 127: `"Parallel workers, 1-20 (default: 8)"`.
+- **Suggestion:** Each subcommand's `--concurrency` flag description should state its own specific default, not rely on cross-referencing the shared description.
+- **Confidence:** High
+
+### UX-009: `do-update` provides no "next step" hint after completing — unlike `import` and `enrich`
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:150-171`
+- **Description:** After `import` completes, the tool prints a "Next: run enrich..." hint. After `enrich` completes, it prints "Next: run query file-imports..." hint. After `update` (which runs import + enrich internally), there is no next-step hint. Users who run `update` as their first command have no guidance that `--analyze` is needed for LLM enrichment or that `ask` and `query` are the natural next tools.
+- **Evidence:** `do-update` at line 150 logs `"Update complete (N ms)"` from `sync/update-repo!` but adds no application-level guidance. `do-import` at line 96 explicitly adds a next-step message.
+- **Suggestion:** After a fresh import (`:status :fresh-import`), print the same guidance as `do-import`. After an incremental sync, print "Run `ask` or `query` to explore the updated graph."
+- **Confidence:** High
+
+### UX-010: `benchmark` canary failure warning is emitted to stderr log only — not prominently surfaced
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/benchmark.clj:33-41`
+- **Description:** `canary-evaluate` returns `{:status :warn}` when all canary questions score `:wrong`. The warning appears in benchmark logs but there is no prominent banner distinguishing it from normal progress lines. A user scanning terminal output may miss that the entire benchmark is likely invalid (data not analyzed, model is wrong, etc.).
+- **Evidence:** `canary-evaluate` is a pure function returning a status map. How it is printed depends on the caller; the log output blends with `[N/M] q01:full:judge — 2.3s` style lines.
+- **Suggestion:** If canary status is `:warn`, print a high-visibility block: `"*** CANARY WARNING: All canary questions failed. Results are unreliable. Check that analyze has been run and the correct model is specified. ***"`.
+- **Confidence:** Medium
+
+### UX-011: `digest` does not surface per-step results to the user during execution — appears hung
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:480-530`
+- **Description:** `do-digest` runs import+enrich, then analyze, then benchmark sequentially. Each step can take minutes to hours. The only progress output is `"digest: import + enrich..."`, `"digest: analyze..."`, `"digest: benchmark..."`, `"digest: complete"`. Between each of these banners, the individual step's own progress is logged, but if any step produces no sub-progress (e.g. "All files already analyzed, nothing to do"), the user sees silence for the duration of that step.
+- **Evidence:** Lines 494, 499, 509, 527 each log a single banner line. The analyze step's internal `log!` calls are still visible (they go to stderr), but the digest-level wrapper adds no elapsed time or completion percentages.
+- **Suggestion:** After each step completes, log elapsed time and result summary: `"digest: import + enrich done (12s — 847 commits, 312 files)"`. This mirrors how each step reports individually.
+- **Confidence:** High
+
+### UX-012: MCP `noumenon_update` returns raw EDN `pr-str` output instead of a human-readable summary
+- **Severity:** Minor
+- **Surface:** MCP
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:281-282`
+- **Description:** `handle-update` returns `(tool-result (pr-str result))`. An AI assistant receives Clojure syntax: `{:status :synced, :added 3, :modified 1, :deleted 0, :commits 0, :files 3, ...}`. Compare with `handle-import` which returns a natural-language sentence. The inconsistency forces the AI to parse EDN rather than read a summary.
+- **Evidence:** `(tool-result (pr-str result))` at line 282. `handle-import` at line 215: `(tool-result (format-import-summary git-r files-r))` — uses a natural-language formatting function.
+- **Suggestion:** Format as natural language: `"Updated. 3 files added, 1 modified, 0 deleted. Commits: 2. Import graph refreshed."` Similar to `format-import-summary`.
+- **Confidence:** High
+
+### UX-013: MCP `noumenon_analyze` and `noumenon_enrich` return raw EDN — inconsistent with other tools
+- **Severity:** Minor
+- **Surface:** MCP
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:318-319` and `326-327`
+- **Description:** Both `handle-analyze` and `handle-enrich` return `(tool-result (pr-str result))`. `handle-analyze` result contains keys like `:files-analyzed`, `:files-parse-errored`, `:total-usage` with nested maps. An AI assistant receives raw Clojure data rather than a readable summary.
+- **Evidence:** `(tool-result (pr-str result))` at lines 318 and 326. `handle-benchmark-run` at line 354 uses a formatted string with labeled fields.
+- **Suggestion:** Format analyze results as: `"Analysis complete. 47 files analyzed, 2 parse errors, 1 error. Cost: $0.23. Run time: 8m."` Format enrich results with resolved import count.
+- **Confidence:** High
+
+### UX-014: `noumenon_ask` tool description does not explain what "iterative Datalog querying" means
+- **Severity:** Minor
+- **Surface:** MCP
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:117-125`
+- **Description:** The tool description reads "Ask a question about a repository using AI-powered iterative Datalog querying". An AI assistant using this tool has no context on what "iterative Datalog querying" means, when this tool is appropriate vs. `noumenon_query`, or what its limitations are (e.g., only works after import, uses LLM API credits).
+- **Evidence:** Description at line 118: `"Ask a question about a repository using AI-powered iterative Datalog querying"` — opaque for any caller unfamiliar with the system.
+- **Suggestion:** Expand: `"Ask a natural-language question about a repository. The agent runs iterative Datalog queries against the knowledge graph to find an answer. Requires prior import. Uses LLM API calls (costs money). For structured queries, prefer noumenon_query."`.
+- **Confidence:** High
+
+### UX-015: MCP `noumenon_digest` tool description does not warn about cost or duration
+- **Severity:** Minor
+- **Surface:** MCP
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:173-186`
+- **Description:** `noumenon_digest` runs the full pipeline including LLM analysis and benchmark, which can cost $10–$100+ in API calls and take 30+ minutes. The description says "Run the full Noumenon pipeline" and mentions it is idempotent, but gives no cost or time warning. `noumenon_benchmark_run` has "WARNING: Expensive" in its description; `noumenon_digest` does not.
+- **Evidence:** `noumenon_benchmark_run` description: `"WARNING: Expensive — uses many LLM calls."` `noumenon_digest` description has no equivalent warning.
+- **Suggestion:** Add: `"WARNING: Expensive and slow — runs LLM analysis (cost varies by repo size) and benchmarking. May take 30+ minutes. Use skip_analyze=true and skip_benchmark=true for a quick structural import."`.
+- **Confidence:** High
+
+### UX-016: `--resume` placement constraint is documented but the failure mode is misleading
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/cli.clj:84-87`
+- **Description:** The `--resume` flag description says "Place before `<repo-path>` to avoid ambiguity." If a user writes `benchmark /path/to/repo --resume`, the `--resume` flag's `optional-string` parser will see `/path/to/repo` already consumed as a positional, then `--resume` has no following positional to consume (end of args), so it defaults to `"latest"`. But if they write `benchmark --resume /path/to/repo`, the parser sees `/path/to/repo` following `--resume` and consumes it as the checkpoint value — leaving no repo-path positional, producing `"Missing <repo-path> argument."` with no explanation that `--resume` consumed the path.
+- **Evidence:** `:parse :optional-string` logic at lines 398-401 of cli.clj: consumes next non-flag token as the value. `resume-flag` description: "The next non-flag argument is consumed as the run ID."
+- **Suggestion:** Make the behavior explicit in the error: when `--resume` is followed by a path-like value and repo-path is missing, warn: `"Did --resume consume your repo-path? Use --resume latest <repo-path> or just --resume after <repo-path>."`.
+- **Confidence:** Medium
+
+### UX-017: `benchmark` checkpoint incompatibility error message exposes internal field names without explanation
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:415-431`
+- **Description:** When a checkpoint is incompatible, the error lists fields like `question-set-hash`, `rubric-hash`, `answer-prompt-hash`. These are internal implementation details that are meaningless to a user. The error says "Incompatible checkpoint" and lists mismatches but doesn't explain what action to take.
+- **Evidence:** `field-labels` map at line 415 maps `:question-set-hash` to `"Question set"`, `:rubric-hash` to `"Rubric"`, etc. — these are slightly better but the message still ends with a dump of checkpoint vs. current hash values.
+- **Suggestion:** After the mismatch list, always append: `"Start a fresh run: clj -M:run benchmark <repo-path>"`. Replace hash values with human-readable description: "Question set changed (benchmark questions were updated)" rather than showing hex hashes.
+- **Confidence:** High
+
+### UX-018: `do-status` uses `println` to stdout while all other informational output uses stderr
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:307-312`
+- **Description:** `do-status` uses `log!` which writes to stderr, consistent with the rest of the codebase. However, `print-db-stats` in `do-list-databases` uses `println` (stdout). This creates inconsistency: `status` output is on stderr; `list-databases` output is on stdout. Scripts capturing stdout get database listing but not status output.
+- **Evidence:** `print-db-stats` at line 333: `(println (format ...))`. `do-status` at line 307: `(log! (str ...))`. Both are human-readable informational output.
+- **Suggestion:** Standardize: both should use `log!` (stderr) for human-readable summary lines, since neither command's result goes through the `prn` data-output path (both are in the exclusion set at line 627-629).
+- **Confidence:** High
+
+### UX-019: `benchmark` cost warning `*** COST WARNING` uses Unicode `***` that renders inconsistently
+- **Severity:** Cosmetic
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/benchmark.clj:971-976`
+- **Description:** `log-cost-estimate!` outputs `"  *** COST WARNING: ..."`. This is ASCII-safe but the triple-asterisk style is visually similar to Markdown formatting, which some terminal log viewers or CI systems render as bold/italic, making the line harder to spot in plain text. The rest of the codebase uses plain bracketed prefixes like `[1/22]`.
+- **Evidence:** `(log! (str "  *** COST WARNING: Benchmarks are expensive. ..."))` at line 971.
+- **Suggestion:** Minor: keep the warning prominent but use a consistent prefix style: `"[COST WARNING] Benchmarks are expensive. ..."`.
+- **Confidence:** Low
+
+### UX-020: `noumenon_list_queries` output format is free-text — AI assistants cannot programmatically extract query names
+- **Severity:** Cosmetic
+- **Surface:** MCP
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:249-255`
+- **Description:** `handle-list-queries` returns a newline-joined string of `"name — description"` lines. While readable, an AI assistant that wants to pick a query name for a subsequent `noumenon_query` call must parse this text. A structured format (e.g. EDN or JSON of `[{:name ... :description ...}]`) would be more reliable.
+- **Evidence:** `(->> ... (str/join "\n") tool-result)` at line 254. The CLI `do-query-list` similarly uses `(format "  %-28s %s" name description)`.
+- **Suggestion:** Return a structured format — EDN map or a consistent `"name: description\n"` format that can be split on `\n` and then on the first `: `. Or simply prefix each line with the name in a fixed format like `[name] description`.
+- **Confidence:** Medium
 
 ---
 
-## CLI Issues
-
-### 1. `--interval` and `--concurrency` validation errors not wired into `error-messages`
-
-**Files:** `src/noumenon/main.clj` lines 616–646
-**Severity:** Medium
-
-`watch-command-spec` declares `:error-invalid :invalid-interval` and `:error-missing :missing-interval-value`. Neither keyword appears in the `error-messages` map. When a user passes `--interval bad`, the error keyword is returned, the `when-let` on line 673 finds no match, and the user receives a blank error message with no explanation. The same gap exists for `:invalid-interval` and `:missing-interval-value` — both absent from the map.
-
----
-
-### 2. `--interval` and `--concurrency` validation errors missing from `errors-with-subcommand-usage`
-
-**File:** `src/noumenon/main.clj` lines 651–653
-**Severity:** Low
-
-The `errors-with-subcommand-usage` set controls whether subcommand help is appended after an error. `:invalid-interval`, `:missing-interval-value`, `:invalid-concurrency`, and `:missing-concurrency-value` are all absent. Users who mistype `--interval` or `--concurrency` receive no usage hint to guide correction.
-
----
-
-### 3. `--concurrency` default documented inconsistently across commands
-
-**Files:** `src/noumenon/cli.clj` lines 69–74 (shared `concurrency-flags`), lines 122–126 (`postprocess-command-spec`), lines 141–143 (`sync-command-spec`), lines 163–165 (`watch-command-spec`)
-**Severity:** Medium
-
-The shared `concurrency-flags` definition documents "default: 3". The per-command overrides in `postprocess-command-spec`, `sync-command-spec`, and `watch-command-spec` each say "default: 8". Runtime defaults in `main.clj` confirm those three commands do default to 8, while `analyze` and `benchmark` use 3. A user running `--help` on different commands sees contradictory documented defaults. There is no unified note explaining that the default varies by command.
-
----
-
-### 4. `sync` provides no "next step" hint after completion
-
-**File:** `src/noumenon/main.clj` lines 168–189
-**Severity:** Low
-
-After `import` completes, the tool prints `"Next: run 'noumenon analyze <repo-path>'..."`. After `postprocess`, it prints a suggestion to run `query file-imports`. `sync` (which internally runs import + postprocess) prints no guidance, leaving users unaware that `--analyze` is needed for LLM enrichment.
-
----
-
-### 5. `watch` silently swallows repeated sync errors with no escalation
-
-**File:** `src/noumenon/main.clj` lines 213–218
-**Severity:** Medium
-
-```clojure
-(catch Exception e
-  (log! (str "Sync error: " (.getMessage e))))
-```
-
-When `sync-repo!` throws, `watch` logs a single line and continues polling. There is no count of consecutive failures, no suggestion to re-import after repeated errors, and no way for the user to distinguish a transient failure from a persistent broken state. A corrupted database produces a new error log every 30 seconds indefinitely.
-
----
-
-### 6. `query list` sub-subcommand is undiscoverable — absent from help text
-
-**Files:** `src/noumenon/cli.clj` lines 281–283, `src/noumenon/main.clj` lines 221–230
-**Severity:** Medium
-
-`query list` is handled via a special case in `parse-simple-args` (line 527) but the `command-registry` entry for `"query"` documents usage only as `query [options] <query-name> <repo-path>`. Running `noumenon query --help` shows no mention of `list`. Users cannot discover available query names without reading source or external documentation.
-
----
-
-### 7. `agent` budget exhaustion exits 0, making non-answers indistinguishable from success
-
-**File:** `src/noumenon/main.clj` line 283
-**Severity:** Medium
-
-`do-agent` returns `{:exit (if (= :budget-exhausted (:status result)) 2 0)}` — this does correctly set exit 2. However, the `run` function at line 703 does not exclude `"agent"` from the `prn` output path, so on budget exhaustion the result map `{:answer nil, :status :budget-exhausted, ...}` is still printed to stdout via `prn`. Stdout mixing data output with a non-zero exit code is unexpected; callers parsing the exit code should not also need to filter stdout.
-
----
-
-### 8. `--max-cost` flag in `agent` is parsed but never enforced
-
-**File:** `src/noumenon/cli.clj` (agent-command-spec does not include `--max-cost`), `src/noumenon/main.clj` lines 248–289
-**Severity:** Medium
-
-The `common-flags` definition includes `--max-cost`. The `agent-command-spec` does not use `common-flags`, so `--max-cost` is not in `agent`'s flag spec. However, the budget is still a usability concern: `do-agent` accepts `opts` map and calls `agent/ask` with only `invoke-fn`, `repo-name`, and `max-iterations`. There is no cost cap on the agent loop. The `benchmark` command has an explicit `:max-cost-usd` budget; `agent` has no equivalent, so a user with a costly provider has no stop mechanism beyond `--max-iterations`.
-
----
-
-### 9. `databases --delete` is immediately destructive with no confirmation
-
-**File:** `src/noumenon/main.clj` lines 373–378
-**Severity:** Medium
-
-`do-databases` deletes the named database immediately upon finding it, with no confirmation prompt. The post-deletion message says `"Re-import: noumenon import <repo-path>"` but does not mention the loss of all LLM analysis cost and that re-running `analyze` will be required. A typo in the database name could destroy the wrong database.
-
----
-
-### 10. `status` output goes to stdout via `println` while all other informational messages use stderr
-
-**File:** `src/noumenon/main.clj` lines 305–307
-**Severity:** Low
-
-`do-status` uses `println` (stdout) for the human-readable counts line, while all other informational messages use `log!` (stderr). The result map is excluded from `prn` output (line 703), so `println` is the sole output — but on stdout. In piped or MCP contexts, this intermixes human text into the machine-readable output channel.
-
----
-
-### 11. `analyze` and `do-sync` errors from `ExceptionInfo` produce no subcommand usage hint
-
-**Files:** `src/noumenon/main.clj` lines 149–151, lines 168–189
-**Severity:** Low
-
-When `do-analyze` catches `clojure.lang.ExceptionInfo`, it prints the message and returns `{:exit 1}`. This path is outside the `error-messages`/`errors-with-subcommand-usage` dispatch, so `run` never appends a subcommand help hint. Users seeing a bare error message (e.g. from an invalid model alias) get no guidance on which flags to correct.
-
----
-
-### 12. `serve` help omits an explanation of what auto-sync does
-
-**File:** `src/noumenon/cli.clj` lines 308–310
-**Severity:** Low
-
-`--no-auto-sync` is described as "Disable automatic sync before queries (default: enabled)". The help text does not explain what "automatic sync" entails (git HEAD comparison + `sync-repo!` call on every query), making the trade-off (latency vs. freshness) opaque to users deciding whether to disable it.
-
----
-
-### 13. `--resume` optional-string parser behavior is underdocumented and surprising
-
-**File:** `src/noumenon/cli.clj` lines 84–87
-**Severity:** Low
-
-The `resume-flag` description says "Place before `<repo-path>` to avoid ambiguity." The actual parser in `parse-flags` consumes the next non-flag token as the checkpoint value. Writing `benchmark --resume /path/to/repo` consumes the repo path as a checkpoint file name. The resulting error is `"No checkpoint files found"` — the user gets no indication that the repo-path was consumed. The description's advice is insufficient without explaining the mechanism.
-
----
-
-## MCP Server Issues
-
-### 14. `noumenon_ask` returns `null` text when agent finds no answer
-
-**File:** `src/noumenon/mcp.clj` lines 224–226
-**Severity:** High
-
-`handle-ask` returns `(tool-result (:answer result))`. When the agent exhausts its budget, `(:answer result)` is `nil`. The `tool-result` function wraps it as `{:content [{:type "text" :text nil}]}`, which JSON-encodes as `"text":null`. MCP clients handling this inconsistently may crash or silently discard the response. The `:budget-exhausted` status is also silently lost — the caller receives no indication the question went unanswered.
-
----
-
-### 15. `noumenon_sync` returns raw Clojure EDN instead of human-readable text
-
-**File:** `src/noumenon/mcp.clj` lines 207–208
-**Severity:** Medium
-
-`handle-sync` returns `(tool-result (pr-str result))`. The caller receives Clojure syntax like `{:status :synced, :added 3, :modified 1, ...}`. Compare with `handle-import` which produces a natural-language sentence. The inconsistency forces LLM callers to parse EDN rather than read a natural-language summary.
-
----
-
-### 16. `noumenon_query` returns raw EDN tuples with no schema context
-
-**File:** `src/noumenon/mcp.clj` lines 166–172
-**Severity:** Low
-
-`handle-query` returns `(tool-result (pr-str (:ok result)))`. The caller receives raw Clojure data tuples or maps with no column headers, no description of what each field means, and no suggestion to call `noumenon_schema` or `noumenon_list_queries` for interpretation.
-
----
-
-### 17. `noumenon_ask` tool schema omits "claude" as a valid provider alias
-
-**File:** `src/noumenon/mcp.clj` line 117
-**Severity:** Low
-
-The `provider` parameter description lists "glm, claude-api, or claude-cli" but omits "claude", which normalizes to `claude-cli` via `normalize-provider-name`. An LLM caller reading the tool schema would not know "claude" is accepted.
-
----
-
-### 18. Auto-sync in `with-conn` blocks the query response with no timeout or progress signal
-
-**File:** `src/noumenon/mcp.clj` lines 133–139
-**Severity:** Medium
-
-When `auto-sync` triggers (HEAD changed), `sync-repo!` is called synchronously before any tool result is returned. For a large repository this can take many seconds to minutes. The MCP caller receives no progress indication and may time out. There is no configurable timeout and no way for the caller to detect that the tool is still working.
-
----
-
-### 19. MCP server returns errors for `ping` and `resources/list` methods used by some clients
-
-**File:** `src/noumenon/mcp.clj` lines 314–329
-**Severity:** Low
-
-Unknown methods produce JSON-RPC error `-32601 "Method not found: <method>"`. Some MCP clients (e.g. Claude Desktop) send `ping` keepalives and `resources/list` discovery probes. These generate error responses the client logs as failures, creating noise. Adding silent `nil` responses (like `notifications/initialized`) or an empty-list response for `resources/list` would eliminate the noise.
-
----
-
-### 20. `noumenon_import` description does not state re-import is idempotent
-
-**File:** `src/noumenon/mcp.clj` lines 79–83
-**Severity:** Low
-
-The description does not mention that importing an already-imported repository is safe and only processes new commits and files. Callers may either avoid calling it on an already-imported repo (causing staleness) or worry a second call will duplicate data.
-
----
-
-## Pass 2 Findings
-
-### 21. `benchmark` and `longbench results` output all goes to stdout via `println`, bypassing stderr discipline
-
-**Files:** `src/noumenon/main.clj` lines 567–592 (`do-longbench-results`), lines 229 (`do-query-list`), lines 361–365 (`print-db-stats`)
-**Severity:** Medium
-
-`do-longbench-results` prints its entire results table (run ID, question count, accuracy table, per-question detail) using `println` to stdout. `do-query-list` uses `println` for the query listing. `print-db-stats` uses `println` for the databases table. All other informational output in the codebase goes to stderr via `log!`. The `"longbench"`, `"databases"` subcommands are excluded from `prn` result output at line 703, so `println` becomes the sole output — on stdout. Scripts that capture stdout for machine-readable data receive human-formatted tables. This is inconsistent with the stdout = data / stderr = progress convention that the rest of the codebase follows.
-
----
-
-### 22. `query` command silently accepts parameterized queries but provides no way to pass parameters via CLI
-
-**Files:** `src/noumenon/main.clj` lines 232–246, `src/noumenon/query.clj` lines 82–95
-**Severity:** Medium
-
-Several named queries require `:inputs` (e.g. `file-imports` requires `:file-path`, `files-depending-on` requires `:dependency`, `file-history` requires `:file-path`). The `do-query` function at line 243 calls `run-named-query db query-name` with no `params` argument. When a user runs `noumenon query file-imports <repo>`, `run-named-query` sees that `:inputs [:file-path]` is non-empty but `params` is `nil`, and returns `{:error "Missing required inputs: [:file-path]"}`. The user receives an error with no guidance on how to supply inputs — there is no `--param` flag, no mention in help text, and no usage example. At least 9 of the 45 named queries in `resources/queries/` have `:inputs` fields. Discovery of which queries need parameters requires reading raw EDN files.
-
----
-
----
-
-### 24. `benchmark` cost warning uses an emoji that may corrupt terminals or pipe output
-
-**Files:** `src/noumenon/benchmark.clj` lines 625–630
-**Severity:** Low
-
-`log-cost-estimate!` outputs `"  ⚠ COST WARNING: ..."` containing a Unicode warning sign. While `log!` correctly directs this to stderr, some terminal emulators and CI log parsers mishandle non-ASCII characters in log streams. The rest of the codebase avoids emoji/Unicode symbols entirely. This is a minor inconsistency but can cause display corruption in restricted environments.
-
----
-
-### 25. `longbench download` has no progress reporting during the potentially large download
-
-**Files:** `src/noumenon/longbench.clj` lines 58–97, `src/noumenon/main.clj` lines 599–606
-**Severity:** Low
-
-`download-dataset!` uses a 30-minute HTTP timeout but provides no download progress indication beyond a single `"longbench/download-start"` log line at the beginning. The LongBench v2 dataset (`data.json`) is a multi-hundred-MB file. Users see no bytes-downloaded counter, no percentage, and no elapsed time. For a slow connection, the process appears hung for minutes. `main.clj` prints "Downloading LongBench dataset..." then nothing until completion.
-
----
-
-### 26. `longbench` integrity-warning does not block execution, and the hardcoded SHA-256 is known-wrong
-
-**Files:** `src/noumenon/longbench.clj` lines 29–56
-**Severity:** Medium
-
-`expected-sha256` at line 30 is documented inline as "Set on first verified download" and ends with the comment `"To update: sha256sum data/longbench/data.json"`, which strongly suggests it is a placeholder. The `verify-integrity!` function logs a warning on mismatch but explicitly does not abort (`"Logs warning on mismatch but does not abort"`). A user who downloads the dataset and sees the integrity warning has no actionable guidance: they cannot tell whether the file is corrupt, whether the expected hash needs updating, or whether to trust the download. The warning message itself contains the placeholder hash value, which will always mismatch, meaning every download produces a spurious integrity warning.
-
----
-
-### 27. `imports` tool-unavailability message goes only to stderr log; `postprocess` exit code is always 0 even when tools are missing
-
-**Files:** `src/noumenon/imports.clj` lines 57–71, `src/noumenon/main.clj` lines 153–166
-**Severity:** Low
-
-`log-tool-availability!` logs which languages are skipped due to missing tools (e.g. "skipped: python (42 files)") via `log!` to stderr. The `do-postprocess` function at line 162 always returns `{:exit 0}` regardless. If a user has no `python3` or `node` on PATH and runs `postprocess` on a Python or JS repo, the command "succeeds" with exit 0 and zero import edges resolved for those languages. There is no `--require-tools` flag and no stderr summary distinguishing "no imports found" from "tool unavailable, imports not attempted". Users who miss the log message will silently have an incomplete import graph.
-
----
-
----
-
-### 29. `longbench results` with no prior runs throws an exception instead of returning cleanly
-
-**Files:** `src/noumenon/main.clj` lines 551–557
-**Severity:** Low
-
-When `run-id` is nil (no checkpoints found), `do-longbench-results` calls `print-error!` then `throw`s an `ExceptionInfo`. The throw is caught in the outer `try` at line 609 which calls `print-error!` again on the same message ("No runs found"). The user sees the error message printed twice. The correct pattern for a missing-state condition is to print once and return `{:exit 1}`, not throw.
-
----
-
-### 30. `benchmark` resume compatibility mismatch error message exposes internal field names
-
-**Files:** `src/noumenon/main.clj` lines 440–448
-**Severity:** Low
-
-When a checkpoint is incompatible with the current run config, the error lists field names like `repo-path`, `commit-sha`, `question-set-hash`, `model-config`, `mode`, `rubric-hash`, and `answer-prompt-hash`. Most of these are meaningful to a developer but opaque to a user. Specifically, `question-set-hash` and `rubric-hash` appear when the benchmark questions or rubric have changed since the checkpoint was created — but the message says only "Incompatible checkpoint. Mismatched fields: question-set-hash: checkpoint=abc... current=def..." with no explanation that this means the benchmark content changed and resuming is not possible. There is no suggestion of what the user should do (start a fresh run with `benchmark <repo-path>`).
-
----
-
-## Summary Table
-
-| # | File | Severity | Category |
-|---|------|----------|----------|
-| 1 | `main.clj` error-messages map | Medium | Error messages |
-| 2 | `main.clj` errors-with-subcommand-usage | Low | Error messages |
-| 3 | `cli.clj` concurrency-flags vs per-command specs | Medium | Help text / Defaults |
-| 4 | `main.clj` do-sync | Low | Progress / Discoverability |
-| 5 | `main.clj` do-watch | Medium | Error handling |
-| 6 | `cli.clj` query command-registry | Medium | Discoverability |
-| 7 | `main.clj` run / do-agent exit + prn | Medium | Exit codes / Output |
-| 8 | `main.clj` do-agent, agent-command-spec | Medium | Missing feature / Flags |
-| 9 | `main.clj` do-databases | Medium | Destructive actions |
-| 10 | `main.clj` do-status | Low | Output consistency |
-| 11 | `main.clj` do-analyze / do-sync | Low | Error messages |
-| 12 | `cli.clj` serve spec | Low | Help text |
-| 13 | `cli.clj` resume-flag | Low | Help text |
-| 14 | `mcp.clj` handle-ask | High | MCP error responses |
-| 15 | `mcp.clj` handle-sync | Medium | MCP output format |
-| 16 | `mcp.clj` handle-query | Low | MCP output format |
-| 17 | `mcp.clj` noumenon_ask schema | Low | MCP tool descriptions |
-| 18 | `mcp.clj` with-conn auto-sync | Medium | MCP responsiveness |
-| 19 | `mcp.clj` serve! loop | Low | MCP protocol compliance |
-| 20 | `mcp.clj` noumenon_import description | Low | MCP tool descriptions |
-| 21 | `main.clj` do-longbench-results / print-db-stats | Medium | stdout/stderr discipline |
-| 22 | `main.clj` do-query / `query.clj` run-named-query | Medium | Parameterized query UX |
-| 23 | FIXED | - | - |
-| 24 | `benchmark.clj` log-cost-estimate! | Low | Output consistency |
-| 25 | `longbench.clj` download-dataset! | Low | Progress reporting |
-| 26 | `longbench.clj` expected-sha256 / verify-integrity! | Medium | Error reporting / Trust |
-| 27 | `imports.clj` log-tool-availability! / `main.clj` do-postprocess | Low | Error reporting / Exit codes |
-| 28 | FIXED | - | - |
-| 29 | `main.clj` do-longbench-results | Low | Error handling |
-| 30 | `main.clj` do-benchmark-resume | Low | Error messages |
+## Pass 2 — Saturation
+
+**Date:** 2026-03-27
+**Focus:** benchmark.clj report readability, analyze.clj progress, pipeline.clj error reporting, MCP error paths, CLI edge cases
+
+### UX-022: `analyze-repo!` ETA is only shown at the start — no ETA update during long runs
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/analyze.clj:415-425` and `390-398`
+- **Description:** `estimate-banner` prints a single pre-run estimate once before analysis starts. The per-file log line at line 390 shows `[N/total] path 2.1s ok tokens=1200/218` but no ETA for time remaining. On a 300-file repository at 18s/file (~90 minutes), users see elapsed time per file but cannot estimate completion. The ETA is computable from `avg-ms-per-file`, current elapsed, and remaining count but is never shown mid-run.
+- **Evidence:** `analyze-one-file!` at line 390 logs path, duration, status, and tokens but does not include a running ETA. `format-eta` exists as a utility but is only called at the pre-run banner and final summary.
+- **Suggestion:** Add a rolling ETA to the per-file log line using actual elapsed/completed stats: `"[N/total] path 2.1s ok — ETA ~12m"`. Recompute ETA from `(* (/ elapsed-ms started) remaining)` using the actual `stats-atom` values.
+- **Confidence:** High
+
+### UX-023: `benchmark` report `generate-report` shows `nil` for `deterministic-mean` and `llm-judged-mean` when those scoring methods produce no results
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/benchmark.clj:1200-1206`
+- **Description:** In the "Results by Scoring Method" table, `generate-report` always emits rows for both `Deterministic` and `LLM-judged` even when one category has no questions (e.g. `--fast` mode runs deterministic-only). When there are no LLM-judged questions, `(:llm-judged-mean aggregate)` is `0.0` (from `aggregate-scores`) and `(:llm-judged-count aggregate)` is `0`, producing a row `| LLM-judged | 0.0% | 0 |` that implies zero performance rather than "not run". This is misleading for fast/deterministic-only runs.
+- **Evidence:** `(.append sb (str "| LLM-judged | " (format-pct (:llm-judged-mean aggregate)) " | " (:llm-judged-count aggregate) " |"))` at line 1204 — no guard against `:llm-judged-count` being 0.
+- **Suggestion:** Suppress a scoring method row when its count is 0: `(when (pos? (:llm-judged-count aggregate)) ...)`. Or replace the `0.0%` value with `"—"` and add a note `"(not run)"`.
+- **Confidence:** High
+
+### UX-024: `unknown-subcommand` error is not in `errors-with-global-usage` or `errors-with-subcommand-usage` — user gets error with no help
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:536-537` and `567-576`
+- **Description:** When a user types an unknown subcommand (e.g. `clj -M:run foobar`), `parse-args` returns `{:error :unknown-subcommand :subcommand "foobar"}`. In `run`, the error message is found (`error-messages` has `:unknown-subcommand`), so the message "Unknown subcommand: foobar. Run 'noumenon --help'..." is printed. However, `:unknown-subcommand` is not in `errors-with-global-usage` so global usage is not printed, and it is not in `errors-with-subcommand-usage` (no subcommand to look up). The user gets one line and then silence — no list of valid subcommands is shown.
+- **Evidence:** `errors-with-global-usage` at line 567 contains only `#{:no-args}`. `errors-with-subcommand-usage` at line 570 does not include `:unknown-subcommand`. The error message references `--help` but does not print the global usage inline.
+- **Suggestion:** Add `:unknown-subcommand` to `errors-with-global-usage` so the full command list is shown after the error message, or print `(format-global-help)` inline in the `:unknown-subcommand` branch.
+- **Confidence:** High
+
+### UX-025: `handle-digest` in MCP returns raw EDN result map — inconsistent with every other MCP handler
+- **Severity:** Minor
+- **Surface:** MCP
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:457`
+- **Description:** `handle-digest` ends with `(tool-result (pr-str @results))`. The results atom accumulates `:update`, `:analyze`, and `:benchmark` sub-maps, each containing nested Clojure data. The AI assistant receives a raw `{:update {...} :analyze {...} :benchmark {...}}` EDN string. This is the most complex raw-EDN response in the entire MCP surface. All other completed tools return natural language or formatted strings (see UX-012, UX-013 for the related `update`/`analyze`/`enrich` issues).
+- **Evidence:** `(tool-result (pr-str @results))` at line 457. By contrast, `handle-benchmark-run` at line 353 formats a natural-language summary.
+- **Suggestion:** Format as a multi-line summary: `"Digest complete.\nImport: 3 files added. Enrich: 12 imports resolved.\nAnalysis: 47 files analyzed, cost $0.23.\nBenchmark run-id: abc123, full mean: 72.3%."` Each step's sub-result should be formatted using the same helpers as the individual tool handlers.
+- **Confidence:** High
+
+### UX-026: `benchmark` run-start log line and cost warning are the only pre-run output — no confirmation of what questions will run
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/benchmark.clj:1417-1426`
+- **Description:** Before a benchmark starts, the user sees `bench/run-start run-id=... questions=22 stages=44 concurrency=3` and the cost warning. There is no human-readable summary of which question categories will run, which layers are active, or whether the run is in `--fast` (deterministic-only) or `--full` mode. A user running `--fast` vs default vs `--full` cannot verify at a glance whether the mode was applied correctly before committing to a long expensive run.
+- **Evidence:** The pre-run log at line 1417 includes `questions=N` and `stages=N` but not `mode=fast` or `layers=[full]` in a user-friendly form. `(:deterministic-only mode)` and `(:layers mode)` are in the checkpoint metadata but not surfaced in the startup banner.
+- **Suggestion:** Add a human-readable pre-run summary line: `"Running 22 deterministic questions across layers: full (fast mode). Estimated cost: $0.45."` This combines the existing cost banner with mode information.
+- **Confidence:** Medium
+
+### UX-027: `analyze-repo!` truncation warning is per-file but provides no aggregate summary at completion
+- **Severity:** Minor
+- **Surface:** CLI
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/analyze.clj:397-398` and `481-496`
+- **Description:** When a file is truncated (content exceeds `max-file-content-chars` = 100,000 chars), `analyze-one-file!` logs `"Warning: truncated path/to/file"` inline. However, the final summary log at line 481 reports only `ok`, `parse-error`, and `error` counts — truncated files are not counted or mentioned in the summary even though truncation can degrade analysis quality on large files. A user running analyze on a large repo with many big files has no way to know how many truncations occurred without scanning all log lines.
+- **Evidence:** `analyze-one-file!` at line 397: `(when truncated? (log! ...))` per file. The `stats-atom` at line 454 tracks `:ok`, `:parse-error`, `:error`, `:started`, `:elapsed-ms`, `:total-usage` — no `:truncated` counter. The final `Done.` log at line 481 does not include a truncation count.
+- **Suggestion:** Add `:truncated 0` to the initial `stats-atom`, increment it in `analyze-one-file!` when `truncated?` is true, and include a truncation count in the final summary: `"Done. 47 analyzed, 3 truncated (analysis may be partial), 2 parse errors."` The `truncated?` flag is already computed and returned from `analyze-file!`.
+- **Confidence:** High
