@@ -150,6 +150,9 @@
                                                :min-delay-ms (or min-delay 0)})})))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
+          (when-let [help (cli/format-subcommand-help "analyze")]
+            (log!)
+            (log! help))
           {:exit 1})))))
 
 (defn do-postprocess

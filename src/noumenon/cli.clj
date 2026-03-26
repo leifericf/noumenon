@@ -83,7 +83,7 @@
 
 (def ^:private resume-flag
   {:flag "--resume" :key :resume :parse :optional-string
-   :desc "Resume from checkpoint. Optionally takes a run ID (default: latest). Place before positional args."})
+   :desc "Resume from checkpoint (default: latest). Place before <repo-path> to avoid ambiguity. The next non-flag argument is consumed as the run ID."})
 
 (defn- with-provider-valid
   [specs valid-set]
