@@ -65,11 +65,13 @@
 ;; --- Common queries ---
 
 (defn repo-stats
-  "Return {:commits n :files n :dirs n} entity counts for the database."
+  "Return {:commits n :files n :dirs n :head-sha str} entity counts and
+   the stored HEAD SHA (the last commit imported/synced) for the database."
   [db]
-  {:commits (count (d/q '[:find ?e :where [?e :git/type :commit]] db))
-   :files   (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
-   :dirs    (count (d/q '[:find ?e :where [?e :dir/path _]] db))})
+  {:commits  (count (d/q '[:find ?e :where [?e :git/type :commit]] db))
+   :files    (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
+   :dirs     (count (d/q '[:find ?e :where [?e :dir/path _]] db))
+   :head-sha (ffirst (d/q '[:find ?sha :where [_ :repo/head-sha ?sha]] db))})
 
 ;; --- Execution ---
 

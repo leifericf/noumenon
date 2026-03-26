@@ -85,7 +85,7 @@
                   :properties repo-path-prop
                   :required ["repo_path"]}}
    {:name "noumenon_status"
-    :description "Get entity counts (commits, files, directories) for an imported repository"
+    :description "Get entity counts (commits, files, directories) and the HEAD SHA of the last imported commit. Compare with `git rev-parse HEAD` to check if the knowledge graph is up to date."
     :inputSchema {:type "object"
                   :properties repo-path-prop
                   :required ["repo_path"]}}
@@ -225,8 +225,11 @@
 (defn- handle-status [args defaults]
   (with-conn args defaults
     (fn [{:keys [db]}]
-      (let [{:keys [commits files dirs]} (query/repo-stats db)]
-        (tool-result (str commits " commits, " files " files, " dirs " directories."))))))
+      (let [{:keys [commits files dirs head-sha]} (query/repo-stats db)
+            head (if head-sha
+                   (str "\nHead: " (subs head-sha 0 (min 7 (count head-sha))))
+                   "")]
+        (tool-result (str commits " commits, " files " files, " dirs " directories." head))))))
 
 (defn- handle-query [args defaults]
   (with-conn args defaults

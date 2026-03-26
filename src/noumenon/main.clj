@@ -301,11 +301,14 @@
         ctx
         (fn [{:keys [db] :as c}]
           (let [stats (merge (query/repo-stats db)
-                             {:db-path (db-path c)})]
+                            {:db-path (db-path c)})
+                head  (when-let [sha (:head-sha stats)]
+                        (str " -- head: " (subs sha 0 (min 7 (count sha)))))]
             (log! (str (:commits stats) " commits, "
                        (:files stats) " files, "
                        (:dirs stats) " directories"
-                       " -- db: " (:db-path stats)))
+                       " -- db: " (:db-path stats)
+                       head))
             {:exit 0 :result stats}))))))
 
 ;; --- List Databases ---

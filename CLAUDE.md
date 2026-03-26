@@ -1,5 +1,43 @@
 # Project Instructions
 
+## Noumenon MCP — Use It First
+
+This project has its own MCP server (`noumenon`) that provides a knowledge graph of the codebase. **Always query the Noumenon MCP before scanning or reading files ad hoc from the filesystem.** It is your primary tool for search, discovery, and understanding the codebase.
+
+### When to use it
+
+- **Before modifying a file** — Use `noumenon_query` or `noumenon_ask` to understand the file's role, its relationships to other files, and recent change history. Do not just open and read files cold.
+- **When searching for code** — Query the knowledge graph instead of grepping or globbing across the filesystem. The graph knows about file structure, namespaces, dependencies, and commit history.
+- **When exploring the codebase** — Use `noumenon_schema` to see what's in the graph, `noumenon_list_queries` to see available named queries, and `noumenon_ask` for open-ended questions.
+- **When understanding impact** — Before a refactor or rename, ask the knowledge graph what depends on the thing you're changing.
+
+### Available tools
+
+| Tool | Purpose |
+|------|---------|
+| `noumenon_status` | Check entity counts — verify the repo has been imported |
+| `noumenon_get_schema` | See all attributes and types in the knowledge graph |
+| `noumenon_list_queries` | List available named Datalog queries |
+| `noumenon_query` | Run a named Datalog query (some require params — check `list_queries` first) |
+| `noumenon_ask` | Ask a natural-language question — AI-powered iterative querying |
+| `noumenon_import` | Import git history and file structure (idempotent — safe to re-run) |
+| `noumenon_update` | Sync knowledge graph with latest git state (import + enrich; pass `analyze=true` for LLM analysis) |
+| `noumenon_analyze` | Run LLM analysis on files not yet analyzed — enriches the graph with semantic metadata |
+| `noumenon_enrich` | Extract cross-file import/dependency graph deterministically (no LLM calls) |
+| `noumenon_list_databases` | List all noumenon databases with entity counts, pipeline stages, and cost |
+| `noumenon_digest` | Run the full pipeline: import, enrich, analyze, benchmark (each step idempotent, skippable) |
+| `noumenon_benchmark_run` | Run benchmark comparing LLM answers across knowledge graph layers (expensive) |
+| `noumenon_benchmark_results` | Get benchmark results (latest run or by ID) |
+| `noumenon_benchmark_compare` | Compare two benchmark runs by score differences per layer |
+
+### Workflow
+
+1. **Start** — Call `noumenon_status` to confirm the repo is imported. If not, call `noumenon_import`.
+2. **Discover** — Use `noumenon_list_queries` and `noumenon_query` for structured questions, or `noumenon_ask` for open-ended exploration.
+3. **Then read files** — Once you know *which* files matter and *why*, read them with the Read tool for the specific details you need.
+
+**Do not skip this.** Filesystem scanning (Glob, Grep, Agent/Explore) is a fallback for when the knowledge graph doesn't have what you need — not the default approach.
+
 ## Security
 
 Never read, write, display, or reference the contents of `.env` or `.env.local` files. These contain secrets. Use `.env.example` for documentation only.
