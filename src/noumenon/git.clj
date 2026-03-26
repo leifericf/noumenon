@@ -111,23 +111,35 @@
        Instant/from
        Date/from))
 
+(defn- resolve-rename-path
+  "Resolve git rename syntax '{old => new}/rest' to the destination path.
+   E.g. '{tests => flask/testsuite}/foo.py' -> 'flask/testsuite/foo.py'
+         'src/{old.py => new.py}' -> 'src/new.py'"
+  [path]
+  (if-let [[_ prefix _ dest suffix] (re-matches #"(.*?)\{([^}]*?) => ([^}]*?)\}(.*)" path)]
+    (let [resolved (str prefix dest suffix)]
+      (str/replace resolved #"//" "/"))
+    path))
+
 (defn- parse-numstat-line
   "Parse a --numstat line: 'additions\\tdeletions\\tfilename'.
-   Binary files show '-' for both counts. Returns [path additions deletions] or nil."
+   Binary files show '-' for both counts. Resolves rename syntax to dest path.
+   Returns [path additions deletions] or nil."
   [line]
   (when-let [[_ adds dels path] (re-matches #"(\d+|-)\t(\d+|-)\t(.+)" (str/trim line))]
-    [path
+    [(resolve-rename-path path)
      (if (= adds "-") 0 (parse-long adds))
      (if (= dels "-") 0 (parse-long dels))]))
 
 (defn- parse-numstat
-  "Parse numstat text into {:changed-files [paths] :additions n :deletions n}."
+  "Parse numstat text into {:changed-files [paths] :additions n :deletions n}.
+   Deduplicates file paths (renames can produce duplicates)."
   [text]
   (let [parsed (->> (str/split-lines text)
                     (map str/trim)
                     (remove str/blank?)
                     (keep parse-numstat-line))]
-    {:changed-files (mapv first parsed)
+    {:changed-files (vec (distinct (map first parsed)))
      :additions     (transduce (map second) + 0 parsed)
      :deletions     (transduce (map #(nth % 2)) + 0 parsed)}))
 
