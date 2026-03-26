@@ -36,7 +36,8 @@
     (when reason
       (log! "validate-repo-path" reason repo-path)
       (throw (ex-info "Invalid or inaccessible repository path"
-                      {:repo-path repo-path})))))
+                      {:repo-path    repo-path
+                       :user-message "Invalid or inaccessible repository path."})))))
 
 ;; --- Connection cache ---
 
@@ -113,7 +114,7 @@
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"question" {:type "string" :description "Question to ask about the repository"}
-                                      "provider" {:type "string" :description "LLM provider: glm, claude-api, or claude-cli"}
+                                      "provider" {:type "string" :description "LLM provider: glm, claude, claude-api, or claude-cli"}
                                       "model" {:type "string" :description "Model alias (e.g. sonnet, haiku, opus)"}
                                       "max_iterations" {:type "integer" :description "Max query iterations (default: 10, max: 50)"}})
                   :required ["question" "repo_path"]}}])
@@ -124,7 +125,7 @@
   "Resolve db-dir and db-name from arguments, get/create connection, call f with conn and db.
    When auto-sync is enabled (default), transparently syncs stale databases before returning."
   [args defaults f]
-  (let [repo-path (args "repo_path")]
+  (let [repo-path (.getCanonicalPath (io/file (args "repo_path")))]
     (validate-repo-path! repo-path)
     (let [db-dir  (or (:db-dir defaults)
                       (str (.getAbsolutePath (io/file "data" "datomic"))))
@@ -223,7 +224,8 @@
               (str "status=" (:status result)
                    " iterations=" (:iterations usage)
                    " tokens=" (+ (:input-tokens usage 0) (:output-tokens usage 0))))
-        (tool-result (:answer result))))))
+        (tool-result (or (:answer result)
+                         (str "No answer found (status: " (name (:status result)) ")")))))))
 
 (def ^:private tool-handlers
   {"noumenon_import"       handle-import
@@ -252,10 +254,11 @@
         (handler arguments defaults)
         (catch clojure.lang.ExceptionInfo e
           (log! "tool/error" tool-name (.getMessage e))
-          (tool-error (.getMessage e)))
+          (tool-error (or (:user-message (ex-data e))
+                          "Internal error — check server logs.")))
         (catch Exception e
           (log! "tool/error" tool-name (.getMessage e))
-          (tool-error "Internal error — see server logs for details.")))
+          (tool-error "Internal error — check server logs.")))
       (tool-error (str "Unknown tool: " tool-name)))))
 
 ;; --- Main loop ---
