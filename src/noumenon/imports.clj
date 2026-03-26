@@ -57,10 +57,20 @@
    :go         {:tool "go"      :available? (tool-available? "go")}})
 
 (defn log-tool-availability!
-  "Log which tools are available and which languages will be skipped."
+  "Log which tools are available and which languages will be skipped.
+   Returns a vec of {:lang :tool :file-count} for unavailable tools that
+   have files — callers can use this to emit a completion warning."
   [tools file-counts]
   (let [available   (->> tools (filter (comp :available? val)) (map key))
-        unavailable (->> tools (remove (comp :available? val)) (map key))]
+        unavailable (->> tools (remove (comp :available? val)) (map key))
+        skipped     (->> unavailable
+                         (keep (fn [lang]
+                                 (let [n (get file-counts lang 0)]
+                                   (when (pos? n)
+                                     {:lang lang
+                                      :tool (get-in tools [lang :tool])
+                                      :file-count n}))))
+                         vec)]
     (log! (str "  Postprocess tools — available: Clojure (built-in)"
                (when (seq available)
                  (str ", " (str/join ", " (map name available))))
@@ -70,7 +80,8 @@
                                 (map (fn [lang]
                                        (str (name lang) " ("
                                             (get file-counts lang 0) " files)"))
-                                     unavailable))))))))
+                                     unavailable))))))
+    skipped))
 
 ;; ---------------------------------------------------------------------------
 ;; Clojure — deep parsing via tools.namespace
@@ -465,7 +476,9 @@ end")
               (update acc :files-processed inc)
 
               (:error? result)
-              (-> acc (update :files-errored inc))
+              (-> acc
+                  (update :files-processed inc)
+                  (update :files-errored inc))
 
               :else
               (let [batch' (conj batch result)
@@ -489,7 +502,7 @@ end")
          all-paths (into #{} (map :file/path) all-files)
          tools     (probe-tools)
          counts-by-lang (frequencies (map :file/lang all-files))
-         _         (log-tool-availability! tools counts-by-lang)
+         skipped-tools (log-tool-availability! tools counts-by-lang)
          c-langs   #{:c :cpp}
          c-files   (filter (comp c-langs :file/lang) all-files)
          std-files (remove (comp c-langs :file/lang) all-files)
@@ -511,11 +524,19 @@ end")
          all-results (into std-results c-results)
          final       (tally-and-transact! conn all-results)
          final       (update final :batch #(flush-batch! conn %))
-         {:keys [files-processed imports-resolved files-errored]} final]
+         {:keys [files-processed imports-resolved files-errored]} final
+         files-skipped (reduce + (map :file-count skipped-tools))]
      (log! (str "  Postprocessed " files-processed " files, "
                 imports-resolved " import edges resolved"
                 (when (> concurrency 1)
                   (str " (concurrency=" concurrency ")"))
                 (when (pos? files-errored)
                   (str ", " files-errored " errors"))))
-     (dissoc final :batch))))
+     (when (pos? files-skipped)
+       (log! (str "  Warning: " files-skipped " files skipped because "
+                  (str/join ", " (map (fn [{:keys [tool]}] (str tool " is not on PATH"))
+                                      skipped-tools))
+                  ". Install and re-run postprocess to resolve their imports.")))
+     (-> final
+         (dissoc :batch)
+         (assoc :files-skipped files-skipped :skipped-tools skipped-tools)))))

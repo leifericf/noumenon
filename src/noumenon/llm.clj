@@ -80,10 +80,10 @@
   [messages {:keys [model temperature max-tokens base-url auth-token]}]
   (let [url      (str base-url "/v1/messages")
         req-body (json/write-str
-                  {:model      model
-                   :max_tokens (or max-tokens 4096)
-                   :temperature temperature
-                   :messages   messages})
+                  (cond-> {:model      model
+                           :max_tokens (or max-tokens 4096)
+                           :messages   messages}
+                    temperature (assoc :temperature temperature)))
         start-ms (System/currentTimeMillis)]
     (loop [attempt 1]
       (let [{:keys [status body error]}

@@ -6,6 +6,16 @@
             [noumenon.llm :as llm]
             [noumenon.query :as query]))
 
+;; --- Helper constants ---
+
+(def ^:private valid-run-id
+  "A valid run-id for testing: <timestamp>-<uuid>."
+  "1234567890-00000000-0000-0000-0000-000000000001")
+
+(def ^:private valid-run-id-2
+  "A second valid run-id for testing."
+  "1234567890-00000000-0000-0000-0000-000000000002")
+
 ;; --- Helper macro ---
 
 (def ^:private test-qs
@@ -129,18 +139,26 @@
     (is (= (count ids) (count (set ids))))))
 
 (deftest validate-run-id-accepts-valid
-  (let [id (bench/generate-run-id)]
-    (is (= id (bench/validate-run-id id)))))
+  (is (= valid-run-id (bench/validate-run-id valid-run-id)))
+  (is (= valid-run-id-2 (bench/validate-run-id valid-run-id-2)))
+  (is (some? (bench/validate-run-id (bench/generate-run-id)))))
 
 (deftest validate-run-id-rejects-path-traversal
-  (is (thrown? clojure.lang.ExceptionInfo
-               (bench/validate-run-id "../../../etc/passwd")))
-  (is (thrown? clojure.lang.ExceptionInfo
-               (bench/validate-run-id "foo/bar")))
-  (is (thrown? clojure.lang.ExceptionInfo
-               (bench/validate-run-id nil)))
-  (is (thrown? clojure.lang.ExceptionInfo
-               (bench/validate-run-id ""))))
+  (testing "rejects path traversal attempts"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid run-id"
+                          (bench/validate-run-id "../../../etc/cron.d/inject")))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid run-id"
+                          (bench/validate-run-id "../../tmp/evil"))))
+  (testing "rejects nil and non-string"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid run-id"
+                          (bench/validate-run-id nil)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid run-id"
+                          (bench/validate-run-id 42))))
+  (testing "rejects malformed run-ids"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid run-id"
+                          (bench/validate-run-id "not-a-valid-id")))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid run-id"
+                          (bench/validate-run-id "")))))
 
 (deftest question-set-hash-stable
   (let [qs   (bench/load-questions)
@@ -160,7 +178,7 @@
   (let [dir  (io/file (System/getProperty "java.io.tmpdir")
                       (str "bench-test-" (System/currentTimeMillis)))
         path (str (io/file dir "test.edn"))
-        cp   {:run-id   "123-abcd"
+        cp   {:run-id   valid-run-id
               :metadata {:repo-path "test" :commit-sha "abc"}
               :stages   {[:q01 :query :answer] {:status :ok :result "answer" :completed-at (java.util.Date.)}
                          [:q01 :query :judge]  {:status :ok :result {:score :correct :reasoning "good"}
@@ -171,7 +189,7 @@
       (is (.exists (io/file path)))
       (is (not (.exists (io/file (str path ".tmp")))))
       (let [loaded (bench/checkpoint-read path)]
-        (is (= "123-abcd" (:run-id loaded)))
+        (is (= valid-run-id (:run-id loaded)))
         (is (= 2 (count (:stages loaded))))
         (is (= "answer" (get-in loaded [:stages [:q01 :query :answer] :result])))
         (is (= :correct (get-in loaded [:stages [:q01 :query :judge] :result :score]))))
@@ -184,18 +202,22 @@
                       (str "bench-integrity-" (System/currentTimeMillis)))
         path (str (io/file dir "test.edn"))]
     (try
-      (bench/checkpoint-write path {:run-id "1" :stages {}})
+      (bench/checkpoint-write path {:run-id valid-run-id :stages {}})
       (testing "valid checkpoint reads fine"
-        (is (= "1" (:run-id (bench/checkpoint-read path)))))
+        (is (= valid-run-id (:run-id (bench/checkpoint-read path)))))
       (testing "tampered checkpoint throws"
-        (spit path (str/replace (slurp path) "\"1\"" "\"tampered\""))
+        (spit path (str/replace (slurp path) valid-run-id "tampered-value-here"))
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"SHA-256 mismatch"
                               (bench/checkpoint-read path))))
       (testing "legacy checkpoint without checksum reads fine"
-        (spit path (pr-str {:run-id "legacy" :stages {}}))
-        (is (= "legacy" (:run-id (bench/checkpoint-read path)))))
+        (spit path (pr-str {:run-id valid-run-id-2 :stages {}}))
+        (is (= valid-run-id-2 (:run-id (bench/checkpoint-read path)))))
+      (testing "checkpoint with invalid run-id rejects (path traversal)"
+        (spit path (pr-str {:run-id "../../../etc/cron.d/inject" :stages {}}))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid run-id"
+                              (bench/checkpoint-read path))))
       (testing "checkpoint with invalid judge score rejects"
-        (spit path (pr-str {:run-id "bad" :stages
+        (spit path (pr-str {:run-id valid-run-id :stages
                             {[:q01 :query :judge]
                              {:status :ok :result {:score :evil :reasoning "hacked"}}}}))
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid judge score"
@@ -209,9 +231,9 @@
                       (str "bench-atomic-" (System/currentTimeMillis)))
         path (str (io/file dir "test.edn"))]
     (try
-      (bench/checkpoint-write path {:run-id "1" :stages {}})
-      (bench/checkpoint-write path {:run-id "2" :stages {}})
-      (is (= "2" (:run-id (bench/checkpoint-read path))))
+      (bench/checkpoint-write path {:run-id valid-run-id :stages {}})
+      (bench/checkpoint-write path {:run-id valid-run-id-2 :stages {}})
+      (is (= valid-run-id-2 (:run-id (bench/checkpoint-read path))))
       (is (not (.exists (io/file (str path ".tmp")))))
       (finally
         (doseq [f (reverse (file-seq dir))]
@@ -222,7 +244,7 @@
                       (str "bench-concurrent-" (System/currentTimeMillis)))
         path (str (io/file dir "test.edn"))
         n    20
-        cp   (atom {:run-id "concurrent-test" :stages {}})
+        cp   (atom {:run-id valid-run-id :stages {}})
         _    (.mkdirs dir)]
     (try
       ;; N futures each add a unique stage and write checkpoint

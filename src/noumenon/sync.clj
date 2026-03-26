@@ -111,8 +111,9 @@
                                (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
                                                              :where [?e :file/path ?p]]
                                                            db path))]
-                                 (concat (retract-file-attrs db eid)
-                                         (retract-code-segments db eid)))))
+                                 (let [tx (into (retract-file-attrs db eid)
+                                                (retract-code-segments db eid))]
+                                   (when (seq tx) tx)))))
                        vec)
           tx-data (into [] cat results)]
       (when (seq tx-data)
@@ -129,8 +130,8 @@
                                (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
                                                              :where [?e :file/path ?p]]
                                                            db path))]
-                                 (concat (retract-code-segments db eid)
-                                         [[:db/retractEntity eid]]))))
+                                 (into (retract-code-segments db eid)
+                                       [[:db/retractEntity eid]]))))
                        vec)
           tx-data (into [] cat results)]
       (when (seq tx-data)

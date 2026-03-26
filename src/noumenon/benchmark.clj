@@ -593,9 +593,22 @@
     (validate-stage-result stage-key (:result stage-data)))
   checkpoint)
 
+(def ^:private run-id-pattern
+  "Valid run-id: <timestamp-ms>-<uuid>."
+  #"^\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+(defn validate-run-id
+  "Validate that a run-id matches the expected format. Throws on invalid input."
+  [run-id]
+  (when-not (and (string? run-id) (re-matches run-id-pattern run-id))
+    (throw (ex-info "Invalid run-id format — possible path traversal"
+                    {:run-id run-id})))
+  run-id)
+
 (defn checkpoint-read
   "Read and parse checkpoint EDN from path. Verifies SHA-256 checksum if present.
-   Validates stage result integrity. Throws on checksum mismatch or invalid data."
+   Validates run-id format and stage result integrity.
+   Throws on checksum mismatch, invalid run-id, or invalid data."
   [path]
   (let [raw (slurp path)
         cp  (if-let [[_ stored-hash edn-str] (re-matches #"(?s);; checksum:([0-9a-f]{64})\n(.*)" raw)]
@@ -607,6 +620,7 @@
               ;; Legacy checkpoint without checksum — read as-is
               (do (log! "Warning: checkpoint has no integrity checksum — may be tampered")
                   (edn/read-string raw)))]
+    (validate-run-id (:run-id cp))
     (validate-checkpoint-stages cp)))
 
 ;; --- Resume ---
