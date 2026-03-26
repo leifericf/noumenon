@@ -193,7 +193,7 @@ clj -M:run <subcommand> [options]
 
 Run `clj -M:run --help` for global help, or `clj -M:run <subcommand> --help` for details.
 
-`import` accepts either `<repo-path>` or a Git URL (auto-cloned to `data/repos/<name>/`).
+`import` accepts either `<repo-path>` or a Git URL (auto-cloned to `data/repos/<name>/`). See [Using with Perforce](#using-with-perforce) for Helix Core repositories.
 
 | Subcommand | Purpose |
 |---|---|
@@ -207,7 +207,7 @@ Run `clj -M:run --help` for global help, or `clj -M:run <subcommand> --help` for
 | `databases` | List all databases or delete one |
 | `agent` | Ask repository questions via iterative query + LLM flow |
 | `serve` | Start MCP server (JSON-RPC over stdio) |
-| `benchmark` | Run project benchmark flow |
+| `benchmark` | Evaluate knowledge graph efficacy (40 questions, deterministic + LLM-judged) |
 | `longbench` | Run LongBench v2 workflow (`download`, `run`, `results`) |
 
 Common flags:
@@ -307,6 +307,23 @@ Import + LLM analysis works with any language. `postprocess` adds deterministic 
 | Import extraction | Erlang | `-include` / `-include_lib` detection | none (regex) |
 | Analysis only | many others | LLM-only semantics | n/a |
 
+Markdown files (`.md`) are imported as file entities but not analyzed — they are prose, not code or config.
+
+### Sensitive File Protection
+
+Noumenon automatically excludes files matching known sensitive patterns from LLM analysis and import extraction. File contents for these paths are **never read or sent to any AI provider**:
+
+| Pattern | Examples |
+|---|---|
+| Environment files | `.env`, `.env.local`, `.env.production` (not `.env.example`) |
+| Crypto keys | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `*.jks`, `*.cert` |
+| Credential files | `credentials.json`, `token.json`, `.npmrc`, `.pypirc`, `.netrc`, `.htpasswd`, `.pgpass` |
+| SSH material | `.ssh/*`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*` |
+
+These files are still recorded in the knowledge graph as file entities (path, size, extension) but their contents are never accessed.
+
+**Your responsibility:** This blocklist covers well-known secret *files*. If you embed secrets directly in source code (hardcoded API keys, tokens, passwords), Noumenon will not detect them — that content will be sent to the LLM like any other code. Use `.gitignore`, pre-commit hooks, or tools like [git-secrets](https://github.com/awslabs/git-secrets) or [gitleaks](https://github.com/gitleaks/gitleaks) to prevent secrets from entering your repository.
+
 ## MCP Server
 
 Run Noumenon as an MCP server so agents can call it as a tool:
@@ -352,12 +369,41 @@ You do not need extra skills, custom sub-agents, or special `CLAUDE.md` wiring j
 
 ## Benchmarks
 
-Noumenon includes two benchmark paths:
+Run the benchmark on your own repo to measure whether the knowledge graph meaningfully improves LLM answers about your codebase. Each question is answered twice: once with structured Datomic query results (the knowledge graph) and once with raw source code. If the knowledge-graph-augmented answers score higher, the graph is earning its keep.
 
-- `benchmark` for project-specific evaluation
-- `longbench` for LongBench v2 code-repository tasks
+Results vary depending on repo size, history depth, and codebase characteristics. Small repos with few commits won't produce meaningful signal.
 
-LongBench flow:
+### Scoring tiers
+
+- **Deterministic (22 questions)** — Primary metric. Answers are compared against Datomic query results using exact matching. Objective and reproducible. Run by default.
+- **LLM-judged (18 questions)** — Supplementary metric. A judge LLM scores architectural reasoning answers against rubrics. Useful but subjective. Opt-in via `--full`.
+
+### Progressive testing
+
+By default, only deterministic questions run. Start here — if the deterministic score is poor, there's no point spending tokens on LLM-judged questions. Once you're satisfied with deterministic results, run `--full` to include the architectural reasoning tier.
+
+### Running
+
+```bash
+# Default: deterministic questions only (22 questions, both conditions)
+clj -M:run benchmark /path/to/repo
+
+# All 40 questions including LLM-judged architectural reasoning
+clj -M:run benchmark --full /path/to/repo
+
+# Cheapest mode: deterministic + query-only (no raw context comparison)
+clj -M:run benchmark --fast /path/to/repo
+
+# Budget-limited
+clj -M:run benchmark --max-cost 2.0 /path/to/repo
+
+# Resume an interrupted run
+clj -M:run benchmark --resume /path/to/repo
+```
+
+### LongBench v2
+
+Separate from the project benchmark, `longbench` runs LongBench v2 code-repository tasks:
 
 ```bash
 clj -M:run longbench download
@@ -382,14 +428,15 @@ These are planning estimates, not guarantees. Actual usage depends on file sizes
 
 ### Benchmark estimate examples
 
-Project benchmark currently has `35` questions. Canonical mode runs query+raw answer and judge stages (`4` stages/question, `140` stages total).
+Project benchmark has `40` questions (`22` deterministic, `18` LLM-judged). Default runs deterministic only.
 
-`benchmark` uses a planning heuristic of roughly `~5000` input + `~800` output tokens per stage.
+`benchmark` uses a planning heuristic of roughly `~5000` input + `~800` output tokens per LLM call. Deterministic judge stages are free (no LLM call), so effective LLM calls are lower than total stages.
 
-| Benchmark mode | Approx stages | Estimated input tokens | Estimated output tokens | Sonnet API rough cost* |
+| Benchmark mode | LLM calls | Estimated input tokens | Estimated output tokens | Sonnet API rough cost* |
 |---|---:|---:|---:|---:|
-| Full canonical (`benchmark`) | 140 | 700,000 | 112,000 | ~$3.78 |
-| Fast mode (`--fast`, skip raw + non-deterministic judge) | varies by deterministic questions | substantially lower | substantially lower | lower than canonical |
+| Default (deterministic, both conditions) | 44 (22 × 2 answer stages) | 220,000 | 35,200 | ~$1.19 |
+| Full (`--full`, all 40 questions) | 124 (80 answer + 44 LLM judge) | 620,000 | 99,200 | ~$3.35 |
+| Fast (`--fast`, deterministic + query-only) | 22 (22 × 1 answer stage) | 110,000 | 17,600 | ~$0.60 |
 | LongBench (`longbench run`) | depends on selected question count | scales linearly with questions | scales linearly with questions | model/provider dependent |
 
 \* Cost examples use Anthropic Sonnet pricing assumptions (`$3/M` input tokens, `$15/M` output tokens). Providers without public per-token pricing metadata (for example `glm`) still report token usage, but USD estimates may be `0.0`.
@@ -412,6 +459,34 @@ clj -M:nrepl
 - `resources/prompts/` - prompt templates
 - `test/` - test suite
 - `data/` - local runtime artifacts (ignored)
+
+## Using with Perforce
+
+Noumenon works with Perforce (Helix Core) repositories via [git-p4](https://git-scm.com/docs/git-p4), which creates a local Git mirror from a P4 depot path. Noumenon then treats it as a regular Git repo.
+
+**Requirements**: `git`, `p4` CLI, and `git-p4` (bundled with most Git distributions) must be on PATH. Your Perforce environment (`P4PORT`, `P4USER`, `P4CLIENT`) must be configured.
+
+### Import a Perforce depot
+
+```bash
+git p4 clone //depot/project/main/... data/repos/project
+clj -M:run import data/repos/project
+```
+
+### Sync with new changelists
+
+```bash
+cd data/repos/project && git p4 sync && git p4 rebase && cd -
+clj -M:run sync data/repos/project
+```
+
+`git p4 sync` fetches new changelists from the Perforce server and `git p4 rebase` applies them as Git commits. Then `noumenon sync` detects the new HEAD and incrementally updates the knowledge graph.
+
+### If your server has Helix4Git
+
+If your Perforce admin has configured [Helix4Git](https://www.perforce.com/products/helix-core-git-connector), the depot is already mirrored as a Git repo. Point Noumenon at the Git URL directly — no `git-p4` needed.
+
+See the [git-p4 documentation](https://git-scm.com/docs/git-p4) for full usage details, including filtering by depot path, handling streams, and troubleshooting.
 
 ## Status
 

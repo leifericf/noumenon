@@ -14,20 +14,21 @@
 
 (defmacro with-bench-mocks
   "Wrap body with standard benchmark mocks: load-questions, query-context,
-   raw-context, repo-head-sha. Accepts optional :questions override."
+   raw-context, repo-head-sha, pick-benchmark-targets. Accepts optional :questions override."
   [opts & body]
   (let [qs (or (:questions opts) `test-qs)]
-    `(with-redefs [bench/load-questions (fn [] ~qs)
-                   bench/query-context  (fn [_db# _qn#] "mock query context")
-                   bench/raw-context    (fn [_rp#] "mock raw context")
-                   bench/repo-head-sha  (fn [_rp#] "abc123")]
+    `(with-redefs [bench/load-questions        (fn [] ~qs)
+                   bench/query-context          (fn [_db# _qn#] "mock query context")
+                   bench/raw-context            (fn [_rp#] "mock raw context")
+                   bench/repo-head-sha          (fn [_rp#] "abc123")
+                   bench/pick-benchmark-targets (fn [_db#] {:target-file "mock/target.clj"})]
        ~@body)))
 
 ;; --- Tier 0: Pure function tests ---
 
 (deftest load-questions-returns-all
   (let [qs (bench/load-questions)]
-    (is (= 35 (count qs)))
+    (is (= 40 (count qs)))
     (doseq [q qs]
       (is (keyword? (:id q)) (str "question " (:id q) " has :id"))
       (is (string? (:question q)) (str "question " (:id q) " has :question"))
@@ -126,6 +127,20 @@
 (deftest generate-run-id-unique
   (let [ids (repeatedly 100 bench/generate-run-id)]
     (is (= (count ids) (count (set ids))))))
+
+(deftest validate-run-id-accepts-valid
+  (let [id (bench/generate-run-id)]
+    (is (= id (bench/validate-run-id id)))))
+
+(deftest validate-run-id-rejects-path-traversal
+  (is (thrown? clojure.lang.ExceptionInfo
+               (bench/validate-run-id "../../../etc/passwd")))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (bench/validate-run-id "foo/bar")))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (bench/validate-run-id nil)))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (bench/validate-run-id ""))))
 
 (deftest question-set-hash-stable
   (let [qs   (bench/load-questions)
@@ -377,36 +392,55 @@
     (is (= #{:repo-path :commit-sha} (set (map :field (:mismatches result)))))))
 
 (deftest find-checkpoint-latest
-  (let [dir (io/file (System/getProperty "java.io.tmpdir")
-                     (str "bench-find-" (System/currentTimeMillis)))]
+  (let [dir  (io/file (System/getProperty "java.io.tmpdir")
+                      (str "bench-find-" (System/currentTimeMillis)))
+        id-a "1000-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        id-b "2000-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
     (try
       (.mkdirs dir)
-      (spit (io/file dir "1000-aaaa.edn") "{}")
-      (spit (io/file dir "2000-bbbb.edn") "{}")
-      (is (str/ends-with? (bench/find-checkpoint (str dir) "latest") "2000-bbbb.edn"))
+      (spit (io/file dir (str id-a ".edn")) "{}")
+      (spit (io/file dir (str id-b ".edn")) "{}")
+      (is (str/ends-with? (bench/find-checkpoint (str dir) "latest")
+                          (str id-b ".edn")))
       (finally
         (doseq [f (reverse (file-seq dir))]
           (.delete f))))))
 
 (deftest find-checkpoint-specific-run-id
-  (let [dir (io/file (System/getProperty "java.io.tmpdir")
-                     (str "bench-find2-" (System/currentTimeMillis)))]
+  (let [dir  (io/file (System/getProperty "java.io.tmpdir")
+                      (str "bench-find2-" (System/currentTimeMillis)))
+        id-a "1000-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        id-b "2000-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
     (try
       (.mkdirs dir)
-      (spit (io/file dir "1000-aaaa.edn") "{}")
-      (spit (io/file dir "2000-bbbb.edn") "{}")
-      (is (str/ends-with? (bench/find-checkpoint (str dir) "1000-aaaa") "1000-aaaa.edn"))
+      (spit (io/file dir (str id-a ".edn")) "{}")
+      (spit (io/file dir (str id-b ".edn")) "{}")
+      (is (str/ends-with? (bench/find-checkpoint (str dir) id-a)
+                          (str id-a ".edn")))
       (finally
         (doseq [f (reverse (file-seq dir))]
           (.delete f))))))
 
 (deftest find-checkpoint-not-found
-  (let [dir (io/file (System/getProperty "java.io.tmpdir")
-                     (str "bench-find3-" (System/currentTimeMillis)))]
+  (let [dir    (io/file (System/getProperty "java.io.tmpdir")
+                        (str "bench-find3-" (System/currentTimeMillis)))
+        id-any "9999-cccccccc-cccc-cccc-cccc-cccccccccccc"]
     (try
       (.mkdirs dir)
       (is (nil? (bench/find-checkpoint (str dir) "latest")))
-      (is (nil? (bench/find-checkpoint (str dir) "nonexistent")))
+      (is (nil? (bench/find-checkpoint (str dir) id-any)))
+      (finally
+        (.delete dir)))))
+
+(deftest find-checkpoint-rejects-invalid-run-id
+  (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                     (str "bench-find4-" (System/currentTimeMillis)))]
+    (try
+      (.mkdirs dir)
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (bench/find-checkpoint (str dir) "../../../etc/passwd")))
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (bench/find-checkpoint (str dir) "nonexistent")))
       (finally
         (.delete dir)))))
 
@@ -952,7 +986,8 @@
                 (fn [_db _qn]
                   {:ok [["ring/middleware/params.clj" :middleware]
                         ["ring/core.clj" :core]]})]
-    (let [q      {:id :q02 :query-name "files-by-layer" :scoring :deterministic}
+    (let [q      {:id :q02 :query-name "files-by-layer" :scoring :deterministic
+                  :resolved-params {:target-file "ring/middleware/params.clj"}}
           answer "ring/middleware/params.clj is classified as middleware."
           result (bench/deterministic-score q nil answer)]
       (is (= :correct (:score result))))))
@@ -962,7 +997,8 @@
                 (fn [_db _qn]
                   {:ok [["ring/middleware/params.clj" :middleware]
                         ["ring/core.clj" :core]]})]
-    (let [q      {:id :q02 :query-name "files-by-layer" :scoring :deterministic}
+    (let [q      {:id :q02 :query-name "files-by-layer" :scoring :deterministic
+                  :resolved-params {:target-file "ring/middleware/params.clj"}}
           answer "That file is in the utility layer."
           result (bench/deterministic-score q nil answer)]
       (is (= :wrong (:score result))))))
@@ -1114,6 +1150,7 @@
                 bench/query-context  (fn [_db _qn] "mock query context")
                 bench/raw-context    (fn [_rp] (throw (ex-info "Should not be called" {})))
                 bench/repo-head-sha  (fn [_rp] "abc123")
+                bench/pick-benchmark-targets (fn [_db] {:target-file "mock/target.clj"})
                 query/run-named-query (fn [_db _qn]
                                         {:ok [["ring/core.clj" :complex]]})]
     (let [dir   (str (io/file (System/getProperty "java.io.tmpdir")
@@ -1185,6 +1222,7 @@
                 bench/query-context  (fn [_db _qn] "mock query context")
                 bench/raw-context    (fn [_rp] "mock raw context")
                 bench/repo-head-sha  (fn [_rp] "abc123")
+                bench/pick-benchmark-targets (fn [_db] {:target-file "mock/target.clj"})
                 query/run-named-query (fn [_db qn]
                                         (case qn
                                           "files-by-complexity"
@@ -1276,3 +1314,93 @@
     (is (= :ok (:status result)))
     (is (= :correct (get-in result [:result :score])))
     (is (= "Good answer" (get-in result [:result :reasoning])))))
+
+;; --- Tier 0: New deterministic scoring methods ---
+
+(deftest deterministic-score-q05-found
+  (with-redefs [query/run-named-query
+                (fn [_db qn]
+                  (case qn
+                    "files-by-complexity" {:ok [["a.clj" :trivial] ["b.clj" :complex]]}
+                    "files-by-layer"      {:ok [["a.clj" :core] ["b.clj" :middleware]]}))]
+    (let [q      {:id :q05 :query-name "files-by-complexity" :scoring :deterministic}
+          answer "a.clj is both trivial and in the core layer."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :correct (:score result))))))
+
+(deftest deterministic-score-q05-empty
+  (with-redefs [query/run-named-query
+                (fn [_db qn]
+                  (case qn
+                    "files-by-complexity" {:ok [["a.clj" :complex]]}
+                    "files-by-layer"      {:ok [["a.clj" :middleware]]}))]
+    (let [q      {:id :q05 :query-name "files-by-complexity" :scoring :deterministic}
+          answer "There are none that match both criteria."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :correct (:score result))))))
+
+(deftest deterministic-score-q06-correct
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["ring-core" "ring-util"]
+                        ["ring-core" "ring-codec"]
+                        ["ring-servlet" "ring-core"]]})]
+    (let [q      {:id :q06 :query-name "component-dependencies" :scoring :deterministic}
+          answer "ring-core has the most transitive dependencies."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :correct (:score result))))))
+
+(deftest deterministic-score-q25-correct
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["heavy.clj" 15] ["medium.clj" 8] ["light.clj" 3]]})]
+    (let [q      {:id :q25 :query-name "dependency-hotspots" :scoring :deterministic}
+          answer "heavy.clj (15 deps), medium.clj (8 deps), light.clj (3 deps)"
+          result (bench/deterministic-score q nil answer)]
+      (is (= :correct (:score result))))))
+
+(deftest deterministic-score-q38-correct
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [[:feat 50] [:fix 30] [:refactor 10]]})]
+    (let [q      {:id :q38 :query-name "commit-kinds" :scoring :deterministic}
+          answer "The most common commit type is feat (50), followed by fix (30), then refactor (10)."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :correct (:score result))))))
+
+;; --- Tier 0: Per-tier aggregation ---
+
+(deftest aggregate-scores-per-tier
+  (let [results [{:query-score :correct :raw-score :correct :category :single-hop
+                  :scoring :deterministic}
+                 {:query-score :partial :raw-score :wrong :category :single-hop
+                  :scoring :deterministic}
+                 {:query-score :correct :raw-score :partial :category :multi-hop
+                  :scoring nil}]
+        agg     (bench/aggregate-scores results)]
+    (is (= 2 (:deterministic-count agg)))
+    (is (= 1 (:llm-judged-count agg)))
+    (is (= 0.75 (:deterministic-mean agg)))
+    (is (= 1.0 (:llm-judged-mean agg)))))
+
+;; --- Tier 0: Question param resolution ---
+
+(deftest resolve-question-params-substitutes
+  (let [qs [{:id :q02 :question "What layer is {{target-file}}?"}
+            {:id :q07 :question "Describe architecture."}]
+        resolved (bench/resolve-question-params qs {:target-file "foo/bar.clj"})]
+    (is (= "What layer is foo/bar.clj?" (:question (first resolved))))
+    (is (= {:target-file "foo/bar.clj"} (:resolved-params (first resolved))))
+    (is (= "Describe architecture." (:question (second resolved))))
+    (is (nil? (:resolved-params (second resolved))))))
+
+;; --- Tier 0: stages->results propagates scoring ---
+
+(deftest stages->results-includes-scoring
+  (let [qs     [{:id :q01 :category :single-hop :query-name "test" :scoring :deterministic}]
+        stages {[:q01 :query :answer] {:status :ok :result "qa"}
+                [:q01 :query :judge]  {:status :ok :result {:score :correct :reasoning "good"}}
+                [:q01 :raw :answer]   {:status :ok :result "ra"}
+                [:q01 :raw :judge]    {:status :ok :result {:score :partial :reasoning "ok"}}}
+        results (vec (bench/stages->results qs stages))]
+    (is (= :deterministic (:scoring (first results))))))

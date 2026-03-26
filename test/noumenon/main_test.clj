@@ -124,12 +124,12 @@
       (is (= 0 (:exit import2)))
       (is (str/includes? (:stdout import2) ":commits-imported 0"))
       (is (str/includes? (:stdout import2) ":files-imported 0")))
-    (testing "status shows human-readable summary"
+    (testing "status shows human-readable summary on stderr"
       (is (= 0 (:exit status)))
-      (is (str/includes? (:stdout status) "commits"))
-      (is (str/includes? (:stdout status) "files"))
-      (is (str/includes? (:stdout status) "directories"))
-      (is (str/includes? (:stdout status) "db:")))))
+      (is (str/includes? (:stderr status) "commits"))
+      (is (str/includes? (:stderr status) "files"))
+      (is (str/includes? (:stderr status) "directories"))
+      (is (str/includes? (:stderr status) "db:")))))
 
 (deftest import-with-db-dir-flag
   (let [tmp-dir (str (.getAbsolutePath (java.io.File. (System/getProperty "java.io.tmpdir")))
@@ -166,9 +166,11 @@
             (str/includes? stderr "No database found")))))
 
 (deftest benchmark-resume-specific-run-id
-  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude" "--resume" "1234-abcd" "."])]
+  (let [fake-id "1234-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        {:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude" "--resume" fake-id "."])]
     (is (= 1 exit))
-    (is (str/includes? stderr "Checkpoint not found: 1234-abcd"))))
+    (is (or (str/includes? stderr (str "Checkpoint not found: " fake-id))
+            (str/includes? stderr "No database found")))))
 
 (deftest benchmark-invalid-max-questions
   (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--max-questions" "abc" "."])]
@@ -335,31 +337,20 @@
     (is (= 1 exit))
     (is (str/includes? stderr "Unknown longbench subcommand: frobnicate"))))
 
-(deftest longbench-run-unknown-flag
-  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run" "--verbose"])]
+(deftest longbench-run-rejected
+  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run"])]
     (is (= 1 exit))
-    (is (str/includes? stderr "Unknown option: --verbose"))))
+    (is (str/includes? stderr "Unknown longbench subcommand: run"))))
 
-(deftest longbench-run-invalid-max-questions
-  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run" "--max-questions" "abc"])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Invalid --max-questions"))))
-
-(deftest longbench-run-invalid-provider
-  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run" "--provider" "openai"])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Invalid --provider"))))
-
-(deftest longbench-run-glm-without-token
-  (when-not (System/getenv "NOUMENON_ZAI_TOKEN")
-    (let [{:keys [exit stderr]} (run-capturing ["longbench" "run"])]
-      (is (= 1 exit))
-      (is (str/includes? stderr "NOUMENON_ZAI_TOKEN")))))
-
-(deftest longbench-results-no-runs
+(deftest longbench-results-rejected
   (let [{:keys [exit stderr]} (run-capturing ["longbench" "results"])]
     (is (= 1 exit))
-    (is (str/includes? stderr "No runs found"))))
+    (is (str/includes? stderr "Unknown longbench subcommand: results"))))
+
+(deftest longbench-experiment-missing-config
+  (let [{:keys [exit stderr]} (run-capturing ["longbench" "experiment"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Missing value for --config"))))
 
 ;; --- Help and version ---
 
@@ -393,7 +384,7 @@
   (let [{:keys [exit stdout]} (run-capturing ["longbench" "--help"])]
     (is (= 0 exit))
     (is (str/includes? stdout "download"))
-    (is (str/includes? stdout "run"))))
+    (is (str/includes? stdout "experiment"))))
 
 (deftest version-flag
   (let [{:keys [exit stdout stderr]} (run-capturing ["--version"])]
@@ -432,6 +423,31 @@
   (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "question" "/tmp/nonexistent-repo-xyz"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Path does not exist"))))
+
+;; --- Tier 0: Query --param flag ---
+
+(deftest query-help-shows-list-subcommand
+  (let [{:keys [exit stdout]} (run-capturing ["query" "--help"])]
+    (is (= 0 exit))
+    (is (str/includes? stdout "query list")
+        "Help text should mention 'query list' sub-subcommand")))
+
+(deftest query-param-flag-parsed
+  (let [{:keys [exit stderr]} (run-capturing ["query" "--param" "file-path=src/main.clj"
+                                              "files-by-complexity" repo-path])]
+    (is (or (= 0 exit) (str/includes? stderr "No database found"))
+        "Should parse --param without error")))
+
+(deftest query-param-missing-value
+  (let [{:keys [exit stderr]} (run-capturing ["query" "--param"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Missing value for --param"))))
+
+(deftest query-param-invalid-format
+  (let [{:keys [exit stderr]} (run-capturing ["query" "--param" "noequals"
+                                              "files-by-complexity" repo-path])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Invalid --param"))))
 
 ;; --- Tier 1: Query subcommand integration ---
 

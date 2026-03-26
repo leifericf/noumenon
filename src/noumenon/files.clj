@@ -44,7 +44,7 @@
    "yaml"   :yaml
    "yml"    :yaml
    "xml"    :xml
-   "md"     :markdown
+   #_"md — prose, not code or config"
    "toml"   :toml
    "lua"    :lua
    "ex"     :elixir
@@ -59,6 +59,41 @@
    "tf"     :terraform
    "proto"  :protobuf
    "graphql" :graphql})
+
+;; --- Sensitive file detection ---
+;; Defense-in-depth: prevent accidentally-committed secrets from being sent to
+;; LLM analysis or import-extraction pipelines.  Secrets embedded in source code
+;; are the user's responsibility — this blocklist covers well-known secret *files*.
+
+(def ^:private sensitive-extensions
+  #{"pem" "key" "p12" "pfx" "keystore" "jks" "cert"})
+
+(def ^:private sensitive-basenames
+  #{".npmrc" ".pypirc" ".netrc" ".htpasswd" ".pgpass"
+    "credentials.json" "token.json"})
+
+(def ^:private sensitive-path-segments
+  #{".ssh"})
+
+(def ^:private env-safe-suffixes
+  #{".example" ".sample" ".template"})
+
+(defn sensitive-path?
+  "True when `path` (repo-relative) matches a known sensitive-file pattern.
+   Checked before any file content is read for analysis or import extraction."
+  [path]
+  (let [basename (last (str/split path #"/"))
+        ext      (when-let [i (str/last-index-of basename ".")]
+                   (subs basename (inc i)))]
+    (boolean
+     (or (sensitive-extensions ext)
+         (sensitive-basenames basename)
+         (some sensitive-path-segments (str/split path #"/"))
+         (when (str/starts-with? basename ".env")
+           (not (some #(str/ends-with? basename %) env-safe-suffixes)))
+         (str/starts-with? basename "id_rsa")
+         (str/starts-with? basename "id_ed25519")
+         (str/starts-with? basename "id_ecdsa")))))
 
 ;; --- Git shell helpers ---
 

@@ -16,12 +16,11 @@
 ;; --- Helpers ---
 
 (defn- derive-db-name
-  "Derive a unique db name from the canonical repo path.
+  "Derive a unique db name from a canonical repo path.
    Uses the basename plus a short hash of the full path to avoid collisions."
-  [repo-path]
-  (let [canonical (.getCanonicalPath (io/file repo-path))
-        basename  (-> canonical (str/replace #"/+$" "") (str/split #"/") last)
-        hash-suffix (-> canonical hash Math/abs (Integer/toString 36))]
+  [canonical-path]
+  (let [basename    (-> canonical-path (str/replace #"/+$" "") (str/split #"/") last)
+        hash-suffix (-> canonical-path hash Math/abs (Integer/toString 36))]
     (str basename "-" hash-suffix)))
 
 (defn- validate-repo-path!
@@ -44,15 +43,16 @@
 (defonce ^:private connections (atom {}))
 
 (defn- get-or-create-conn
-  "Atomically get or create a connection, keyed on [db-dir db-name]."
+  "Get or create a connection, keyed on [db-dir db-name].
+   Uses locking to avoid retrying side-effecting db/connect-and-ensure-schema."
   [db-dir db-name]
   (let [cache-key [db-dir db-name]]
-    (-> (swap! connections
-               (fn [m]
-                 (if (contains? m cache-key)
-                   m
-                   (assoc m cache-key (db/connect-and-ensure-schema db-dir db-name)))))
-        (get cache-key))))
+    (or (get @connections cache-key)
+        (locking connections
+          (or (get @connections cache-key)
+              (let [conn (db/connect-and-ensure-schema db-dir db-name)]
+                (swap! connections assoc cache-key conn)
+                conn))))))
 
 ;; --- JSON-RPC plumbing ---
 
@@ -68,6 +68,18 @@
 
 (defn- tool-error [text]
   {:content [{:type "text" :text text}] :isError true})
+
+;; --- Input validation ---
+
+(def ^:private max-repo-path-len 4096)
+(def ^:private max-question-len 8000)
+
+(defn- validate-string-length!
+  "Throw ex-info if s exceeds max-len characters."
+  [field-name s max-len]
+  (when (> (count s) max-len)
+    (throw (ex-info (str field-name " exceeds maximum length of " max-len " characters")
+                    {:field field-name :length (count s) :max max-len}))))
 
 ;; --- Tool definitions ---
 
@@ -125,20 +137,22 @@
   "Resolve db-dir and db-name from arguments, get/create connection, call f with conn and db.
    When auto-sync is enabled (default), transparently syncs stale databases before returning."
   [args defaults f]
-  (let [repo-path (.getCanonicalPath (io/file (args "repo_path")))]
-    (validate-repo-path! repo-path)
-    (let [db-dir  (or (:db-dir defaults)
+  (let [raw-path  (args "repo_path")
+        _         (validate-string-length! "repo_path" raw-path max-repo-path-len)
+        repo-path (.getCanonicalPath (io/file raw-path))
+        _         (validate-repo-path! repo-path)
+        db-dir    (or (:db-dir defaults)
                       (str (.getAbsolutePath (io/file "data" "datomic"))))
-          db-name (derive-db-name repo-path)
-          conn    (get-or-create-conn db-dir db-name)
-          _       (when (:auto-sync defaults true)
-                    (let [db (d/db conn)]
-                      (when (sync/stale? db repo-path)
-                        (log! "auto-sync" "HEAD changed, syncing...")
-                        (let [repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))]
-                          (sync/sync-repo! conn repo-path repo-uri {:concurrency 8})))))
-          db      (d/db conn)]
-      (f {:conn conn :db db :repo-path repo-path :db-name db-name}))))
+        db-name (derive-db-name repo-path)
+        conn    (get-or-create-conn db-dir db-name)
+        _       (when (:auto-sync defaults true)
+                  (let [db (d/db conn)]
+                    (when (sync/stale? db repo-path)
+                      (log! "auto-sync" "HEAD changed, syncing...")
+                      (let [repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))]
+                        (sync/sync-repo! conn repo-path repo-uri {:concurrency 8})))))
+        db      (d/db conn)]
+    (f {:conn conn :db db :repo-path repo-path :db-name db-name})))
 
 (defn- format-import-summary [git-r files-r]
   (str "Import complete. "
@@ -151,9 +165,8 @@
 (defn- handle-import [args defaults]
   (with-conn args defaults
     (fn [{:keys [conn repo-path]}]
-      (let [repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
-            git-r    (git/import-commits! conn repo-path repo-uri)
-            files-r  (files/import-files! conn repo-path repo-uri)]
+      (let [git-r   (git/import-commits! conn repo-path repo-path)
+            files-r (files/import-files! conn repo-path repo-path)]
         (tool-result (format-import-summary git-r files-r))))))
 
 (defn- handle-status [args defaults]
@@ -212,6 +225,7 @@
       (tool-result (pr-str result)))))
 
 (defn- handle-ask [args defaults]
+  (validate-string-length! "question" (args "question") max-question-len)
   (with-conn args defaults
     (fn [{:keys [db db-name]}]
       (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))

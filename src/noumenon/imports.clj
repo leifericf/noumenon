@@ -8,6 +8,7 @@
             [clojure.tools.namespace.parse :as ns-parse]
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
+            [noumenon.files :as files]
             [noumenon.util :refer [log!]])
   (:import [java.io PushbackReader StringReader]))
 
@@ -354,15 +355,19 @@ end")
 ;; ---------------------------------------------------------------------------
 
 (defn- files-with-lang
-  "Query all file entities that have a :file/lang."
+  "Query all file entities that have a :file/lang.  Excludes sensitive files."
   [db]
-  (->> (d/q '[:find ?path ?lang
-              :where
-              [?e :file/path ?path]
-              [?e :file/lang ?lang]]
-            db)
-       (mapv (fn [[path lang]] {:file/path path :file/lang lang}))
-       (sort-by :file/path)))
+  (let [candidates (->> (d/q '[:find ?path ?lang
+                               :where
+                               [?e :file/path ?path]
+                               [?e :file/lang ?lang]]
+                             db)
+                        (mapv (fn [[path lang]] {:file/path path :file/lang lang})))
+        {sensitive true safe false} (group-by #(files/sensitive-path? (:file/path %))
+                                              candidates)]
+    (when (seq sensitive)
+      (log! (str "Skipping " (count sensitive) " sensitive file(s) from postprocessing")))
+    (sort-by :file/path safe)))
 
 (defn- file->tx-data
   "Build tx-data for one file's resolved imports."
