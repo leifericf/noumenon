@@ -532,6 +532,142 @@
   [stages]
   (reduce llm/sum-usage llm/zero-usage (keep :usage (vals stages))))
 
+;; --- Datomic storage ---
+
+(defn- empty-context-count
+  "Count results where the LLM answer text suggests empty or missing context."
+  [results layers]
+  (let [kg-layers (remove #{:raw} layers)]
+    (count
+     (for [r results
+           layer kg-layers
+           :let [answer (get r (keyword (str (name layer) "-answer")))]
+           :when (and (string? answer)
+                      (re-find #"(?i)(cannot answer|no context|empty|insufficient|not provided)" answer))]
+       r))))
+
+(defn- first-resolved-model
+  "Extract the resolved model from the first completed answer stage."
+  [stages]
+  (->> (vals stages)
+       (keep :resolved-model)
+       first))
+
+(defn benchmark-run->tx-data
+  "Convert finalized benchmark results + metadata to Datomic tx-data.
+   Pure function: data in, tx-data out."
+  [{:keys [run-id results aggregate total-usage checkpoint-path stop-reason]}
+   {:keys [repo-path commit-sha model-config started-at mode
+           question-set-hash rubric-hash answer-prompt-hash db-basis-t
+           concurrency stages]}]
+  (let [layers (resolve-layers (or mode {}))
+        result-entities
+        (mapv (fn [r]
+                (reduce (fn [entity layer]
+                          (let [score-key    (keyword (str (name layer) "-score"))
+                                reasoning-key (keyword (str (name layer) "-reasoning"))]
+                            (cond-> entity
+                              (get r score-key)
+                              (assoc (keyword "bench.result" (str (name layer) "-score"))
+                                     (get r score-key))
+                              (get r reasoning-key)
+                              (assoc (keyword "bench.result" (str (name layer) "-reasoning"))
+                                     (get r reasoning-key)))))
+                        (cond-> {:bench.result/question-id (:id r)
+                                 :bench.result/category   (:category r)
+                                 :bench.result/query-name (or (:query-name r) "")}
+                          (:scoring r) (assoc :bench.result/scoring (:scoring r))
+                          (:question r) (assoc :bench.result/question-text (:question r)))
+                        layers))
+              results)
+        status (cond
+                 (nil? stop-reason) :completed
+                 (= :error stop-reason) :error
+                 :else :stopped)
+        resolved-model (first-resolved-model (or stages {}))
+        run-entity
+        (cond->
+          {:bench.run/id              run-id
+           :bench.run/repo-path       (str repo-path)
+           :bench.run/commit-sha      (or commit-sha "unknown")
+           :bench.run/started-at      (or started-at (java.util.Date.))
+           :bench.run/completed-at    (java.util.Date.)
+           :bench.run/status          status
+           :bench.run/model-config    (pr-str model-config)
+           :bench.run/layers          (pr-str layers)
+           :bench.run/mode            (pr-str mode)
+           :bench.run/question-count  (long (:question-count aggregate 0))
+           :bench.run/results         result-entities
+           :bench.run/checkpoint-path (str checkpoint-path)}
+
+          (:canonical aggregate)
+          (assoc :bench.run/canonical? true)
+
+          (not (:canonical aggregate))
+          (assoc :bench.run/canonical? false)
+
+          (:completed-count aggregate)
+          (assoc :bench.run/completed-count (long (:completed-count aggregate)))
+
+          stop-reason
+          (assoc :bench.run/stop-reason stop-reason)
+
+          resolved-model
+          (assoc :bench.run/resolved-model resolved-model)
+
+          concurrency
+          (assoc :bench.run/concurrency (long concurrency))
+
+          question-set-hash
+          (assoc :bench.run/question-set-hash question-set-hash)
+
+          rubric-hash
+          (assoc :bench.run/rubric-hash rubric-hash)
+
+          answer-prompt-hash
+          (assoc :bench.run/answer-prompt-hash answer-prompt-hash)
+
+          db-basis-t
+          (assoc :bench.run/db-basis-t (long db-basis-t))
+
+          (:input-tokens total-usage)
+          (assoc :bench.run/input-tokens (long (:input-tokens total-usage)))
+
+          (:output-tokens total-usage)
+          (assoc :bench.run/output-tokens (long (:output-tokens total-usage)))
+
+          (:cost-usd total-usage)
+          (assoc :bench.run/cost-usd (double (:cost-usd total-usage)))
+
+          ;; Per-layer means
+          (:raw-mean aggregate)
+          (assoc :bench.run/raw-mean (double (:raw-mean aggregate)))
+
+          (:import-mean aggregate)
+          (assoc :bench.run/import-mean (double (:import-mean aggregate)))
+
+          (:enrich-mean aggregate)
+          (assoc :bench.run/enrich-mean (double (:enrich-mean aggregate)))
+
+          (:full-mean aggregate)
+          (assoc :bench.run/full-mean (double (:full-mean aggregate)))
+
+          (:deterministic-count aggregate)
+          (assoc :bench.run/deterministic-count (long (:deterministic-count aggregate))
+                 :bench.run/deterministic-mean (double (:deterministic-mean aggregate)))
+
+          (:llm-judged-count aggregate)
+          (assoc :bench.run/llm-judged-count (long (:llm-judged-count aggregate))
+                 :bench.run/llm-judged-mean (double (:llm-judged-mean aggregate))))]
+
+    [run-entity
+     {:db/id "datomic.tx" :tx/op :benchmark}]))
+
+(defn transact-benchmark-results!
+  "Transact finalized benchmark results into Datomic."
+  [conn tx-data]
+  (d/transact conn {:tx-data tx-data}))
+
 ;; --- Checkpoint I/O ---
 
 (def ^:private run-id-pattern
@@ -1010,9 +1146,9 @@
       (run-pairs! rest-pairs shared concurrency))))
 
 (defn- finalize-benchmark!
-  "Aggregate results, write final checkpoint, return summary."
+  "Aggregate results, write final checkpoint, transact to Datomic, return summary."
   [{:keys [questions checkpoint cp-path run-id start-ms mode
-           error-atom stop-flag repo-path]}]
+           error-atom stop-flag repo-path conn db concurrency]}]
   (when-let [e @error-atom]
     (throw e))
   (let [stop-reason @stop-flag
@@ -1040,6 +1176,30 @@
                  " duration=" total-ms "ms"
                  (when-not (:canonical agg) " mode=non-canonical")
                  (when stop-reason (str " stopped-by=" (name stop-reason))))))
+    (when conn
+      (try
+        (let [metadata {:repo-path          repo-path
+                        :commit-sha         (get-in @checkpoint [:metadata :commit-sha])
+                        :model-config       (get-in @checkpoint [:metadata :model-config])
+                        :started-at         (get-in @checkpoint [:metadata :started-at])
+                        :mode               mode
+                        :question-set-hash  (get-in @checkpoint [:metadata :question-set-hash])
+                        :rubric-hash        (get-in @checkpoint [:metadata :rubric-hash])
+                        :answer-prompt-hash (get-in @checkpoint [:metadata :answer-prompt-hash])
+                        :db-basis-t         (when db
+                                              (try (:t (d/db-stats db))
+                                                   (catch Exception _ nil)))
+                        :concurrency        concurrency
+                        :stages             (:stages @checkpoint)}
+              tx-data (benchmark-run->tx-data
+                       {:run-id run-id :results results :aggregate agg
+                        :total-usage total-usage :checkpoint-path cp-path
+                        :stop-reason stop-reason}
+                       metadata)]
+          (transact-benchmark-results! conn tx-data)
+          (log! (str "bench/stored run-id=" run-id " to Datomic")))
+        (catch Exception e
+          (log! (str "bench/store-error " (.getMessage e))))))
     (when stop-reason
       (log! (str "Resume with: " cli/program-name " benchmark " repo-path " --resume")))
     {:results         results
@@ -1052,7 +1212,7 @@
 (defn run-benchmark!
   "Run the full benchmark with per-stage checkpointing, resume, and budget controls.
    Returns {:results [...] :aggregate {...} :total-usage {...} :run-id str :checkpoint-path str :stop-reason kw-or-nil}."
-  [db repo-path invoke-llm & {:keys [resume-checkpoint canary] :as opts}]
+  [db repo-path invoke-llm & {:keys [resume-checkpoint canary conn] :as opts}]
   (let [targets        (pick-benchmark-targets db)
         all-questions  (resolve-question-params (load-questions) targets)
         rubric-map     (load-rubric)
@@ -1114,4 +1274,5 @@
     (finalize-benchmark! {:questions questions :checkpoint checkpoint :cp-path cp-path
                           :run-id run-id :start-ms start-ms :mode mode
                           :error-atom error-atom :stop-flag stop-flag
-                          :repo-path repo-path})))
+                          :repo-path repo-path :conn conn :db db
+                          :concurrency concurrency})))

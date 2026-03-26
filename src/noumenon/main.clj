@@ -368,7 +368,8 @@
                           :mode (:mode opts)
                           :canary (:canary opts)
                           :concurrency (or (:concurrency opts) 3)
-                          :min-delay-ms (or (:min-delay opts) 0))
+                          :min-delay-ms (or (:min-delay opts) 0)
+                          :conn (:conn opts))
     {:exit 0}
     (catch Exception e
       (print-error! (.getMessage e))
@@ -440,7 +441,7 @@
       (try
         (with-existing-db
           ctx
-          (fn [{:keys [db]}]
+          (fn [{:keys [conn db]}]
             (let [checkpoint-dir "data/benchmarks/runs"
                   provider       (or provider llm/default-provider)
                   provider-kw    (llm/provider->kw provider)
@@ -462,7 +463,8 @@
                                                     deterministic-only (assoc :deterministic-only true))
                                   :canary         canary
                                   :concurrency    concurrency
-                                  :min-delay      min-delay}]
+                                  :min-delay      min-delay
+                                  :conn           conn}]
               (if resume
                 (do-benchmark-resume checkpoint-dir resume db (:repo-path opts) answer-llm run-opts)
                 (run-benchmark-impl! db (:repo-path opts) answer-llm run-opts)))))
