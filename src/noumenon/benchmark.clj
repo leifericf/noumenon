@@ -1145,10 +1145,123 @@
     (when-not @stop-flag
       (run-pairs! rest-pairs shared concurrency))))
 
+;; --- Report generation ---
+
+(def ^:private score-symbol
+  {:correct "pass" :partial "partial" :wrong "fail"})
+
+(defn- format-pct [v] (format "%.1f%%" (* 100.0 (double v))))
+
+(defn- format-delta [a b]
+  (let [d (- (double b) (double a))]
+    (str (if (pos? d) "+" "") (format "%.1f" (* 100.0 d)) "pp")))
+
+(defn generate-report
+  "Generate a Markdown benchmark report. Pure function: data in, string out."
+  [{:keys [results aggregate total-usage run-id checkpoint-path stop-reason]}
+   {:keys [repo-path commit-sha model-config started-at mode
+           question-set-hash rubric-hash answer-prompt-hash db-basis-t
+           resolved-model layers]}]
+  (let [layers (or layers (resolve-layers (or mode {})))
+        date   (when started-at
+                 (.format (java.text.SimpleDateFormat. "yyyy-MM-dd HH:mm:ss") started-at))
+        model  (or resolved-model (:model model-config) "unknown")
+        provider (or (:provider model-config) "unknown")
+        status (cond (nil? stop-reason) "Completed"
+                     (= :error stop-reason) "Error"
+                     :else (str "Stopped (" (name stop-reason) ")"))
+        raw-base (when (some #{:raw} layers)
+                   (:raw-mean aggregate))
+        sb     (StringBuilder.)]
+    (doto sb
+      (.append "# Noumenon Benchmark Report\n\n")
+      (.append (str "**Date:** " (or date "unknown") "\n"))
+      (.append (str "**Repository:** " repo-path "\n"))
+      (.append (str "**Commit:** `" (or commit-sha "unknown") "`\n"))
+      (.append (str "**Model:** " model " (via " provider ")\n"))
+      (.append (str "**Layers:** " (str/join ", " (map name layers)) "\n"))
+      (.append (str "**Mode:** " (pr-str mode) "\n"))
+      (.append (str "**Status:** " status "\n"))
+      (.append "\n## Summary\n\n")
+      (.append "| Condition | Mean Score | Delta vs Raw |\n")
+      (.append "|-----------|-----------|-------------|\n"))
+    (doseq [layer layers]
+      (let [mean-key (keyword (str (name layer) "-mean"))
+            mean-val (get aggregate mean-key)]
+        (when mean-val
+          (.append sb (str "| " (name layer)
+                           " | " (format-pct mean-val)
+                           " | " (if (and raw-base (not= layer :raw))
+                                   (format-delta raw-base mean-val)
+                                   "—")
+                           " |\n")))))
+    (.append sb "\n## Results by Scoring Method\n\n")
+    (.append sb "| Method | Mean Score | Count |\n")
+    (.append sb "|--------|-----------|-------|\n")
+    (.append sb (str "| Deterministic | "
+                     (format-pct (:deterministic-mean aggregate))
+                     " | " (:deterministic-count aggregate) " |\n"))
+    (.append sb (str "| LLM-judged | "
+                     (format-pct (:llm-judged-mean aggregate))
+                     " | " (:llm-judged-count aggregate) " |\n"))
+    (.append sb "\n## Per-Question Results\n\n")
+    (.append sb (str "| # | Category | Scoring | "
+                     (str/join " | " (map name layers)) " |\n"))
+    (.append sb (str "|---|----------|---------|"
+                     (str/join "|" (repeat (count layers) "------")) "|\n"))
+    (doseq [r (sort-by :id results)]
+      (.append sb (str "| " (name (:id r))
+                       " | " (name (or (:category r) :unknown))
+                       " | " (name (or (:scoring r) :llm))
+                       " | "
+                       (str/join " | "
+                                 (map (fn [layer]
+                                        (let [score (get r (keyword (str (name layer) "-score")))]
+                                          (get score-symbol score "—")))
+                                      layers))
+                       " |\n")))
+    (.append sb "\n## Usage\n\n")
+    (.append sb "| Metric | Value |\n")
+    (.append sb "|--------|-------|\n")
+    (.append sb (str "| Input tokens | " (or (:input-tokens total-usage) 0) " |\n"))
+    (.append sb (str "| Output tokens | " (or (:output-tokens total-usage) 0) " |\n"))
+    (.append sb (str "| Estimated cost | $"
+                     (format "%.4f" (double (or (:cost-usd total-usage) 0.0))) " |\n"))
+    (.append sb "\n## Validity\n\n")
+    (.append sb "| Check | Value |\n")
+    (.append sb "|-------|-------|\n")
+    (.append sb (str "| Status | " status " |\n"))
+    (.append sb (str "| Questions scored | " (:question-count aggregate) " |\n"))
+    (.append sb (str "| Canonical | " (if (:canonical aggregate) "Yes" "No") " |\n"))
+    (.append sb "\n## Reproducibility\n\n")
+    (.append sb "| Artifact | Value |\n")
+    (.append sb "|----------|-------|\n")
+    (.append sb (str "| Run ID | `" run-id "` |\n"))
+    (.append sb (str "| Git SHA | `" (or commit-sha "unknown") "` |\n"))
+    (when db-basis-t
+      (.append sb (str "| DB basis-t | " db-basis-t " |\n")))
+    (when question-set-hash
+      (.append sb (str "| Question set hash | `" question-set-hash "` |\n")))
+    (when rubric-hash
+      (.append sb (str "| Rubric hash | `" rubric-hash "` |\n")))
+    (when answer-prompt-hash
+      (.append sb (str "| Prompt hash | `" answer-prompt-hash "` |\n")))
+    (.append sb (str "| Checkpoint | `" checkpoint-path "` |\n"))
+    (.toString sb)))
+
+(defn write-report!
+  "Write a Markdown report to data/benchmarks/reports/<run-id>.md."
+  [run-id report-str]
+  (let [dir  (io/file "data/benchmarks/reports")
+        file (io/file dir (str run-id ".md"))]
+    (.mkdirs dir)
+    (spit file report-str)
+    (str file)))
+
 (defn- finalize-benchmark!
   "Aggregate results, write final checkpoint, transact to Datomic, return summary."
   [{:keys [questions checkpoint cp-path run-id start-ms mode
-           error-atom stop-flag repo-path conn db concurrency]}]
+           error-atom stop-flag repo-path conn db concurrency report?]}]
   (when-let [e @error-atom]
     (throw e))
   (let [stop-reason @stop-flag
@@ -1200,19 +1313,44 @@
           (log! (str "bench/stored run-id=" run-id " to Datomic")))
         (catch Exception e
           (log! (str "bench/store-error " (.getMessage e))))))
-    (when stop-reason
-      (log! (str "Resume with: " cli/program-name " benchmark " repo-path " --resume")))
-    {:results         results
-     :aggregate       agg
-     :total-usage     total-usage
-     :run-id          run-id
-     :checkpoint-path cp-path
-     :stop-reason     stop-reason}))
+    (let [report-path
+          (when report?
+            (try
+              (let [metadata {:repo-path          repo-path
+                              :commit-sha         (get-in @checkpoint [:metadata :commit-sha])
+                              :model-config       (get-in @checkpoint [:metadata :model-config])
+                              :started-at         (get-in @checkpoint [:metadata :started-at])
+                              :mode               mode
+                              :question-set-hash  (get-in @checkpoint [:metadata :question-set-hash])
+                              :rubric-hash        (get-in @checkpoint [:metadata :rubric-hash])
+                              :answer-prompt-hash (get-in @checkpoint [:metadata :answer-prompt-hash])
+                              :resolved-model     (first-resolved-model (:stages @checkpoint))
+                              :layers             (resolve-layers (or mode {}))}
+                    report-str (generate-report
+                                {:run-id run-id :results results :aggregate agg
+                                 :total-usage total-usage :checkpoint-path cp-path
+                                 :stop-reason stop-reason}
+                                metadata)
+                    path (write-report! run-id report-str)]
+                (log! (str "bench/report " path))
+                path)
+              (catch Exception e
+                (log! (str "bench/report-error " (.getMessage e)))
+                nil)))]
+      (when stop-reason
+        (log! (str "Resume with: " cli/program-name " benchmark " repo-path " --resume")))
+      {:results         results
+       :aggregate       agg
+       :total-usage     total-usage
+       :run-id          run-id
+       :checkpoint-path cp-path
+       :report-path     report-path
+       :stop-reason     stop-reason})))
 
 (defn run-benchmark!
   "Run the full benchmark with per-stage checkpointing, resume, and budget controls.
    Returns {:results [...] :aggregate {...} :total-usage {...} :run-id str :checkpoint-path str :stop-reason kw-or-nil}."
-  [db repo-path invoke-llm & {:keys [resume-checkpoint canary conn] :as opts}]
+  [db repo-path invoke-llm & {:keys [resume-checkpoint canary conn report?] :as opts}]
   (let [targets        (pick-benchmark-targets db)
         all-questions  (resolve-question-params (load-questions) targets)
         rubric-map     (load-rubric)
@@ -1275,4 +1413,4 @@
                           :run-id run-id :start-ms start-ms :mode mode
                           :error-atom error-atom :stop-flag stop-flag
                           :repo-path repo-path :conn conn :db db
-                          :concurrency concurrency})))
+                          :concurrency concurrency :report? report?})))

@@ -369,7 +369,8 @@
                           :canary (:canary opts)
                           :concurrency (or (:concurrency opts) 3)
                           :min-delay-ms (or (:min-delay opts) 0)
-                          :conn (:conn opts))
+                          :conn (:conn opts)
+                          :report? (:report? opts))
     {:exit 0}
     (catch Exception e
       (print-error! (.getMessage e))
@@ -464,7 +465,8 @@
                                   :canary         canary
                                   :concurrency    concurrency
                                   :min-delay      min-delay
-                                  :conn           conn}]
+                                  :conn           conn
+                                  :report?        report}]
               (if resume
                 (do-benchmark-resume checkpoint-dir resume db (:repo-path opts) answer-llm run-opts)
                 (run-benchmark-impl! db (:repo-path opts) answer-llm run-opts)))))
