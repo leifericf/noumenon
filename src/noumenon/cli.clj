@@ -211,7 +211,7 @@
    "postprocess"  {:spec simple-command-spec
                    :summary "Extract cross-file import graph deterministically"
                    :usage "postprocess [options] <repo-path>"
-                   :epilog "Parses source code imports and resolves them to repo files.\nFull support: Clojure. Import extraction: Python, JS/TS, C/C++, Go, Rust, Java.\nOther languages are skipped. External tools (python3, node, etc.) required on PATH."}
+                   :epilog "Parses source code imports and resolves them to repo files.\nFull support: Clojure. Import extraction: Elixir, Python, JS/TS, C/C++, Go, Rust, Java, Erlang.\nOther languages are skipped. External tools (elixir, python3, node, etc.) required on PATH."}
    "query"     {:spec query-command-spec
                 :summary "Run a named Datalog query against the knowledge graph"
                 :usage "query [options] <query-name> <repo-path>"}

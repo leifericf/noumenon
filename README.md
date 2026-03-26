@@ -274,12 +274,14 @@ Import + LLM analysis works with any language. `postprocess` adds deterministic 
 | Tier | Languages | Method | External tool |
 |---|---|---|---|
 | Full | Clojure | `tools.namespace` parsing + test mapping | none |
+| Import extraction | Elixir | AST parser via `Code.string_to_quoted` | `elixir` |
 | Import extraction | Python | `ast` parser | `python3` |
 | Import extraction | JavaScript / TypeScript | Regex-based import extraction via Node runtime | `node` |
 | Import extraction | C / C++ | compiler dependency output | `clang` or `gcc` |
 | Import extraction | Go | toolchain metadata | `go` |
 | Import extraction | Rust | `mod` detection | none (regex) |
 | Import extraction | Java | `import` detection | none (regex) |
+| Import extraction | Erlang | `-include` / `-include_lib` detection | none (regex) |
 | Analysis only | many others | LLM-only semantics | n/a |
 
 ## MCP Server

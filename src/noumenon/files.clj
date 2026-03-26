@@ -44,6 +44,8 @@
    "lua"    :lua
    "ex"     :elixir
    "exs"    :elixir
+   "erl"    :erlang
+   "hrl"    :erlang
    "hs"     :haskell
    "ml"     :ocaml
    "r"      :r

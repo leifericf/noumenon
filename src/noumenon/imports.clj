@@ -46,6 +46,7 @@
   {:python     {:tool "python3" :available? (tool-available? "python3")}
    :javascript {:tool "node"    :available? (tool-available? "node")}
    :typescript {:tool "node"    :available? (tool-available? "node")}
+   :elixir     {:tool "elixir"  :available? (tool-available? "elixir")}
    :c          {:tool "clang"   :available? (or (tool-available? "clang")
                                                 (tool-available? "gcc"))}
    :cpp        {:tool "clang"   :available? (or (tool-available? "clang")
@@ -211,6 +212,79 @@ console.log(JSON.stringify(imports))")
       (catch Exception _ nil))))
 
 ;; ---------------------------------------------------------------------------
+;; Elixir — AST parser via Code.string_to_quoted + Macro.prewalk
+;; ---------------------------------------------------------------------------
+
+(def ^:private elixir-extract-script
+  "code = IO.read(:stdio, :eof)
+case Code.string_to_quoted(code) do
+  {:ok, ast} ->
+    {_, deps} = Macro.prewalk(ast, [], fn
+      {d, _, [{:__aliases__, _, parts} | _]} = n, acc
+        when d in [:alias, :import, :use, :require] ->
+        {n, [Enum.map_join(parts, \".\", &to_string/1) | acc]}
+      {d, _, [{{:., _, [{:__aliases__, _, pfx}, :{}]}, _, sfxs}]} = n, acc
+        when d in [:alias, :import, :use, :require] ->
+        p = Enum.map_join(pfx, \".\", &to_string/1)
+        ms = for {:__aliases__, _, pts} <- sfxs do
+          p <> \".\" <> Enum.map_join(pts, \".\", &to_string/1)
+        end
+        {n, ms ++ acc}
+      n, acc -> {n, acc}
+    end)
+    deps |> Enum.uniq() |> Enum.sort() |> Enum.join(\"\\n\") |> IO.puts()
+  _ -> :ok
+end")
+
+(defmethod extract-imports :elixir [_ text]
+  (try
+    (let [{:keys [exit out]} (shell/sh "elixir" "-e" elixir-extract-script
+                                       :in text)]
+      (when (zero? exit)
+        (->> (str/split-lines out)
+             (remove str/blank?)
+             vec)))
+    (catch Exception _ [])))
+
+(defn- pascal->snake
+  "Convert PascalCase to snake_case: MyApp -> my_app, HTTPClient -> http_client."
+  [s]
+  (-> s
+      (str/replace #"([A-Z]+)([A-Z][a-z])" "$1_$2")
+      (str/replace #"([a-z0-9])([A-Z])" "$1_$2")
+      str/lower-case))
+
+(defn- elixir-module->paths
+  "Convert an Elixir module name to candidate file paths.
+   MyApp.Accounts -> [\"lib/my_app/accounts.ex\" ...]"
+  [module-name]
+  (let [base (->> (str/split module-name #"\.")
+                  (map pascal->snake)
+                  (str/join "/"))]
+    [(str "lib/" base ".ex")
+     (str "test/" base ".exs")
+     (str base ".ex")
+     (str base ".exs")]))
+
+(defmethod resolve-import :elixir [_ import-name _source-path all-paths]
+  (first (filter all-paths (elixir-module->paths import-name))))
+
+;; ---------------------------------------------------------------------------
+;; Erlang — include directives
+;; ---------------------------------------------------------------------------
+
+(defmethod extract-imports :erlang [_ text]
+  (->> (re-seq #"(?m)^-(?:include|include_lib)\([\"']([^)\"']+)[\"']\)" text)
+       (mapv second)))
+
+(defn- resolve-erlang-import [import-name all-paths]
+  (first (filter all-paths [import-name
+                            (str "src/" import-name)])))
+
+(defmethod resolve-import :erlang [_ import-name _source-path all-paths]
+  (resolve-erlang-import import-name all-paths))
+
+;; ---------------------------------------------------------------------------
 ;; Go — go list -json
 ;; ---------------------------------------------------------------------------
 
@@ -339,7 +413,7 @@ console.log(JSON.stringify(imports))")
         c-langs   #{:c :cpp}
         c-files   (filter (comp c-langs :file/lang) all-files)
         std-files (remove (comp c-langs :file/lang) all-files)
-        needs-tool #{:python :javascript :typescript :go}
+        needs-tool #{:python :javascript :typescript :elixir :go}
         std-files  (remove (fn [{:keys [file/lang]}]
                              (and (needs-tool lang)
                                   (not (get-in tools [lang :available?]))))

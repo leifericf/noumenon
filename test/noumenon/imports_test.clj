@@ -147,6 +147,60 @@
     (testing "returns nil for stdlib"
       (is (nil? (imports/resolve-import :java "java.util.List" "Main.java" paths))))))
 
+;; --- Elixir extraction ---
+
+(deftest extract-imports-elixir-test
+  (testing "extracts alias/import/use/require"
+    (let [src "defmodule MyApp.Accounts do\n  alias MyApp.Repo\n  import Ecto.Query\n  use GenServer\n  require Logger\nend"
+          result (imports/extract-imports :elixir src)]
+      (when (seq result)  ; skip if elixir not available
+        (is (some #{"MyApp.Repo"} result))
+        (is (some #{"Ecto.Query"} result))
+        (is (some #{"GenServer"} result))
+        (is (some #{"Logger"} result)))))
+
+  (testing "extracts multi-alias"
+    (let [src "alias MyApp.{Accounts, Repo}"
+          result (imports/extract-imports :elixir src)]
+      (when (seq result)
+        (is (some #{"MyApp.Accounts"} result))
+        (is (some #{"MyApp.Repo"} result)))))
+
+  (testing "returns empty for empty string"
+    (is (empty? (imports/extract-imports :elixir "")))))
+
+;; --- Elixir resolution ---
+
+(deftest resolve-import-elixir-test
+  (let [paths #{"lib/my_app/accounts.ex" "lib/my_app/repo.ex" "lib/my_app.ex"}]
+    (testing "resolves module to lib path"
+      (is (= "lib/my_app/repo.ex"
+             (imports/resolve-import :elixir "MyApp.Repo" "lib/my_app/accounts.ex" paths))))
+    (testing "returns nil for external dep"
+      (is (nil? (imports/resolve-import :elixir "Ecto.Query" "lib/my_app/accounts.ex" paths))))))
+
+;; --- Erlang extraction ---
+
+(deftest extract-imports-erlang-test
+  (testing "extracts include directives"
+    (let [src "-module(my_server).\n-include(\"my_header.hrl\").\n-include_lib(\"kernel/include/file.hrl\")."
+          result (imports/extract-imports :erlang src)]
+      (is (some #{"my_header.hrl"} result))
+      (is (some #{"kernel/include/file.hrl"} result))))
+
+  (testing "returns empty for no includes"
+    (is (empty? (imports/extract-imports :erlang "-module(foo).\n-export([start/0]).")))))
+
+;; --- Erlang resolution ---
+
+(deftest resolve-import-erlang-test
+  (let [paths #{"include/my_header.hrl" "src/my_server.erl"}]
+    (testing "resolves include to path"
+      (is (= "include/my_header.hrl"
+             (imports/resolve-import :erlang "include/my_header.hrl" "src/my_server.erl" paths))))
+    (testing "returns nil for external include"
+      (is (nil? (imports/resolve-import :erlang "kernel/include/file.hrl" "src/my_server.erl" paths))))))
+
 ;; --- Default method ---
 
 (deftest extract-imports-default-test
@@ -211,3 +265,28 @@
                                          "com/example/Main.java" paths)]
     (testing "Main imports Foo, skips stdlib"
       (is (= ["com/example/Foo.java"] result)))))
+
+(deftest postprocess-fixture-elixir-test
+  (let [paths #{"lib/my_app.ex" "lib/my_app/accounts.ex" "lib/my_app/repo.ex"}
+        read-fixture (fn [path] (slurp (str "test-fixtures/elixir/" path)))
+        result-app   (imports/postprocess-file :elixir (read-fixture "lib/my_app.ex")
+                                               "lib/my_app.ex" paths)
+        result-accts (imports/postprocess-file :elixir (read-fixture "lib/my_app/accounts.ex")
+                                               "lib/my_app/accounts.ex" paths)
+        result-repo  (imports/postprocess-file :elixir (read-fixture "lib/my_app/repo.ex")
+                                               "lib/my_app/repo.ex" paths)]
+    (when (seq (imports/extract-imports :elixir "alias Foo"))  ; skip if elixir unavailable
+      (testing "app imports accounts and repo via multi-alias"
+        (is (= #{"lib/my_app/accounts.ex" "lib/my_app/repo.ex"} (set result-app))))
+      (testing "accounts imports repo"
+        (is (some #{"lib/my_app/repo.ex"} result-accts)))
+      (testing "repo has no internal imports"
+        (is (empty? result-repo))))))
+
+(deftest postprocess-fixture-erlang-test
+  (let [paths #{"src/my_server.erl" "include/my_header.hrl"}
+        read-fixture (fn [path] (slurp (str "test-fixtures/erlang/" path)))
+        result (imports/postprocess-file :erlang (read-fixture "src/my_server.erl")
+                                         "src/my_server.erl" paths)]
+    (testing "my_server includes my_header"
+      (is (= ["include/my_header.hrl"] result)))))
