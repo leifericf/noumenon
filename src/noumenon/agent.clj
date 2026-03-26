@@ -25,6 +25,18 @@
     'alter-var-root 'slurp 'spit 'sh 'clojure.java.shell/sh
     'binding 'Thread 'System 'Runtime 'ProcessBuilder})
 
+(def ^:private banned-names
+  "String names of banned symbols, for matching keywords and strings too."
+  (into #{} (map str) banned-symbols))
+
+(defn- banned-form?
+  "True if x is a symbol, keyword, or string matching a banned name."
+  [x]
+  (cond
+    (symbol? x)  (banned-symbols x)
+    (keyword? x) (banned-names (name x))
+    (string? x)  (banned-names x)))
+
 (defn- java-class-reference?
   "True if sym looks like a Java class (contains a dot but is not on the allowlist)."
   [sym]
@@ -51,9 +63,9 @@
    Returns nil if safe, or an error string if unsafe."
   [query-form]
   (or (->> (tree-seq coll? seq query-form)
-           (filter symbol?)
-           (some #(when (or (banned-symbols %) (java-class-reference? %))
-                    (str "Blocked symbol in query: " %))))
+           (some #(cond
+                    (banned-form? %)        (str "Blocked symbol in query: " %)
+                    (java-class-reference? %) (str "Blocked symbol in query: " %))))
       (->> (extract-predicate-syms query-form)
            (some #(when-not (allowed-predicates %)
                     (str "Predicate not on allowlist: " %))))))
@@ -107,6 +119,7 @@
 ;; --- Tool dispatch ---
 
 (def ^:private default-row-limit 100)
+(def ^:private max-row-limit 1000)
 
 (defn- dispatch-query
   "Execute a Datalog query against db. Returns result text with optional truncation note."
@@ -115,18 +128,17 @@
     (if-let [err (validate-query q)]
       (str "Query rejected: " err)
       (try
-        (let [limit  (or (:limit parsed-args) default-row-limit)
+        (let [limit  (min (or (:limit parsed-args) default-row-limit) max-row-limit)
               rules  (query/load-rules)
-              ;; Try with rules first; if the query doesn't use :in, it won't need them
               result (try
                        (d/q q db rules)
                        (catch Exception _
                          (d/q q db)))
-              total  (count result)
-              capped (take limit result)]
+              taken  (vec (take (inc limit) result))
+              capped (take limit taken)]
           (str (pr-str (vec capped))
-               (when (> total limit)
-                 (str "\n;; Showing " limit " of " total " results. Refine your query or specify :limit."))))
+               (when (> (count taken) limit)
+                 (str "\n;; Showing " limit " of " limit "+ results. Refine your query or specify :limit."))))
         (catch Exception e
           (str "Query error: " (.getMessage e)))))))
 

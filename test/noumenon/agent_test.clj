@@ -149,6 +149,12 @@
   (is (re-find #"not on allowlist"
                (agent/validate-query '[:find ?e :where [?e :file/path ?p] [(my-custom-fn ?p)]]))))
 
+(deftest validate-query-rejects-banned-keywords
+  (is (re-find #"Blocked symbol" (agent/validate-query '[:find ?e :where [?e :file/path :eval]]))))
+
+(deftest validate-query-rejects-banned-strings
+  (is (re-find #"Blocked symbol" (agent/validate-query '[:find ?e :where [?e :file/path "eval"]]))))
+
 (deftest validate-query-rejects-binding
   (is (re-find #"Blocked symbol"
                (agent/validate-query '[:find ?e :where [?e :file/path ?p] [(binding [*out* nil] ?p)]]))))
@@ -166,7 +172,16 @@
                                         :args {:query '[:find ?p :where [?e :file/path ?p]]
                                                :limit 2}})]
     (is (:result result))
-    (is (re-find #"Showing 2 of 3" (:result result)))))
+    (is (re-find #"Showing 2 of 2\+" (:result result)))))
+
+(deftest dispatch-query-clamps-limit-to-max
+  (let [db     (make-test-db)
+        result (agent/dispatch-tool db {:tool :query
+                                        :args {:query '[:find ?p :where [?e :file/path ?p]]
+                                               :limit 999999}})]
+    (is (:result result))
+    ;; All 3 files returned — limit clamped to 1000 which is > 3
+    (is (not (re-find #"Showing" (:result result))))))
 
 ;; --- Tier 0: message alternation ---
 
