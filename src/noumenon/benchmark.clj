@@ -342,18 +342,6 @@
 
 ;; --- Checkpoint I/O ---
 
-(def ^:private run-id-pattern
-  "Valid run-id format: <timestamp-ms>-<uuid>."
-  #"^\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-
-(defn validate-run-id
-  "Validate run-id format to prevent path traversal. Throws on invalid input."
-  [run-id]
-  (when-not (and (string? run-id) (re-matches run-id-pattern run-id))
-    (throw (ex-info "Invalid run-id format — expected <timestamp>-<uuid>"
-                    {:run-id run-id})))
-  run-id)
-
 (defn generate-run-id
   "Generate a run ID: <timestamp-ms>-<uuid>."
   []
@@ -485,9 +473,8 @@
         (if (= "latest" resume-arg)
           (when (seq edn-files)
             (str (first edn-files)))
-          (do (validate-run-id resume-arg)
-              (let [target (str resume-arg ".edn")]
-                (some #(when (= (.getName %) target) (str %)) edn-files))))))))
+          (let [target (str resume-arg ".edn")]
+            (some #(when (= (.getName %) target) (str %)) edn-files)))))))
 
 ;; --- Budget ---
 

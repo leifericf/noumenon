@@ -201,9 +201,8 @@
 (def ^:private jsonl-lock (Object.))
 
 (defn- result-jsonl-path
-  "Path for per-question JSONL results. Validates run-id to prevent path traversal."
+  "Path for per-question JSONL results."
   [run-id]
-  (bench/validate-run-id run-id)
   (str "data/longbench/results/" run-id ".jsonl"))
 
 (defn- write-result-line!

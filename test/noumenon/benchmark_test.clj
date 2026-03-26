@@ -127,20 +127,6 @@
   (let [ids (repeatedly 100 bench/generate-run-id)]
     (is (= (count ids) (count (set ids))))))
 
-(deftest validate-run-id-accepts-valid
-  (let [id (bench/generate-run-id)]
-    (is (= id (bench/validate-run-id id)))))
-
-(deftest validate-run-id-rejects-path-traversal
-  (is (thrown? clojure.lang.ExceptionInfo
-               (bench/validate-run-id "../../../etc/passwd")))
-  (is (thrown? clojure.lang.ExceptionInfo
-               (bench/validate-run-id "foo/bar")))
-  (is (thrown? clojure.lang.ExceptionInfo
-               (bench/validate-run-id nil)))
-  (is (thrown? clojure.lang.ExceptionInfo
-               (bench/validate-run-id ""))))
-
 (deftest question-set-hash-stable
   (let [qs   (bench/load-questions)
         h1   (bench/question-set-hash qs)
@@ -391,55 +377,36 @@
     (is (= #{:repo-path :commit-sha} (set (map :field (:mismatches result)))))))
 
 (deftest find-checkpoint-latest
-  (let [dir  (io/file (System/getProperty "java.io.tmpdir")
-                      (str "bench-find-" (System/currentTimeMillis)))
-        id-a "1000-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        id-b "2000-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
+  (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                     (str "bench-find-" (System/currentTimeMillis)))]
     (try
       (.mkdirs dir)
-      (spit (io/file dir (str id-a ".edn")) "{}")
-      (spit (io/file dir (str id-b ".edn")) "{}")
-      (is (str/ends-with? (bench/find-checkpoint (str dir) "latest")
-                          (str id-b ".edn")))
+      (spit (io/file dir "1000-aaaa.edn") "{}")
+      (spit (io/file dir "2000-bbbb.edn") "{}")
+      (is (str/ends-with? (bench/find-checkpoint (str dir) "latest") "2000-bbbb.edn"))
       (finally
         (doseq [f (reverse (file-seq dir))]
           (.delete f))))))
 
 (deftest find-checkpoint-specific-run-id
-  (let [dir  (io/file (System/getProperty "java.io.tmpdir")
-                      (str "bench-find2-" (System/currentTimeMillis)))
-        id-a "1000-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        id-b "2000-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
+  (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                     (str "bench-find2-" (System/currentTimeMillis)))]
     (try
       (.mkdirs dir)
-      (spit (io/file dir (str id-a ".edn")) "{}")
-      (spit (io/file dir (str id-b ".edn")) "{}")
-      (is (str/ends-with? (bench/find-checkpoint (str dir) id-a)
-                          (str id-a ".edn")))
+      (spit (io/file dir "1000-aaaa.edn") "{}")
+      (spit (io/file dir "2000-bbbb.edn") "{}")
+      (is (str/ends-with? (bench/find-checkpoint (str dir) "1000-aaaa") "1000-aaaa.edn"))
       (finally
         (doseq [f (reverse (file-seq dir))]
           (.delete f))))))
 
 (deftest find-checkpoint-not-found
-  (let [dir    (io/file (System/getProperty "java.io.tmpdir")
-                        (str "bench-find3-" (System/currentTimeMillis)))
-        id-any "9999-cccccccc-cccc-cccc-cccc-cccccccccccc"]
+  (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                     (str "bench-find3-" (System/currentTimeMillis)))]
     (try
       (.mkdirs dir)
       (is (nil? (bench/find-checkpoint (str dir) "latest")))
-      (is (nil? (bench/find-checkpoint (str dir) id-any)))
-      (finally
-        (.delete dir)))))
-
-(deftest find-checkpoint-rejects-invalid-run-id
-  (let [dir (io/file (System/getProperty "java.io.tmpdir")
-                     (str "bench-find4-" (System/currentTimeMillis)))]
-    (try
-      (.mkdirs dir)
-      (is (thrown? clojure.lang.ExceptionInfo
-                   (bench/find-checkpoint (str dir) "../../../etc/passwd")))
-      (is (thrown? clojure.lang.ExceptionInfo
-                   (bench/find-checkpoint (str dir) "nonexistent")))
+      (is (nil? (bench/find-checkpoint (str dir) "nonexistent")))
       (finally
         (.delete dir)))))
 

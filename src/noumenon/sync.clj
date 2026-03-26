@@ -48,21 +48,14 @@
         (->> (str/split-lines out)
              (remove str/blank?)
              (reduce (fn [acc line]
-                       (let [fields (str/split line #"\t")
-                             status (first fields)]
-                         (if (and status (>= (count fields) 2))
-                           (if (= \R (first status))
-                             (let [old-path (nth fields 1)
-                                   new-path (nth fields 2 nil)]
-                               (cond-> (update acc :deleted conj old-path)
-                                 new-path (update :added conj new-path)))
-                             (let [path (nth fields 1)
-                                   k    (case (first status)
-                                          \A :added
-                                          \D :deleted
-                                          (\M \T) :modified
-                                          nil)]
-                               (if k (update acc k conj path) acc)))
+                       (let [[status path] (str/split line #"\t" 2)
+                             k (case (first status)
+                                 \A :added
+                                 \D :deleted
+                                 (\M \R \T) :modified
+                                 nil)]
+                         (if (and k path)
+                           (update acc k conj path)
                            acc)))
                      {:added [] :modified [] :deleted []}))))))
 
@@ -102,40 +95,38 @@
 
 (defn retract-stale!
   "Retract mutable attributes and code segments for modified/deleted files.
-   Returns count of files actually retracted."
+   Returns count of files retracted."
   [conn paths]
   (when (seq paths)
-    (let [db      (d/db conn)
-          results (->> paths
-                       (keep (fn [path]
-                               (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
-                                                             :where [?e :file/path ?p]]
-                                                           db path))]
-                                 (concat (retract-file-attrs db eid)
-                                         (retract-code-segments db eid)))))
-                       vec)
-          tx-data (into [] cat results)]
+    (let [db (d/db conn)
+          tx-data (->> paths
+                       (mapcat (fn [path]
+                                 (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
+                                                               :where [?e :file/path ?p]]
+                                                             db path))]
+                                   (concat (retract-file-attrs db eid)
+                                           (retract-code-segments db eid)))))
+                       vec)]
       (when (seq tx-data)
         (d/transact conn {:tx-data tx-data}))
-      (count results))))
+      (count paths))))
 
 (defn- retract-deleted-files!
-  "Retract entire file entities for deleted files. Returns count actually retracted."
+  "Retract entire file entities for deleted files. Returns count."
   [conn paths]
   (when (seq paths)
-    (let [db      (d/db conn)
-          results (->> paths
-                       (keep (fn [path]
-                               (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
-                                                             :where [?e :file/path ?p]]
-                                                           db path))]
-                                 (concat (retract-code-segments db eid)
-                                         [[:db/retractEntity eid]]))))
-                       vec)
-          tx-data (into [] cat results)]
+    (let [db (d/db conn)
+          tx-data (->> paths
+                       (mapcat (fn [path]
+                                 (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
+                                                               :where [?e :file/path ?p]]
+                                                             db path))]
+                                   (concat (retract-code-segments db eid)
+                                           [[:db/retractEntity eid]]))))
+                       vec)]
       (when (seq tx-data)
         (d/transact conn {:tx-data tx-data}))
-      (count results))))
+      (count paths))))
 
 (defn- update-head-sha!
   "Store the current HEAD SHA on the repo entity."

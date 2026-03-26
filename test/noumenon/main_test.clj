@@ -166,11 +166,9 @@
             (str/includes? stderr "No database found")))))
 
 (deftest benchmark-resume-specific-run-id
-  (let [fake-id "1234-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        {:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude" "--resume" fake-id "."])]
+  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude" "--resume" "1234-abcd" "."])]
     (is (= 1 exit))
-    (is (or (str/includes? stderr (str "Checkpoint not found: " fake-id))
-            (str/includes? stderr "No database found")))))
+    (is (str/includes? stderr "Checkpoint not found: 1234-abcd"))))
 
 (deftest benchmark-invalid-max-questions
   (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--max-questions" "abc" "."])]
