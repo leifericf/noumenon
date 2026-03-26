@@ -82,15 +82,9 @@
             (throw (ex-info (str "Download failed: HTTP " status
                                  ". Manual download: " dataset-url)
                             {:status status :url dataset-url})))
-          (let [content-len (-> response .headers (.firstValue "content-length")
-                                (.orElse nil))]
-            (log! (str "longbench/downloading url=" dataset-url
-                       (when content-len (str " size=" content-len " bytes")))))
           (with-open [in (.body response)
                       out (io/output-stream tmp)]
             (io/copy in out :buffer-size 65536))
-          (log! (str "longbench/download-saved path=" (.getPath tmp)
-                     " bytes=" (.length tmp)))
           (Files/move (.toPath tmp) (.toPath f)
                       (into-array java.nio.file.CopyOption
                                   [StandardCopyOption/REPLACE_EXISTING]))

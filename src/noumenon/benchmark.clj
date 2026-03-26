@@ -636,7 +636,7 @@
         cost-ans (llm/estimate-cost model est-in est-out)
         cost-jdg (llm/estimate-cost (or judge-model model) est-in est-out)
         total    (+ cost-ans cost-jdg)]
-    (log! (str "  *** COST WARNING: Benchmarks are expensive. "
+    (log! (str "  ⚠ COST WARNING: Benchmarks are expensive. "
                total-stages " stages × ~"
                (:input avg-tokens-per-stage) " input + ~"
                (:output avg-tokens-per-stage) " output tokens/stage"))

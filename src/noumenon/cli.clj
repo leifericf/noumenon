@@ -179,11 +179,7 @@
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
 (def ^:private query-command-spec
-  {:flags [db-dir-flag
-           {:flag "--param" :key :params :parse :kv-pair
-            :desc "Supply query input as key=value (repeatable)"
-            :error-missing :missing-param-value
-            :error-invalid :invalid-param-value}]
+  {:flags [db-dir-flag]
    :initial {:subcommand "query"}
    :positionals {:required 2 :error :query-missing-args :keys [:query-name :repo-path]}})
 
@@ -416,19 +412,6 @@
                 (if (or (nil? next-arg) (str/starts-with? next-arg "-"))
                   (recur more (assoc opts (:key spec) "latest") positional)
                   (recur (rest more) (assoc opts (:key spec) next-arg) positional)))
-
-              :kv-pair
-              (let [raw (first more)]
-                (if-not raw
-                  {:error (:error-missing spec)}
-                  (let [eq-idx (str/index-of raw "=")]
-                    (if (or (nil? eq-idx) (zero? eq-idx))
-                      {:error (:error-invalid spec) :value raw}
-                      (let [k (subs raw 0 eq-idx)
-                            v (subs raw (inc eq-idx))]
-                        (recur (rest more)
-                               (update opts (:key spec) assoc k v)
-                               positional))))))
 
               (let [raw (first more)]
                 (if-not raw

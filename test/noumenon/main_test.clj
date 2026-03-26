@@ -435,25 +435,6 @@
     (is (= 1 exit))
     (is (str/includes? stderr "Path does not exist"))))
 
-;; --- Tier 0: Query --param flag ---
-
-(deftest query-param-flag-parsed
-  (let [{:keys [exit stderr]} (run-capturing ["query" "--param" "file-path=src/main.clj"
-                                              "files-by-complexity" repo-path])]
-    (is (or (= 0 exit) (str/includes? stderr "No database found"))
-        "Should parse --param without error")))
-
-(deftest query-param-missing-value
-  (let [{:keys [exit stderr]} (run-capturing ["query" "--param"])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Missing value for --param"))))
-
-(deftest query-param-invalid-format
-  (let [{:keys [exit stderr]} (run-capturing ["query" "--param" "noequals"
-                                              "files-by-complexity" repo-path])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Invalid --param"))))
-
 ;; --- Tier 1: Query subcommand integration ---
 
 (deftest query-files-by-complexity

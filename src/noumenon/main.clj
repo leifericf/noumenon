@@ -231,7 +231,7 @@
 
 (defn do-query
   "Run the query subcommand. Returns {:exit n :result map-or-nil}."
-  [{:keys [query-name list-queries params] :as opts}]
+  [{:keys [query-name list-queries] :as opts}]
   (if list-queries
     (do-query-list)
     (with-valid-repo
@@ -240,12 +240,9 @@
         (with-existing-db
           ctx
           (fn [{:keys [db]}]
-            (let [{:keys [ok error]} (query/run-named-query db query-name params)]
+            (let [{:keys [ok error]} (query/run-named-query db query-name)]
               (if error
-                (do (print-error! error)
-                    (when (str/starts-with? (str error) "Missing required inputs")
-                      (log! "Hint: use --param key=value to supply query inputs."))
-                    {:exit 1})
+                (do (print-error! error) {:exit 1})
                 {:exit 0 :result ok}))))))))
 
 (defn do-agent
@@ -646,17 +643,14 @@
    :agent-missing-args           "Missing required arguments for agent command."
    :agent-missing-question        "Missing -q <question> argument."
    :invalid-max-iterations       #(str "Invalid --max-iterations value: " (:value %))
-   :missing-max-iterations-value "Missing value for --max-iterations."
-   :missing-param-value          "Missing value for --param. Use --param key=value."
-   :invalid-param-value          #(str "Invalid --param value: " (:value %) ". Expected key=value format.")})
+   :missing-max-iterations-value "Missing value for --max-iterations."})
 
 (def ^:private errors-with-global-usage
   #{:no-args})
 
 (def ^:private errors-with-subcommand-usage
   #{:no-repo-path :missing-db-dir-value :unknown-flag
-    :agent-missing-question :agent-missing-args :query-missing-args
-    :missing-param-value :invalid-param-value})
+    :agent-missing-question :agent-missing-args :query-missing-args})
 
 ;; --- Entry point ---
 
