@@ -93,7 +93,7 @@
             head-sha (git/head-sha repo-path)]
         (when head-sha
           (d/transact conn {:tx-data [{:repo/uri repo-uri :repo/head-sha head-sha}]}))
-        (log! (str "Next: run '" cli/program-name " postprocess " repo-path
+        (log! (str "Next: run '" cli/program-name " enrich " repo-path
                    "' to build the import graph, then '"
                    cli/program-name " analyze " repo-path
                    "' for semantic metadata."))
@@ -101,7 +101,7 @@
          :result (merge (select-keys git-r [:commits-imported :commits-skipped])
                         (select-keys files-r [:files-imported :files-skipped :dirs-imported])
                         {:db-path    (db-path ctx)
-                         :next-step  (str cli/program-name " postprocess " repo-path)})}))))
+                         :next-step  (str cli/program-name " enrich " repo-path)})}))))
 
 (defn do-analyze
   "Run the analyze subcommand. Returns {:exit n :result map-or-nil}."
@@ -132,8 +132,8 @@
             (log! help))
           {:exit 1})))))
 
-(defn do-postprocess
-  "Run the postprocess subcommand. Returns {:exit n :result map-or-nil}."
+(defn do-enrich
+  "Run the enrich subcommand. Returns {:exit n :result map-or-nil}."
   [{:keys [concurrency] :as opts}]
   (with-valid-repo
     opts
@@ -141,14 +141,14 @@
       (with-existing-db
         ctx
         (fn [{:keys [conn repo-path]}]
-          (let [result (imports/postprocess-repo! conn repo-path
-                                                  {:concurrency (or concurrency 8)})]
+          (let [result (imports/enrich-repo! conn repo-path
+                                             {:concurrency (or concurrency 8)})]
             (log! (str "Next: run '" cli/program-name " query file-imports "
                        repo-path "' to explore the import graph."))
             {:exit 0 :result result}))))))
 
-(defn do-sync
-  "Run the sync subcommand. Returns {:exit n :result map-or-nil}."
+(defn do-update
+  "Run the update subcommand. Returns {:exit n :result map-or-nil}."
   [{:keys [analyze model provider concurrency] :as opts}]
   (with-valid-repo
     (update opts :repo-path resolve-repo-path)
@@ -167,7 +167,7 @@
                                               (or provider llm/default-provider))
                                              {:model (llm/model-alias->id
                                                       (or model llm/default-model-alias))}))))
-            result (sync/sync-repo! conn repo-path repo-uri sync-opts)]
+            result (sync/update-repo! conn repo-path repo-uri sync-opts)]
         {:exit 0 :result result}))))
 
 (defn do-watch
@@ -194,9 +194,9 @@
         (log! (str "Watching " repo-path " (polling every " interval-s "s)"))
         (loop []
           (try
-            (sync/sync-repo! conn repo-path repo-uri sync-opts)
+            (sync/update-repo! conn repo-path repo-uri sync-opts)
             (catch Exception e
-              (log! (str "Sync error: " (.getMessage e)))))
+              (log! (str "Update error: " (.getMessage e)))))
           (Thread/sleep (* interval-s 1000))
           (recur))))))
 
@@ -315,12 +315,12 @@
     (.format (java.text.SimpleDateFormat. "yyyy-MM-dd") inst)))
 
 (defn- format-pipeline
-  "Format pipeline stages as [import:3 analyze:42 postprocess:1]."
+  "Format pipeline stages as [import:3 analyze:42 enrich:1]."
   [ops]
   (let [stages (keep (fn [op]
                        (when-let [n (ops op)]
                          (str (clojure.core/name op) ":" n)))
-                     [:import :analyze :postprocess])]
+                     [:import :analyze :enrich])]
     (when (seq stages)
       (str "  [" (str/join " " stages) "]"))))
 
@@ -551,8 +551,8 @@
       (let [result (case (:subcommand parsed)
                      "import"         (do-import parsed)
                      "analyze"        (do-analyze parsed)
-                     "postprocess"    (do-postprocess parsed)
-                     "sync"           (do-sync parsed)
+                     "enrich"         (do-enrich parsed)
+                     "update"         (do-update parsed)
                      "watch"          (do-watch parsed)
                      "query"          (do-query parsed)
                      "ask"            (do-ask parsed)

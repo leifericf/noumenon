@@ -1,12 +1,12 @@
 (ns test-pipeline
-  "End-to-end pipeline test: import → analyze → postprocess on OSS repos per language.
+  "End-to-end pipeline test: import → enrich → analyze on OSS repos per language.
 
    Usage from REPL:  (test-pipeline/run-all!)
-                     (test-pipeline/run-all! {:postprocess-only true})
+                     (test-pipeline/run-all! {:enrich-only true})
                      (test-pipeline/run-one! :clojure)
 
    Usage from CLI:   clj -M:dev -m test-pipeline
-                     clj -M:dev -m test-pipeline --postprocess-only"
+                     clj -M:dev -m test-pipeline --enrich-only"
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [datomic.client.api :as d]
@@ -67,9 +67,9 @@
                     :provider "glm"
                     :model "sonnet"}))
 
-(defn- run-postprocess! [{:keys [url]}]
-  (log! (str "  Postprocessing " (repo-name url) " ..."))
-  (main/do-postprocess {:repo-path (repo-local-path url)}))
+(defn- run-enrich! [{:keys [url]}]
+  (log! (str "  Enriching " (repo-name url) " ..."))
+  (main/do-enrich {:repo-path (repo-local-path url)}))
 
 ;; ---------------------------------------------------------------------------
 ;; Validation queries
@@ -106,17 +106,17 @@
 (defn run-one!
   "Run the full pipeline on a single test repo by language keyword."
   ([lang] (run-one! lang {}))
-  ([lang {:keys [postprocess-only]}]
+  ([lang {:keys [enrich-only]}]
    (let [{:keys [url] :as repo} (first (filter #(= lang (:lang %)) test-repos))]
      (when-not repo
        (throw (ex-info (str "No test repo for language: " lang) {:lang lang})))
      (log! (str "\n=== " (str/upper-case (name lang)) ": " (repo-name url) " ==="))
-     (when-not postprocess-only
+     (when-not enrich-only
        (when-not (repo-imported? url)
          (run-import! repo))
        (when-not (repo-analyzed? url)
          (run-analyze! repo)))
-     (run-postprocess! repo)
+     (run-enrich! repo)
      (let [result (validate-repo repo)]
        (log! (str "  Result: " (if (:pass? result) "PASS" "FAIL")
                   " — " (:files-with-imports result) " files with imports"))
@@ -151,7 +151,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defn -main [& args]
-  (let [opts (when (some #{"--postprocess-only"} args)
-               {:postprocess-only true})]
+  (let [opts (when (some #{"--enrich-only"} args)
+               {:enrich-only true})]
     (run-all! (or opts {}))
     (System/exit 0)))

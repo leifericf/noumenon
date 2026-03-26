@@ -120,7 +120,7 @@
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
-(def ^:private postprocess-command-spec
+(def ^:private enrich-command-spec
   {:flags [db-dir-flag
            {:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
             :desc "Parallel workers, 1-20 (default: 8)"
@@ -128,7 +128,7 @@
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
-(def ^:private sync-command-spec
+(def ^:private update-command-spec
   {:flags (vec (concat
                 [{:flag "--analyze" :key :analyze :parse :bool
                   :desc "Also run LLM analysis on changed files"}
@@ -256,18 +256,18 @@
                    :summary "Enrich imported files with LLM-driven semantic analysis"
                    :usage "analyze [options] <repo-path>"
                    :epilog "Sensitive files (.env, *.pem, credentials, SSH keys, etc.) are\nautomatically excluded — their contents are never sent to the LLM."}
-   "postprocess"  {:spec postprocess-command-spec
+   "enrich"       {:spec enrich-command-spec
                    :summary "Extract cross-file import graph deterministically"
-                   :usage "postprocess [options] <repo-path>"
+                   :usage "enrich [options] <repo-path>"
                    :epilog "Parses source code imports and resolves them to repo files.\nFull support: Clojure. Import extraction: Elixir, Python, JS/TS, C/C++, Go, Rust, Java, Erlang.\nOther languages are skipped. External tools (elixir, python3, node, etc.) required on PATH."}
-   "sync"      {:spec sync-command-spec
-                :summary "Sync knowledge graph with latest git state"
-                :usage "sync [options] <repo-path>"
-                :epilog "Detects changes since last sync via git HEAD SHA.\nFirst run: performs full import + postprocess.\nSubsequent runs: incrementally updates changed/added/deleted files.\nPass --analyze to also re-analyze changed files (requires LLM)."}
+   "update"    {:spec update-command-spec
+                :summary "Update knowledge graph with latest git state"
+                :usage "update [options] <repo-path>"
+                :epilog "Detects changes since last update via git HEAD SHA.\nFirst run: performs full import + enrich.\nSubsequent runs: incrementally updates changed/added/deleted files.\nPass --analyze to also re-analyze changed files (requires LLM)."}
    "watch"     {:spec watch-command-spec
-                :summary "Watch a repository and auto-sync on new commits"
+                :summary "Watch a repository and auto-update on new commits"
                 :usage "watch [options] <repo-path>"
-                :epilog "Polls git HEAD every --interval seconds (default: 30).\nRuns sync automatically when new commits are detected.\nPass --analyze to also re-analyze changed files."}
+                :epilog "Polls git HEAD every --interval seconds (default: 30).\nRuns update automatically when new commits are detected.\nPass --analyze to also re-analyze changed files."}
    "query"     {:spec query-command-spec
                 :summary "Run a named Datalog query against the knowledge graph"
                 :usage "query [options] <query-name> <repo-path>\n       query list"}
@@ -299,15 +299,15 @@
                                {:flag "--model" :key :model :parse :string
                                 :desc "Default model alias"
                                 :error-missing :missing-model-value}
-                               {:flag "--no-auto-sync" :key :no-auto-sync :parse :bool
-                                :desc "Disable automatic sync before queries (default: enabled)"}]
+                               {:flag "--no-auto-update" :key :no-auto-update :parse :bool
+                                :desc "Disable automatic update before queries (default: enabled)"}]
                        :initial {:subcommand "serve"}
                        :positionals {:required 0 :error nil :keys []}}
                 :summary "Start MCP server (JSON-RPC over stdio)"
                 :usage "serve [options]"}})
 
 (def ^:private command-order
-  ["import" "analyze" "postprocess" "sync" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark"])
+  ["import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark"])
 
 ;; --- Help text generation ---
 
@@ -480,8 +480,8 @@
     (let [spec (case sub
                  "query"       query-command-spec
                  "analyze"     analyze-command-spec
-                 "postprocess" postprocess-command-spec
-                 "sync"        sync-command-spec
+                 "enrich"      enrich-command-spec
+                 "update"      update-command-spec
                  "watch"       watch-command-spec
                  simple-command-spec)
           result (parse-command spec args)]
@@ -517,6 +517,6 @@
                              (let [result (parse-command list-databases-command-spec rest-args)]
                                (if (:error result) result
                                    (assoc result :subcommand "list-databases"))))
-          (if (#{"import" "status" "show-schema" "analyze" "postprocess" "query" "sync" "watch"} sub)
+          (if (#{"import" "status" "show-schema" "analyze" "enrich" "query" "update" "watch"} sub)
             (parse-simple-args sub rest-args)
             {:error :unknown-subcommand :subcommand sub}))))))

@@ -1,6 +1,6 @@
 (ns noumenon.elixir-test
   "End-to-end validation of the import pipeline on the Jason (Elixir) repository.
-   Clones Jason if not already present, imports and postprocesses via the CLI,
+   Clones Jason if not already present, imports and enriches via the CLI,
    and verifies Elixir-specific import extraction."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as shell]
@@ -59,11 +59,11 @@
       (testing "stdout contains import counts"
         (is (str/includes? (:stdout result) ":files-imported"))))))
 
-(deftest jason-postprocess-test
+(deftest jason-enrich-test
   (when (elixir-available?)
     (run-capturing ["import" "--db-dir" db-dir jason-dir])
-    (let [result (run-capturing ["postprocess" "--db-dir" db-dir jason-dir])]
-      (testing "postprocess succeeds"
+    (let [result (run-capturing ["enrich" "--db-dir" db-dir jason-dir])]
+      (testing "enrich succeeds"
         (is (= 0 (:exit result))))
       (testing "import edges resolved"
         (is (str/includes? (:stderr result) "import edges resolved"))))))
@@ -83,7 +83,7 @@
 (deftest jason-import-edges-exist
   (when (elixir-available?)
     (run-capturing ["import" "--db-dir" db-dir jason-dir])
-    (run-capturing ["postprocess" "--db-dir" db-dir jason-dir])
+    (run-capturing ["enrich" "--db-dir" db-dir jason-dir])
     (let [conn (db/connect-and-ensure-schema db-dir "jason")
           db   (d/db conn)
           edges (d/q '[:find (count ?f)

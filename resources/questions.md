@@ -53,7 +53,7 @@ These questions can be answered by the AI agent constructing Datalog queries aga
 31. Which files depend on a specific module/namespace?
 32. What percentage of our code appears AI-generated, and how does its quality compare?
 
-### Import Graph (requires `postprocess`)
+### Import Graph (requires `enrich`)
 
 33. Which tests should I run after changing this file?
 34. Which architectural boundaries are being crossed by imports?
@@ -91,7 +91,7 @@ These questions can be answered by the AI agent constructing Datalog queries aga
 | Repeated analysis over time | Q43, Q46, Q47 | Re-run LLM analysis, use Datomic history |
 | Windowed commit aggregation | Q44 | Parameterized queries with time windows |
 | Component entity population | Q45 | Populate component/name, files, depends-on |
-| ~~Deterministic import extraction~~ | ~~Q33-Q41~~ | ~~Done — `postprocess` command~~ |
+| ~~Deterministic import extraction~~ | ~~Q33-Q41~~ | ~~Done — `enrich` command~~ |
 | Line-level change tracking | Q48, Q52 | Per-file-per-commit diff stats join entity |
 | Docstring staleness detection | Q49 | Compare docstring tx-time with commit frequency |
 | Commit heuristic enrichment | Q50 | Add hour-of-day, day-of-week to commits |

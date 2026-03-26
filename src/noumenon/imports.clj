@@ -374,10 +374,10 @@ end")
   (resolve-java-import import-name all-paths))
 
 ;; ---------------------------------------------------------------------------
-;; Pure core — postprocess a single file
+;; Pure core — enrich a single file
 ;; ---------------------------------------------------------------------------
 
-(defn postprocess-file
+(defn enrich-file
   "Parse imports from source text and resolve to repo file paths.
    Returns a vec of resolved file-path strings (internal deps only)."
   [lang content source-path all-paths]
@@ -388,7 +388,7 @@ end")
        vec))
 
 ;; ---------------------------------------------------------------------------
-;; Impure shell — orchestrate postprocessing for a repo
+;; Impure shell — orchestrate enrichment for a repo
 ;; ---------------------------------------------------------------------------
 
 (defn- files-with-lang
@@ -403,7 +403,7 @@ end")
         {sensitive true safe false} (group-by #(files/sensitive-path? (:file/path %))
                                               candidates)]
     (when (seq sensitive)
-      (log! (str "Skipping " (count sensitive) " sensitive file(s) from postprocessing")))
+      (log! (str "Skipping " (count sensitive) " sensitive file(s) from enrichment")))
     (sort-by :file/path safe)))
 
 (defn- file->tx-data
@@ -420,7 +420,7 @@ end")
   [conn batch]
   (when (seq batch)
     (d/transact conn {:tx-data (conj batch {:db/id "datomic.tx"
-                                            :tx/op :postprocess
+                                            :tx/op :enrich
                                             :tx/source :deterministic})}))
   [])
 
@@ -429,7 +429,7 @@ end")
   [repo-path all-paths {:keys [file/path file/lang]}]
   (try
     (let [content  (analyze/git-show repo-path path)
-          resolved (postprocess-file lang content path all-paths)]
+          resolved (enrich-file lang content path all-paths)]
       (file->tx-data path resolved))
     (catch Exception _
       {:error? true :file/path path})))
@@ -518,10 +518,11 @@ end")
            :files-skipped 0 :files-errored 0 :batch []}
           results))
 
-(defn postprocess-repo!
+(defn enrich-repo!
   "Extract cross-file import graph deterministically and transact into Datomic.
-   Returns a summary map. `opts` may include :concurrency (default 8)."
-  ([conn repo-path] (postprocess-repo! conn repo-path {}))
+   Returns a summary map. `opts` may include :concurrency (default 8).
+   Enriches the knowledge graph with deterministic file-to-file import edges."
+  ([conn repo-path] (enrich-repo! conn repo-path {}))
   ([conn repo-path {:keys [concurrency] :or {concurrency 8}}]
    (let [db        (d/db conn)
          all-files (files-with-lang db)
@@ -550,14 +551,14 @@ end")
          all-results (into std-results c-results)
          final       (tally-and-transact! conn all-results)
          final       (update final :batch #(flush-batch! conn %))
-         ;; Always record that postprocess ran (even if 0 edges found)
+         ;; Always record that enrich ran (even if 0 edges found)
          _           (when (zero? (:imports-resolved final))
                        (d/transact conn {:tx-data [{:db/id "datomic.tx"
-                                                    :tx/op :postprocess
+                                                    :tx/op :enrich
                                                     :tx/source :deterministic}]}))
          {:keys [files-processed imports-resolved files-errored]} final
          files-skipped (reduce + (map :file-count skipped-tools))]
-     (log! (str "  Postprocessed " files-processed " files, "
+     (log! (str "  Enriched " files-processed " files, "
                 imports-resolved " import edges resolved"
                 (when (> concurrency 1)
                   (str " (concurrency=" concurrency ")"))
@@ -567,7 +568,7 @@ end")
        (log! (str "  Warning: " files-skipped " files skipped because "
                   (str/join ", " (map (fn [{:keys [tool]}] (str tool " is not on PATH"))
                                       skipped-tools))
-                  ". Install and re-run postprocess to resolve their imports.")))
+                  ". Install and re-run enrich to resolve their imports.")))
      (-> final
          (dissoc :batch)
          (assoc :files-skipped files-skipped :skipped-tools skipped-tools)))))

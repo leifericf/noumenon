@@ -147,14 +147,14 @@
 
 ;; --- Sync orchestration ---
 
-(defn sync-repo!
-  "Sync the knowledge graph with the current git state.
+(defn update-repo!
+  "Update the knowledge graph with the current git state.
    Handles both fresh (no database / no stored SHA) and incremental cases.
    Options:
      :analyze?    — also run LLM analysis on changed files (default false)
      :invoke-llm  — LLM invoke function (required if :analyze? true)
      :model-id    — model identifier for analysis
-     :concurrency — worker count for analyze/postprocess"
+     :concurrency — worker count for analyze/enrich"
   [conn repo-path repo-uri opts]
   (let [start-ms (System/currentTimeMillis)
         db       (d/db conn)
@@ -176,8 +176,8 @@
                                     (count (:deleted changes)) " deleted")))
             git-r      (git/import-commits! conn repo-path repo-uri)
             files-r    (files/import-files! conn repo-path repo-uri)
-            post-r     (imports/postprocess-repo! conn repo-path
-                                                  {:concurrency (or (:concurrency opts) 8)})
+            post-r     (imports/enrich-repo! conn repo-path
+                                            {:concurrency (or (:concurrency opts) 8)})
             analyze-r  (when (:analyze? opts)
                          (let [invoke-llm (:invoke-llm opts)]
                            (when invoke-llm
@@ -188,7 +188,7 @@
                                :min-delay-ms 0}))))
             _          (update-head-sha! conn repo-path repo-uri)
             elapsed    (- (System/currentTimeMillis) start-ms)]
-        (log! (str "Sync complete (" elapsed " ms)"))
+        (log! (str "Update complete (" elapsed " ms)"))
         (cond-> {:status      (if fresh? :fresh-import :synced)
                  :head-sha    current
                  :added       (count (:added changes []))

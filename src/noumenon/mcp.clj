@@ -106,8 +106,8 @@
     :inputSchema {:type "object"
                   :properties repo-path-prop
                   :required ["repo_path"]}}
-   {:name "noumenon_sync"
-    :description "Sync the knowledge graph with the latest git state. Runs import + postprocess for changed files. Fast and cheap (no LLM calls by default). Pass analyze=true to also re-analyze changed files with LLM. Works as a first-time setup too — if no database exists, runs the full pipeline."
+   {:name "noumenon_update"
+    :description "Update the knowledge graph with the latest git state. Runs import + enrich for changed files. Fast and cheap (no LLM calls by default). Pass analyze=true to also re-analyze changed files with LLM. Works as a first-time setup too — if no database exists, runs the full pipeline."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"analyze" {:type "boolean"
@@ -135,7 +135,7 @@
                                       "max_files" {:type "integer"
                                                    :description "Stop after analyzing N files (useful for sampling)"}})
                   :required ["repo_path"]}}
-   {:name "noumenon_postprocess"
+   {:name "noumenon_enrich"
     :description "Extract cross-file import graph deterministically. No LLM calls — uses language-specific parsers. Requires a prior import."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
@@ -150,7 +150,7 @@
 
 (defn- with-conn
   "Resolve db-dir and db-name from arguments, get/create connection, call f with conn and db.
-   When auto-sync is enabled (default), transparently syncs stale databases before returning."
+   When auto-update is enabled (default), transparently updates stale databases before returning."
   [args defaults f]
   (let [raw-path  (args "repo_path")
         _         (validate-string-length! "repo_path" raw-path max-repo-path-len)
@@ -159,12 +159,12 @@
         db-dir  (util/resolve-db-dir defaults)
         db-name (util/derive-db-name repo-path)
         conn    (get-or-create-conn db-dir db-name)
-        _       (when (:auto-sync defaults true)
+        _       (when (:auto-update defaults true)
                   (let [db (d/db conn)]
                     (when (sync/stale? db repo-path)
-                      (log! "auto-sync" "HEAD changed, syncing...")
+                      (log! "auto-update" "HEAD changed, updating...")
                       (let [repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))]
-                        (sync/sync-repo! conn repo-path repo-uri {:concurrency 8})))))
+                        (sync/update-repo! conn repo-path repo-uri {:concurrency 8})))))
         db      (d/db conn)]
     (f {:conn conn :db db :repo-path repo-path :db-name db-name})))
 
@@ -217,7 +217,7 @@
     (fn [{:keys [db]}]
       (tool-result (query/schema-summary db)))))
 
-(defn- handle-sync [args defaults]
+(defn- handle-update [args defaults]
   (let [repo-path (args "repo_path")]
     (validate-repo-path! repo-path)
     (let [db-dir   (util/resolve-db-dir defaults)
@@ -236,7 +236,7 @@
                                            (or (:provider defaults) llm/default-provider))
                                           {:model (llm/model-alias->id
                                                    (or (:model defaults) llm/default-model-alias))}))))
-          result   (sync/sync-repo! conn repo-path repo-uri opts)]
+          result   (sync/update-repo! conn repo-path repo-uri opts)]
       (tool-result (pr-str result)))))
 
 (defn- handle-ask [args defaults]
@@ -276,12 +276,12 @@
                                                  max-files (assoc :max-files max-files)))]
         (tool-result (pr-str result))))))
 
-(defn- handle-postprocess [args defaults]
+(defn- handle-enrich [args defaults]
   (with-conn args defaults
     (fn [{:keys [conn repo-path]}]
       (let [concurrency (min (or (args "concurrency") 8) 20)
-            result      (imports/postprocess-repo! conn repo-path
-                                                   {:concurrency concurrency})]
+            result      (imports/enrich-repo! conn repo-path
+                                              {:concurrency concurrency})]
         (tool-result (pr-str result))))))
 
 (defn- handle-list-databases [_args defaults]
@@ -297,10 +297,10 @@
    "noumenon_query"          handle-query
    "noumenon_list_queries"   handle-list-queries
    "noumenon_get_schema"     handle-get-schema
-   "noumenon_sync"           handle-sync
+   "noumenon_update"         handle-update
    "noumenon_ask"            handle-ask
    "noumenon_analyze"        handle-analyze
-   "noumenon_postprocess"    handle-postprocess
+   "noumenon_enrich"         handle-enrich
    "noumenon_list_databases" handle-list-databases})
 
 ;; --- MCP method handlers ---
@@ -366,7 +366,7 @@
   (let [reader   (BufferedReader. (io/reader System/in))
         writer   (PrintWriter. System/out true)
         defaults (cond-> (select-keys opts [:db-dir :provider :model])
-                   (:no-auto-sync opts) (assoc :auto-sync false))]
+                   (:no-auto-update opts) (assoc :auto-update false))]
     (log! "noumenon MCP server ready")
     (loop []
       (when-let [line (try

@@ -42,7 +42,7 @@
            (mapv #(.getName %))))
 
 (defn- tx-op-counts
-  "Return map of {:import n :analyze n :postprocess n} from tx metadata."
+  "Return map of {:import n :analyze n :enrich n} from tx metadata."
   [db]
   (->> (d/q '[:find ?op (count ?tx) :where [?tx :tx/op ?op]] db)
        (into {})))

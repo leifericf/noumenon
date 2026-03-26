@@ -177,7 +177,7 @@
   :scoring    :deterministic
   :rubric     "Must list pure segments, or correctly state none exist."}
 
- ;; --- Import graph questions (requires postprocess) ---
+ ;; --- Import graph questions (requires enrich) ---
 
  ;; Single-hop — deterministic scoring
  {:id         :q27

@@ -195,7 +195,7 @@
   :db/cardinality :db.cardinality/one
   :db/doc         "Text content of this chunk, up to 4096 chars"}
 
- ;; --- Deterministic import graph (postprocess) ---
+ ;; --- Deterministic import graph (enrich) ---
 
  {:db/ident       :file/imports
   :db/valueType   :db.type/ref
