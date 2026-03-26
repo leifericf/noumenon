@@ -1,42 +1,43 @@
 (ns noumenon.main-test
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [noumenon.main :as main]))
+            [noumenon.main :as main]
+            [noumenon.util :as util]))
 
 ;; --- Tier 0: Pure function tests ---
 
 (deftest derive-db-name-simple
-  (is (= "ring" (main/derive-db-name "/path/to/ring"))))
+  (is (= "ring" (util/derive-db-name "/path/to/ring"))))
 
 (deftest derive-db-name-trailing-slash
-  (is (= "ring" (main/derive-db-name "/path/to/ring/"))))
+  (is (= "ring" (util/derive-db-name "/path/to/ring/"))))
 
 (deftest derive-db-name-multiple-trailing-slashes
-  (is (= "ring" (main/derive-db-name "/path/to/ring///"))))
+  (is (= "ring" (util/derive-db-name "/path/to/ring///"))))
 
 (deftest derive-db-name-single-component
-  (is (= "ring" (main/derive-db-name "ring"))))
+  (is (= "ring" (util/derive-db-name "ring"))))
 
 (deftest derive-db-name-sanitizes-special-chars
-  (is (= "my-repo" (main/derive-db-name "/path/to/my-repo")))
-  (is (= "my_repo" (main/derive-db-name "/path/to/my_repo")))
-  (is (= "myrepo" (main/derive-db-name "/path/to/my repo")))
-  (is (= "myrepo" (main/derive-db-name "/path/to/my$repo"))))
+  (is (= "my-repo" (util/derive-db-name "/path/to/my-repo")))
+  (is (= "my_repo" (util/derive-db-name "/path/to/my_repo")))
+  (is (= "myrepo" (util/derive-db-name "/path/to/my repo")))
+  (is (= "myrepo" (util/derive-db-name "/path/to/my$repo"))))
 
-(deftest derive-db-name-rejects-dotdot
-  (is (nil? (main/derive-db-name "/path/to/..")))
-  (is (nil? (main/derive-db-name ".."))))
+(deftest derive-db-name-resolves-dotdot
+  (is (= "path" (util/derive-db-name "/path/to/..")))
+  (is (some? (util/derive-db-name ".."))))
 
 (deftest derive-db-name-rejects-empty-after-sanitize
-  (is (nil? (main/derive-db-name "/path/to/$$$"))))
+  (is (nil? (util/derive-db-name "/path/to/$$$"))))
 
 (deftest resolve-db-dir-default
-  (let [result (main/resolve-db-dir {})]
+  (let [result (util/resolve-db-dir {})]
     (is (str/ends-with? result "data/datomic"))
     (is (not (str/starts-with? result ".")))))
 
 (deftest resolve-db-dir-override
-  (is (= "/tmp/mydb" (main/resolve-db-dir {:db-dir "/tmp/mydb"}))))
+  (is (= "/tmp/mydb" (util/resolve-db-dir {:db-dir "/tmp/mydb"}))))
 
 ;; --- Tier 0: CLI dispatch / error cases (capture stdout+stderr) ---
 

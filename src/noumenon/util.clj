@@ -27,6 +27,37 @@
         bytes  (.digest digest (.getBytes s "UTF-8"))]
     (apply str (map #(format "%02x" (bit-and % 0xff)) bytes))))
 
+(def default-db-dir
+  "Default database storage directory, relative to cwd."
+  "data/datomic")
+
+(defn resolve-db-dir
+  "Resolve the database storage directory from an options map.
+   Uses :db-dir if present, otherwise defaults to data/datomic/ relative to cwd."
+  [opts]
+  (or (:db-dir opts)
+      (str (.getAbsolutePath (io/file default-db-dir)))))
+
+(defn validate-repo-path
+  "Validate that repo-path exists, is a directory, and contains .git.
+   Returns an error reason string, or nil if valid."
+  [repo-path]
+  (let [f (io/file repo-path)]
+    (cond
+      (not (.exists f))                    "does not exist"
+      (not (.isDirectory f))               "not a directory"
+      (not (.exists (io/file f ".git")))   "not a git repository")))
+
+(defn derive-db-name
+  "Extract database name from a repo path: canonicalize, take basename, sanitize.
+   Only alphanumeric, hyphen, underscore, and dot are kept. Rejects '..' and empty results."
+  [repo-path]
+  (let [canonical (.getCanonicalPath (java.io.File. (str repo-path)))
+        raw       (-> canonical (str/replace #"/+$" "") (str/split #"/") last)
+        sanitized (str/replace raw #"[^a-zA-Z0-9\-_.]" "")]
+    (when (and (seq sanitized) (not= ".." sanitized))
+      sanitized)))
+
 (defn read-version
   "Read project version from version.edn on classpath."
   []

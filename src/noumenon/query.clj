@@ -62,6 +62,15 @@
                    (when (seq doc) (str " — " doc)))))
        (str/join "\n")))
 
+;; --- Common queries ---
+
+(defn repo-stats
+  "Return {:commits n :files n :dirs n} entity counts for the database."
+  [db]
+  {:commits (count (d/q '[:find ?e :where [?e :git/type :commit]] db))
+   :files   (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
+   :dirs    (count (d/q '[:find ?e :where [?e :dir/path _]] db))})
+
 ;; --- Execution ---
 
 (defn execute-query

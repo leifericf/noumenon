@@ -20,20 +20,6 @@
 
 ;; --- Helpers ---
 
-(defn derive-db-name
-  "Extract database name from a repo path: last path component, sanitized.
-   Only alphanumeric, hyphen, underscore, and dot are kept. Rejects '..' and empty results."
-  [repo-path]
-  (let [raw (-> repo-path str (str/replace #"/+$" "") (str/split #"/") last)
-        sanitized (str/replace raw #"[^a-zA-Z0-9\-_.]" "")]
-    (when (and (seq sanitized) (not= ".." sanitized))
-      sanitized)))
-
-(defn resolve-db-dir
-  "Resolve the database storage directory. Defaults to data/datomic/ relative to cwd."
-  [opts]
-  (or (:db-dir opts)
-      (str (.getAbsolutePath (io/file "data" "datomic")))))
 
 (defn- print-usage! []
   (log! (cli/format-global-help)))
@@ -44,16 +30,8 @@
 ;; --- Subcommands ---
 
 (defn- validate-repo-path [repo-path]
-  (let [f (io/file repo-path)]
-    (cond
-      (not (.exists f))
-      (str "Path does not exist: " repo-path)
-
-      (not (.isDirectory f))
-      (str "Path is not a directory: " repo-path)
-
-      (not (.exists (io/file f ".git")))
-      (str "Path is not a git repository: " repo-path))))
+  (when-let [reason (util/validate-repo-path repo-path)]
+    (str "Path " reason ": " repo-path)))
 
 (defn- db-exists? [db-dir db-name]
   (.exists (io/file db-dir "noumenon" db-name)))
@@ -64,12 +42,12 @@
 
 (defn- build-context
   [{:keys [repo-path] :as opts}]
-  (let [db-name (derive-db-name repo-path)]
+  (let [db-name (util/derive-db-name repo-path)]
     (when-not db-name
       (throw (ex-info (str "Cannot derive database name from path: " repo-path)
                       {:repo-path repo-path})))
     {:repo-path repo-path
-     :db-dir    (resolve-db-dir opts)
+     :db-dir    (util/resolve-db-dir opts)
      :db-name   db-name}))
 
 (defn- missing-db-msg
@@ -310,10 +288,8 @@
       (with-existing-db
         ctx
         (fn [{:keys [db] :as c}]
-          (let [stats {:commits (count (d/q '[:find ?e :where [?e :git/type :commit]] db))
-                       :files   (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
-                       :dirs    (count (d/q '[:find ?e :where [?e :dir/path _]] db))
-                       :db-path (db-path c)}]
+          (let [stats (merge (query/repo-stats db)
+                             {:db-path (db-path c)})]
             (log! (str (:commits stats) " commits, "
                        (:files stats) " files, "
                        (:dirs stats) " directories"
@@ -381,7 +357,7 @@
 (defn do-databases
   "List all databases or delete one. Returns {:exit n :result vec-or-nil}."
   [opts]
-  (let [db-dir (resolve-db-dir opts)]
+  (let [db-dir (util/resolve-db-dir opts)]
     (if-let [db-name (:delete opts)]
       (let [client (db/create-client db-dir)]
         (if-not (db-exists? db-dir db-name)

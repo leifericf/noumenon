@@ -15,28 +15,15 @@
 
 ;; --- Helpers ---
 
-(defn- derive-db-name
-  "Derive a unique db name from a canonical repo path.
-   Uses the basename plus a short hash of the full path to avoid collisions."
-  [canonical-path]
-  (let [basename    (-> canonical-path (str/replace #"/+$" "") (str/split #"/") last)
-        hash-suffix (-> canonical-path hash Math/abs (Integer/toString 36))]
-    (str basename "-" hash-suffix)))
-
 (defn- validate-repo-path!
   "Validate that repo-path exists, is a directory, and contains .git.
    Throws ex-info with a generic message (details logged to stderr only)."
   [repo-path]
-  (let [f      (io/file repo-path)
-        reason (cond
-                 (not (.exists f))            "does not exist"
-                 (not (.isDirectory f))       "not a directory"
-                 (not (.exists (io/file f ".git"))) "not a git repository")]
-    (when reason
-      (log! "validate-repo-path" reason repo-path)
-      (throw (ex-info "Invalid or inaccessible repository path"
-                      {:repo-path    repo-path
-                       :user-message "Invalid or inaccessible repository path."})))))
+  (when-let [reason (util/validate-repo-path repo-path)]
+    (log! "validate-repo-path" reason repo-path)
+    (throw (ex-info "Invalid or inaccessible repository path"
+                    {:repo-path    repo-path
+                     :user-message "Invalid or inaccessible repository path."}))))
 
 ;; --- Connection cache ---
 
@@ -144,9 +131,8 @@
         _         (validate-string-length! "repo_path" raw-path max-repo-path-len)
         repo-path (.getCanonicalPath (io/file raw-path))
         _         (validate-repo-path! repo-path)
-        db-dir    (or (:db-dir defaults)
-                      (str (.getAbsolutePath (io/file "data" "datomic"))))
-        db-name (derive-db-name repo-path)
+        db-dir  (util/resolve-db-dir defaults)
+        db-name (util/derive-db-name repo-path)
         conn    (get-or-create-conn db-dir db-name)
         _       (when (:auto-sync defaults true)
                   (let [db (d/db conn)]
@@ -175,9 +161,7 @@
 (defn- handle-status [args defaults]
   (with-conn args defaults
     (fn [{:keys [db]}]
-      (let [commits (count (d/q '[:find ?e :where [?e :git/type :commit]] db))
-            files   (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
-            dirs    (count (d/q '[:find ?e :where [?e :dir/path _]] db))]
+      (let [{:keys [commits files dirs]} (query/repo-stats db)]
         (tool-result (str commits " commits, " files " files, " dirs " directories."))))))
 
 (defn- handle-query [args defaults]
@@ -211,9 +195,8 @@
 (defn- handle-sync [args defaults]
   (let [repo-path (args "repo_path")]
     (validate-repo-path! repo-path)
-    (let [db-dir   (or (:db-dir defaults)
-                       (str (.getAbsolutePath (io/file "data" "datomic"))))
-          db-name  (derive-db-name repo-path)
+    (let [db-dir   (util/resolve-db-dir defaults)
+          db-name  (util/derive-db-name repo-path)
           conn     (get-or-create-conn db-dir db-name)
           repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
           analyze? (args "analyze")
@@ -237,7 +220,9 @@
     (fn [{:keys [db db-name]}]
       (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
             model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
-            invoke-fn   (llm/make-invoke-fn provider-kw {:model model-id})
+            invoke-fn   (llm/make-invoke-fn provider-kw {:model       model-id
+                                                              :temperature 0.3
+                                                              :max-tokens  4096})
             max-iter    (min (or (args "max_iterations") 10) 50)
             result      (agent/ask db (args "question")
                                    {:invoke-fn      invoke-fn
