@@ -26,3 +26,8 @@
         conn   (create-db client db-name)]
     (schema/ensure-schema conn)
     conn))
+
+(defn delete-db
+  "Delete a database by name. Returns true if it existed."
+  [client db-name]
+  (d/delete-database client {:db-name db-name}))

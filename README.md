@@ -134,10 +134,11 @@ Notes:
 clj -M:run postprocess /path/to/repo
 ```
 
-### 4) Inspect status and queries
+### 4) Inspect status, databases, and queries
 
 ```bash
 clj -M:run status /path/to/repo
+clj -M:run databases
 clj -M:run query list
 clj -M:run query files-by-complexity /path/to/repo
 ```
@@ -185,6 +186,7 @@ Run `clj -M:run --help` for global help, or `clj -M:run <subcommand> --help` for
 | `postprocess` | Extract deterministic cross-file import graph |
 | `query` | Run a named query (`query list` to enumerate) |
 | `status` | Show imported entity counts for a repo |
+| `databases` | List all databases or delete one |
 | `agent` | Ask repository questions via iterative query + LLM flow |
 | `serve` | Start MCP server (JSON-RPC over stdio) |
 | `benchmark` | Run project benchmark flow |
@@ -218,6 +220,9 @@ Common examples:
 - `dependency-hotspots`
 - `pure-segments`
 - `file-history` (parameterized)
+- `llm-cost-total`
+- `llm-cost-by-model`
+- `llm-cost-by-file`
 
 ## Data Model
 
@@ -238,7 +243,7 @@ Noumenon combines four sources:
 | `file` | `:file/path` | `:file/ext`, `:file/lang`, `:file/lines`, `:file/size`, `:file/imports`, `:sem/*` |
 | `directory` | `:dir/path` | `:dir/parent`, `:dir/repo` |
 | `code segment` | `:code/file+name` (tuple of `:code/file` + `:code/name`) | `:code/kind`, `:code/line-start`, `:code/line-end`, `:code/args`, `:code/returns`, `:code/visibility`, `:code/complexity`, `:code/smells`, `:code/call-names`, `:code/pure?`, `:code/ai-likelihood` |
-| `tx metadata` | tx entity | `:tx/op`, `:tx/source`, `:tx/analyzer`, `:tx/model` |
+| `tx metadata` | tx entity | `:tx/op`, `:tx/source`, `:tx/analyzer`, `:tx/model`, `:tx/input-tokens`, `:tx/output-tokens`, `:tx/cost-usd` |
 | `provenance` | mixed (entity + tx metadata) | `:prov/confidence` on analyzed entities; `:prov/model-version`, `:prov/prompt-hash`, `:prov/analyzed-at` on analysis transactions |
 | `component` (schema-defined) | `:component/name` | `:component/depends-on`, `:component/files` |
 
@@ -307,6 +312,15 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   }
 }
 ```
+
+### Claude Code note
+
+For Claude Code, MCP enablement is usually just:
+
+- Start Noumenon in `serve` mode
+- Add/configure the MCP server entry in Claude Code
+
+You do not need extra skills, custom sub-agents, or special `CLAUDE.md` wiring just to make Noumenon discoverable. Those are optional only if you want stricter usage behavior.
 
 ### Exposed MCP tools
 

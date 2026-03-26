@@ -1,0 +1,8 @@
+{:name "llm-cost-by-model"
+ :description "LLM token usage and cost grouped by model"
+ :query [:find ?model (sum ?in) (sum ?out) (sum ?cost)
+         :where
+         [?tx :tx/model ?model]
+         [?tx :tx/input-tokens ?in]
+         [?tx :tx/output-tokens ?out]
+         [?tx :tx/cost-usd ?cost]]}

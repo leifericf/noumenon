@@ -188,7 +188,7 @@
 (defn analysis->tx-data
   "Convert a parsed analysis map into Datomic tx-data for a file.
    `file-path` is the repo-relative path. Returns tx-data vector (may be empty)."
-  [file-path analysis {:keys [model-version prompt-hash-val analyzer]}]
+  [file-path analysis {:keys [model-version prompt-hash-val analyzer usage]}]
   (when (and analysis (seq analysis))
     (let [{:keys [summary purpose tags complexity patterns layer
                   category confidence dependencies segments]} analysis
@@ -218,14 +218,17 @@
                                   {:seen #{} :txs []})
                           :txs
                           (mapv (partial segment->tx-data file-ref))))
-          prov-tx  {:db/id               "datomic.tx"
-                    :tx/op               :analyze
-                    :tx/source           :llm
-                    :tx/model            (or model-version "unknown")
-                    :tx/analyzer         (or analyzer "noumenon.analyze/0.1.0")
-                    :prov/model-version  (or model-version "unknown")
-                    :prov/prompt-hash    (or prompt-hash-val "")
-                    :prov/analyzed-at    (Date.)}]
+          prov-tx  (cond-> {:db/id               "datomic.tx"
+                            :tx/op               :analyze
+                            :tx/source           :llm
+                            :tx/model            (or model-version "unknown")
+                            :tx/analyzer         (or analyzer "noumenon.analyze/0.1.0")
+                            :prov/model-version  (or model-version "unknown")
+                            :prov/prompt-hash    (or prompt-hash-val "")
+                            :prov/analyzed-at    (Date.)}
+                     (:input-tokens usage)  (assoc :tx/input-tokens (:input-tokens usage))
+                     (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
+                     (:cost-usd usage)      (assoc :tx/cost-usd (:cost-usd usage)))]
       (into [file-tx prov-tx] seg-txs))))
 
 ;; --- File content ---
@@ -300,7 +303,8 @@
           (let [tx-data (analysis->tx-data path analysis
                                            {:model-version   (or (:resolved-model result) "unknown")
                                             :prompt-hash-val prompt-hash-val
-                                            :analyzer        "noumenon.analyze/0.1.0"})]
+                                            :analyzer        "noumenon.analyze/0.1.0"
+                                            :usage           (:usage result)})]
             (d/transact conn {:tx-data tx-data})
             {:status :ok :usage (:usage result) :truncated? truncated?})
           (do (log! (str "  Warning: unparseable response for " path ", skipping"))

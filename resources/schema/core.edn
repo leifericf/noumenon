@@ -180,4 +180,19 @@
  {:db/ident       :tx/model
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "LLM model identifier for LLM-sourced transactions"}]
+  :db/doc         "LLM model identifier for LLM-sourced transactions"}
+
+ {:db/ident       :tx/input-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Input tokens consumed by this transaction's LLM call"}
+
+ {:db/ident       :tx/output-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Output tokens produced by this transaction's LLM call"}
+
+ {:db/ident       :tx/cost-usd
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Estimated USD cost of this transaction's LLM call"}]

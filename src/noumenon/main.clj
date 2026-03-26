@@ -247,6 +247,83 @@
                           " -- db: " (:db-path stats)))
             {:exit 0 :result stats}))))))
 
+;; --- Databases ---
+
+(defn- list-db-dirs
+  "Return sorted seq of database names found in the storage dir."
+  [db-dir]
+  (some->> (io/file db-dir "noumenon") .listFiles
+           (filter #(.isDirectory %))
+           (sort-by #(.getName %))
+           (mapv #(.getName %))))
+
+(defn- tx-op-counts
+  "Return map of {:import n :analyze n :postprocess n} from tx metadata."
+  [db]
+  (->> (d/q '[:find ?op (count ?tx) :where [?tx :tx/op ?op]] db)
+       (into {})))
+
+(defn- db-stats
+  "Connect to a DB and return stats map with counts, pipeline stages, and cost."
+  [db-dir db-name]
+  (try
+    (let [db     (d/db (db/connect-and-ensure-schema db-dir db-name))
+          latest (ffirst (d/q '[:find (max ?d) :where [_ :commit/committed-at ?d]] db))
+          cost   (or (ffirst (d/q '[:find (sum ?c) :where [_ :tx/cost-usd ?c]] db)) 0.0)
+          ops    (tx-op-counts db)]
+      {:name    db-name
+       :commits (count (d/q '[:find ?e :where [?e :git/type :commit]] db))
+       :files   (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
+       :dirs    (count (d/q '[:find ?e :where [?e :dir/path _]] db))
+       :latest  latest
+       :cost    cost
+       :ops     ops})
+    (catch Exception e
+      {:name db-name :error (.getMessage e)})))
+
+(defn- format-date [inst]
+  (when inst
+    (.format (java.text.SimpleDateFormat. "yyyy-MM-dd") inst)))
+
+(defn- format-pipeline
+  "Format pipeline stages as [import:3 analyze:42 postprocess:1]."
+  [ops]
+  (let [stages (keep (fn [op]
+                       (when-let [n (ops op)]
+                         (str (clojure.core/name op) ":" n)))
+                     [:import :analyze :postprocess])]
+    (when (seq stages)
+      (str "  [" (str/join " " stages) "]"))))
+
+(defn- print-db-stats
+  [{:keys [name commits files dirs latest cost ops error]}]
+  (if error
+    (println (format "  %-24s (error: %s)" name error))
+    (let [date-str  (if latest (str "  (latest: " (format-date latest) ")") "")
+          cost-str  (if (pos? cost) (format "  $%.2f" cost) "")
+          stage-str (or (format-pipeline ops) "")]
+      (println (format "  %-24s %d commits, %d files, %d dirs%s%s%s"
+                       name commits files dirs date-str cost-str stage-str)))))
+
+(defn do-databases
+  "List all databases or delete one. Returns {:exit n :result vec-or-nil}."
+  [opts]
+  (let [db-dir (resolve-db-dir opts)]
+    (if-let [db-name (:delete opts)]
+      (let [client (db/create-client db-dir)]
+        (if-not (db-exists? db-dir db-name)
+          (do (print-error! (str "Database \"" db-name "\" not found.")) {:exit 1})
+          (do (db/delete-db client db-name)
+              (log! (str "Deleted database \"" db-name "\"."))
+              (log! (str "Re-import: " cli/program-name " import <repo-path>"))
+              {:exit 0})))
+      (let [names (list-db-dirs db-dir)]
+        (if (empty? names)
+          (do (log! (str "No databases found in " db-dir)) {:exit 0 :result []})
+          (let [stats (mapv #(db-stats db-dir %) names)]
+            (doseq [s stats] (print-db-stats s))
+            {:exit 0 :result stats}))))))
+
 ;; --- Benchmark ---
 
 (defn- run-benchmark-impl!
@@ -483,6 +560,7 @@
    :no-repo-path                 "Missing <repo-path> argument."
    :query-missing-args           "Missing <query-name> and <repo-path> arguments."
    :missing-db-dir-value         "Missing value for --db-dir."
+   :missing-delete-value          "Missing database name for --delete."
    :unknown-flag                 #(str "Unknown option: " (:flag %))
    :invalid-max-questions        #(str "Invalid --max-questions value: " (:value %))
    :missing-max-questions-value  "Missing value for --max-questions."
@@ -555,11 +633,12 @@
                      "query"       (do-query parsed)
                      "agent"     (do-agent parsed)
                      "status"    (do-status parsed)
+                     "databases" (do-databases parsed)
                      "benchmark" (do-benchmark parsed)
                      "longbench" (do-longbench parsed)
                      "serve"     (do (mcp/serve! parsed) {:exit 0}))]
         (when (and (:result result)
-                   (not (#{"benchmark" "longbench" "serve" "status"} (:subcommand parsed))))
+                   (not (#{"benchmark" "longbench" "serve" "status" "databases"} (:subcommand parsed))))
           (prn (:result result)))
         result))))
 

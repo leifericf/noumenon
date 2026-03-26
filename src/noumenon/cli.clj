@@ -115,6 +115,14 @@
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
+(def ^:private databases-command-spec
+  {:flags [db-dir-flag
+           {:flag "--delete" :key :delete :parse :string
+            :desc "Delete a database by name"
+            :error-missing :missing-delete-value}]
+   :initial {:subcommand "databases"}
+   :positionals {:required 0 :error nil :keys []}})
+
 (def ^:private analyze-command-spec
   {:flags (with-provider-valid analyze-flags all-valid-providers)
    :initial {}
@@ -218,6 +226,9 @@
    "status"    {:spec simple-command-spec
                 :summary "Show import counts for a repository"
                 :usage "status [options] <repo-path>"}
+   "databases" {:spec databases-command-spec
+                :summary "List all databases or delete one"
+                :usage "databases [--delete <name>] [options]"}
    "agent"     {:spec agent-command-spec
                 :summary "Ask a question about a repository using AI-powered querying"
                 :usage "agent -q <question> [options] <repo-path>"
@@ -252,7 +263,7 @@
                 :usage "longbench <download|run|results> [options]"}})
 
 (def ^:private command-order
-  ["import" "analyze" "postprocess" "query" "status" "agent" "serve" "benchmark" "longbench"])
+  ["import" "analyze" "postprocess" "query" "status" "databases" "agent" "serve" "benchmark" "longbench"])
 
 ;; --- Help text generation ---
 
@@ -488,6 +499,11 @@
                         (let [result (parse-command (get-in command-registry ["serve" :spec]) rest-args)]
                           (if (:error result) result
                               (assoc result :subcommand "serve"))))
+          "databases" (if (contains-help? rest-args)
+                        {:help "databases"}
+                        (let [result (parse-command databases-command-spec rest-args)]
+                          (if (:error result) result
+                              (assoc result :subcommand "databases"))))
           (if (#{"import" "status" "analyze" "postprocess" "query"} sub)
             (parse-simple-args sub rest-args)
             {:error :unknown-subcommand :subcommand sub}))))))

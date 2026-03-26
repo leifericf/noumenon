@@ -1,0 +1,7 @@
+{:name "llm-cost-total"
+ :description "Total LLM token usage and estimated cost"
+ :query [:find (sum ?in) (sum ?out) (sum ?cost)
+         :where
+         [?tx :tx/input-tokens ?in]
+         [?tx :tx/output-tokens ?out]
+         [?tx :tx/cost-usd ?cost]]}
