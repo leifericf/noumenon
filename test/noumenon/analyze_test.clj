@@ -52,6 +52,24 @@
     (is (str/includes? result "{ {repo-name}")
         "Template metacharacters in content are escaped")))
 
+(deftest render-prompt-escapes-template-vars-in-repo-name
+  (let [template "Repo: {{repo-name}} Content: {{content}}"
+        result   (analyze/render-prompt template
+                                        {:content   "hello"
+                                         :repo-name "{{content}}"})]
+    (is (= 1 (count (re-seq #"<file-content>" result)))
+        "repo-name containing {{content}} must not trigger double-substitution")
+    (is (str/includes? result "Repo: { {content}")
+        "Template metacharacters in repo-name are escaped")))
+
+(deftest render-prompt-escapes-template-vars-in-file-path
+  (let [template "Path: {{file-path}} Repo: {{repo-name}}"
+        result   (analyze/render-prompt template
+                                        {:file-path "{{repo-name}}"
+                                         :repo-name "real-repo"})]
+    (is (not (str/includes? result "Path: real-repo"))
+        "file-path containing {{repo-name}} must not trigger double-substitution")))
+
 (deftest render-prompt-wraps-content-in-delimiters
   (let [template "{{content}}"
         result   (analyze/render-prompt template {:content "hello"})]

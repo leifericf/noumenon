@@ -184,3 +184,10 @@
 (deftest error-non-git-directory
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"git ls-tree failed"
                         (files/git-ls-tree (System/getProperty "java.io.tmpdir")))))
+
+(deftest git-ls-tree-rejects-oversized-output
+  (testing "throws when output exceeds max-git-output-bytes"
+    (with-redefs [shell/sh (fn [& _args]
+                             {:exit 0 :out (apply str (repeat 100000001 "x")) :err ""})]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exceeds.*bytes"
+                            (files/git-ls-tree "/fake/repo"))))))

@@ -74,12 +74,12 @@
                           (escape-template-vars content)
                           "\n</file-content>")]
     (-> template
-        (str/replace "{{file-path}}" (or file-path ""))
+        (str/replace "{{file-path}}" (escape-template-vars (or file-path "")))
         (str/replace "{{lang}}" (name (or lang :unknown)))
         (str/replace "{{lang-name}}" (name (or lang :unknown)))
         (str/replace "{{line-count}}" (str (or line-count 0)))
         (str/replace "{{content}}" safe-content)
-        (str/replace "{{repo-name}}" (or repo-name "")))))
+        (str/replace "{{repo-name}}" (escape-template-vars (or repo-name ""))))))
 
 ;; --- Defensive EDN parsing ---
 
@@ -300,6 +300,7 @@
                        (do (log! "  Retrying (unparseable response)...")
                            (let [r2 (try-invoke)]
                              (update r2 :usage #(llm/sum-usage (:usage result) %)))))]
+        (reset! usage-atom (:usage result))
         (if-let [analysis (:analysis result)]
           (let [tx-data (analysis->tx-data path analysis
                                            {:model-version   (or (:resolved-model result) "unknown")
@@ -406,13 +407,13 @@
                error-atom  (atom nil)
                items       (vec (map-indexed vector files))
                before-fn   (when (pos? min-delay-ms)
-                             (let [last-call (atom 0)]
+                             (let [next-allowed (atom 0)]
                                (fn [_]
-                                 (let [now   (System/currentTimeMillis)
-                                       prev  @last-call
-                                       wait  (- min-delay-ms (- now prev))]
-                                   (when (pos? wait) (Thread/sleep wait))
-                                   (reset! last-call (System/currentTimeMillis))))))]
+                                 (let [now  (System/currentTimeMillis)
+                                       slot (swap! next-allowed
+                                                   #(max (+ % min-delay-ms) now))
+                                       wait (- slot now)]
+                                   (when (pos? wait) (Thread/sleep wait))))))]
            (pipeline/run-concurrent!
             items
             {:concurrency    concurrency

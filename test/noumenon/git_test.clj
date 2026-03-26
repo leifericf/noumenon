@@ -242,6 +242,13 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"git log failed"
                         (git/git-log (System/getProperty "java.io.tmpdir")))))
 
+(deftest git-log-rejects-oversized-output
+  (testing "throws when output exceeds max-git-output-bytes"
+    (with-redefs [shell/sh (fn [& _args]
+                             {:exit 0 :out (apply str (repeat 100000001 "x")) :err ""})]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exceeds.*bytes"
+                            (git/git-log "/fake/repo"))))))
+
 (deftest error-non-existent-path
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"git log failed"
                         (git/git-log "/nonexistent/path/12345"))))

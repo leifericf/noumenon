@@ -4,6 +4,11 @@
             [datomic.client.api :as d]
             [noumenon.util :refer [log!]]))
 
+(def ^:private max-git-output-bytes
+  "Maximum bytes accepted from git subprocess output (100 MB).
+   Prevents unbounded memory consumption on very large repositories."
+  100000000)
+
 ;; --- Extension → language mapping ---
 
 (def ext->lang
@@ -66,6 +71,13 @@
     (when (not= 0 exit)
       (throw (ex-info (str "git ls-tree failed: " (str/trim err))
                       {:exit exit :repo-path (str repo-path)})))
+    (when (> (count out) max-git-output-bytes)
+      (throw (ex-info (str "git ls-tree output exceeds " max-git-output-bytes
+                           " bytes (" (count out) "). "
+                           "Repository is too large for in-memory import.")
+                      {:size (count out)
+                       :limit max-git-output-bytes
+                       :repo-path (str repo-path)})))
     out))
 
 (defn git-line-counts
