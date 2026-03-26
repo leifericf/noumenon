@@ -1,0 +1,163 @@
+[;; --- Git Objects ---
+ {:db/ident       :git/sha
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Content-addressed SHA hash of a git object"}
+
+ {:db/ident       :git/type
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Git object type — :commit, :tree, :blob, :tag"}
+
+ ;; --- Repos ---
+ {:db/ident       :repo/uri
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Repository URI"}
+
+ {:db/ident       :repo/commits
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Commits belonging to this repository"}
+
+ ;; --- Commits ---
+ {:db/ident       :commit/tree
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Tree object for this commit"}
+
+ {:db/ident       :commit/parents
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Parent commits"}
+
+ {:db/ident       :commit/message
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Commit message, truncated to 4096 chars"}
+
+ {:db/ident       :commit/author
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Person who authored the commit"}
+
+ {:db/ident       :commit/authored-at
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Timestamp when the commit was authored"}
+
+ {:db/ident       :commit/committer
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Person who committed"}
+
+ {:db/ident       :commit/committed-at
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Timestamp when the commit was committed"}
+
+ {:db/ident       :commit/changed-files
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Files changed in this commit, derived from git log --name-only"}
+
+ ;; --- Persons ---
+ {:db/ident       :person/email
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Git author/committer email"}
+
+ {:db/ident       :person/name
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Git author/committer display name"}
+
+ ;; --- Files ---
+ {:db/ident       :file/path
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "File path relative to repo root"}
+
+ {:db/ident       :file/ext
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "File extension"}
+
+ {:db/ident       :file/lang
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Detected programming language"}
+
+ {:db/ident       :file/lines
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Line count"}
+
+ {:db/ident       :file/size
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "File size in bytes"}
+
+ {:db/ident       :file/directory
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Parent directory"}
+
+ ;; --- Directories ---
+ {:db/ident       :dir/path
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Directory path relative to repo root"}
+
+ {:db/ident       :dir/parent
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Parent directory"}
+
+ ;; --- Trees ---
+ {:db/ident       :tree/nodes
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/isComponent true
+  :db/doc         "Tree node children (component)"}
+
+ {:db/ident       :node/filename
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Node filename within tree"}
+
+ {:db/ident       :node/object
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Git object this node references"}
+
+ {:db/ident       :node/paths
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/doc         "File entities this node maps to"}
+
+ ;; --- Transaction Metadata ---
+ {:db/ident       :tx/op
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Transaction operation — :import, :analyze, :llm-analyze"}
+
+ {:db/ident       :tx/source
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Data source — :deterministic or :llm"}
+
+ {:db/ident       :tx/analyzer
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Analyzer name and version"}
+
+ {:db/ident       :tx/model
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "LLM model identifier for LLM-sourced transactions"}]

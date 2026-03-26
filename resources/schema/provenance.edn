@@ -1,0 +1,19 @@
+[{:db/ident       :prov/confidence
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "LLM confidence score, 0.0–1.0"}
+
+ {:db/ident       :prov/model-version
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Specific LLM model version identifier"}
+
+ {:db/ident       :prov/prompt-hash
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "SHA hash of prompt template used"}
+
+ {:db/ident       :prov/analyzed-at
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Timestamp when LLM analysis was performed"}]

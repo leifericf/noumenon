@@ -1,0 +1,123 @@
+[;; --- Code Segments ---
+ {:db/ident       :code/name
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Function/struct/type name"}
+
+ {:db/ident       :code/file
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "File containing this code segment"}
+
+ ;; Composite identity: file + name uniquely identify a code segment
+ {:db/ident       :code/file+name
+  :db/valueType   :db.type/tuple
+  :db/tupleAttrs  [:code/file :code/name]
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Composite identity for code segments — file ref + name"}
+
+ {:db/ident       :code/text
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Source text, up to 4096 chars; longer code chunked via :chunk/"}
+
+ {:db/ident       :code/kind
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Segment kind — :function, :struct, :enum, :macro, :typedef, :global, :include"}
+
+ {:db/ident       :code/line-start
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Starting line number"}
+
+ {:db/ident       :code/line-end
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Ending line number"}
+
+ {:db/ident       :code/calls
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Outbound call references to other code segments"}
+
+ {:db/ident       :code/called-by
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Inbound call references from other code segments"}
+
+ ;; --- Architectural Layers ---
+ {:db/ident       :arch/layer
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Architectural layer — :core, :subsystem, :driver, :api, :util"}
+
+ {:db/ident       :arch/subsystem
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Subsystem identifier, e.g. scheduler, vfs, ext4"}
+
+ {:db/ident       :arch/component
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Component this entity belongs to"}
+
+ ;; --- Components ---
+ {:db/ident       :component/name
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Logical component name"}
+
+ {:db/ident       :component/depends-on
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Component dependencies"}
+
+ {:db/ident       :component/files
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Files belonging to this component"}
+
+ ;; --- Semantic Annotations (LLM-generated) ---
+ {:db/ident       :sem/summary
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Plain-English summary, max 4096 chars"}
+
+ {:db/ident       :sem/purpose
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Purpose/rationale for code existence"}
+
+ {:db/ident       :sem/tags
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Semantic tags — :error-handling, :locking, :allocation, :io, :parsing, etc."}
+
+ {:db/ident       :sem/complexity
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Complexity rating — :trivial, :simple, :moderate, :complex, :very-complex"}
+
+ {:db/ident       :sem/patterns
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Design patterns — :callback, :state-machine, :producer-consumer, :ref-counting"}
+
+ ;; --- Chunks (for long content) ---
+ {:db/ident       :chunk/parent
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Parent entity (File or CodeSegment)"}
+
+ {:db/ident       :chunk/index
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Sequence number within parent"}
+
+ {:db/ident       :chunk/text
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Text content of this chunk, up to 4096 chars"}]

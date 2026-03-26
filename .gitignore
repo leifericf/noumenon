@@ -1,0 +1,36 @@
+# Clojure
+.cpcache/
+.nrepl-port
+*.jar
+*.class
+target/
+
+# Datomic Local
+.datomic/
+
+# Editor / IDE
+.clj-kondo/
+.lsp/
+.idea/
+*.iml
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Claude Code
+.claude/*
+!.claude/artifacts/
+
+# Test repos
+test-repos/
+
+# Noumenon data
+data/
