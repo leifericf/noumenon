@@ -67,7 +67,7 @@
 
 (def ^:private concurrency-flags
   [{:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
-    :desc "Parallel workers, 1-20 (default: 4)"
+    :desc "Parallel workers, 1-20 (default: 3)"
     :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value}
    {:flag "--min-delay" :key :min-delay :parse :non-neg-int
     :desc "Min delay between LLM requests in ms (default: 0)"
@@ -97,16 +97,18 @@
    :error-missing :missing-db-dir-value})
 
 (def ^:private analyze-flags
-  [{:flag "--model" :key :model :parse :string
-    :desc "Model alias (e.g. sonnet, haiku, opus)"
-    :error-missing :missing-model-value}
-   {:flag "--provider" :key :provider :parse :string
-    :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
-    :error-invalid :invalid-provider :error-missing :missing-provider-value}
-   db-dir-flag
-   {:flag "--verbose" :key :verbose :parse :bool
-    :desc "Log verbose output to stderr"}
-   {:flag "-v" :key :verbose :parse :bool}])
+  (vec (concat
+        [{:flag "--model" :key :model :parse :string
+          :desc "Model alias (e.g. sonnet, haiku, opus)"
+          :error-missing :missing-model-value}
+         {:flag "--provider" :key :provider :parse :string
+          :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
+          :error-invalid :invalid-provider :error-missing :missing-provider-value}
+         db-dir-flag
+         {:flag "--verbose" :key :verbose :parse :bool
+          :desc "Log verbose output to stderr"}
+         {:flag "-v" :key :verbose :parse :bool}]
+        concurrency-flags)))
 
 ;; --- Declarative command specs ---
 

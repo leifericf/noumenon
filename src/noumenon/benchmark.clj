@@ -740,7 +740,7 @@
   [{:keys [checkpoint-dir budget judge-llm model-config concurrency min-delay-ms mode]
     :or   {checkpoint-dir "data/benchmarks/runs"
            budget         {}
-           concurrency    4
+           concurrency    3
            min-delay-ms   0}} invoke-llm]
   {:checkpoint-dir checkpoint-dir
    :budget         budget

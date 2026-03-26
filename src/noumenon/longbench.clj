@@ -333,7 +333,7 @@
   [invoke-llm & {:keys [checkpoint-dir budget concurrency min-delay-ms]
                  :or   {checkpoint-dir "data/longbench/runs"
                         budget         {}
-                        concurrency    4
+                        concurrency    3
                         min-delay-ms   0}}]
   (let [questions    (load-code-repo-questions)
         total        (count questions)
@@ -366,7 +366,7 @@
   [invoke-llm prior-checkpoint & {:keys [checkpoint-dir budget concurrency min-delay-ms]
                                   :or   {checkpoint-dir "data/longbench/runs"
                                          budget         {}
-                                         concurrency    4
+                                         concurrency    3
                                          min-delay-ms   0}}]
   (let [questions     (load-code-repo-questions)
         total         (count questions)

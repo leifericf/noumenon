@@ -123,7 +123,7 @@
 
 (defn do-analyze
   "Run the analyze subcommand. Returns {:exit n :result map-or-nil}."
-  [{:keys [repo-path model provider] :as opts}]
+  [{:keys [repo-path model provider concurrency min-delay] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
@@ -139,7 +139,9 @@
                                (llm/make-invoke-fn provider-kw {:model model-id}))]
               {:exit   0
                :result (analyze/analyze-repo! conn repo-path invoke-llm
-                                              {:model-id model-id})})))
+                                              {:model-id     model-id
+                                               :concurrency  (or concurrency 3)
+                                               :min-delay-ms (or min-delay 0)})})))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
           {:exit 1})))))
@@ -338,7 +340,7 @@
                           :budget (:budget opts)
                           :mode (:mode opts)
                           :canary (:canary opts)
-                          :concurrency (or (:concurrency opts) 4)
+                          :concurrency (or (:concurrency opts) 3)
                           :min-delay-ms (or (:min-delay opts) 0))
     {:exit 0}
     (catch Exception e
@@ -464,14 +466,14 @@
                 (do (longbench/run-longbench-resume! invoke-llm cp
                                                      :checkpoint-dir checkpoint-dir
                                                      :budget budget
-                                                     :concurrency (or concurrency 4)
+                                                     :concurrency (or concurrency 3)
                                                      :min-delay-ms (or min-delay 0))
                     {:exit 0})))))
         (do
           (longbench/run-longbench! invoke-llm
                                     :checkpoint-dir checkpoint-dir
                                     :budget budget
-                                    :concurrency (or concurrency 4)
+                                    :concurrency (or concurrency 3)
                                     :min-delay-ms (or min-delay 0))
           {:exit 0})))
     (catch clojure.lang.ExceptionInfo e

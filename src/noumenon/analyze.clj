@@ -5,6 +5,7 @@
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.llm :as llm]
+            [noumenon.pipeline :as pipeline]
             [noumenon.util :as util :refer [escape-template-vars log! sha256-hex]])
   (:import [java.util Date]))
 
@@ -323,32 +324,28 @@
       :else         (format "%.1fh" (/ secs 3600.0)))))
 
 (defn- analyze-one-file!
-  "Analyze one file with progress logging and ETA. Returns updated accumulator."
-  [conn repo-path analysis-opts total acc [idx file-map]]
-  (let [elapsed-so-far (:elapsed-ms acc 0)
-        eta-str        (when (and (> idx 1) (pos? elapsed-so-far))
-                         (let [avg-ms    (/ elapsed-so-far (double idx))
-                               remaining (- total idx)]
-                           (str " eta " (format-eta (* avg-ms remaining)))))]
-    (binding [*out* *err*]
-      (print (str "  [" (inc idx) "/" total (or eta-str "") "] "
-                  (:file/path file-map) " ... "))
-      (flush)))
+  "Analyze one file with progress logging. Updates stats-atom in place."
+  [conn repo-path analysis-opts total stats-atom [_idx file-map]]
   (let [start  (System/currentTimeMillis)
         result (analyze-file! conn repo-path file-map analysis-opts)
         {:keys [status usage truncated?]} result
-        dur    (- (System/currentTimeMillis) start)]
-    (log! (str (format "%.1f" (/ dur 1000.0)) "s "
+        dur    (- (System/currentTimeMillis) start)
+        n      (swap! stats-atom
+                      (fn [s]
+                        (-> s
+                            (update :started (fnil inc 0))
+                            (update status (fnil inc 0))
+                            (update :elapsed-ms (fnil + 0) dur)
+                            (update :total-usage llm/sum-usage (or usage llm/zero-usage)))))]
+    (log! (str "  [" (:started n) "/" total "] "
+               (:file/path file-map) " "
+               (format "%.1f" (/ dur 1000.0)) "s "
                (name status)
                (when usage
                  (str " tokens=" (:input-tokens usage)
                       "/" (:output-tokens usage)))))
     (when truncated?
-      (log! (str "  Warning: truncated " (:file/path file-map))))
-    (-> acc
-        (update status (fnil inc 0))
-        (update :elapsed-ms (fnil + 0) dur)
-        (update :total-usage llm/sum-usage (or usage llm/zero-usage)))))
+      (log! (str "  Warning: truncated " (:file/path file-map))))))
 
 (def ^:private avg-input-tokens-per-file 1250)
 (def ^:private avg-output-tokens-per-file 217)
@@ -380,10 +377,11 @@
 (defn analyze-repo!
   "Analyze all source files in repo-path that need analysis.
    `invoke-llm` is a function (prompt -> {:text string :usage map}) for testability.
-   `opts` may include :model-id for cost estimation.
+   `opts` may include :model-id, :concurrency, :min-delay-ms.
    Returns summary map with :total-usage."
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
-  ([conn repo-path invoke-llm {:keys [model-id]}]
+  ([conn repo-path invoke-llm {:keys [model-id concurrency min-delay-ms]
+                               :or   {concurrency 3 min-delay-ms 0}}]
    (let [db            (d/db conn)
          files         (files-needing-analysis db)
          total         (count files)
@@ -398,25 +396,47 @@
             :files-parse-errored 0 :files-errored 0
             :elapsed-ms 0 :total-usage llm/zero-usage})
        (do
-         (log! (str "Analyzing " total " files..."))
+         (log! (str "Analyzing " total " files"
+                    (when (> concurrency 1) (str " (concurrency=" concurrency ")"))
+                    "..."))
          (estimate-banner total model-id)
-         (let [results (reduce (partial analyze-one-file! conn repo-path analysis-opts total)
-                               {:ok 0 :parse-error 0 :error 0 :elapsed-ms 0 :total-usage llm/zero-usage}
-                               (map-indexed vector files))
-               elapsed (- (System/currentTimeMillis) start-ms)
-               tu      (:total-usage results)
-               cost    (:cost-usd tu 0.0)]
-           (log! (str "Done. " (:ok results 0) " analyzed"
-                      (when (pos? (:parse-error results 0))
-                        (str ", " (:parse-error results 0) " parse errors (retryable)"))
-                      (when (pos? (:error results 0))
-                        (str ", " (:error results 0) " errors"))
-                      ". tokens=" (:input-tokens tu) "/" (:output-tokens tu)
-                      (when (pos? cost) (str " cost=" (format-cost cost)))
-                      " (" (format-eta elapsed) ")"))
-           {:files-analyzed      (:ok results 0)
-            :files-skipped       0
-            :files-parse-errored (:parse-error results 0)
-            :files-errored       (:error results 0)
-            :elapsed-ms          elapsed
-            :total-usage         tu}))))))
+         (let [stats-atom  (atom {:ok 0 :parse-error 0 :error 0 :started 0
+                                  :elapsed-ms 0 :total-usage llm/zero-usage})
+               stop-flag   (atom nil)
+               error-atom  (atom nil)
+               items       (vec (map-indexed vector files))
+               before-fn   (when (pos? min-delay-ms)
+                             (let [last-call (atom 0)]
+                               (fn [_]
+                                 (let [now   (System/currentTimeMillis)
+                                       prev  @last-call
+                                       wait  (- min-delay-ms (- now prev))]
+                                   (when (pos? wait) (Thread/sleep wait))
+                                   (reset! last-call (System/currentTimeMillis))))))]
+           (pipeline/run-concurrent!
+            items
+            {:concurrency    concurrency
+             :stop-flag      stop-flag
+             :error-atom     error-atom
+             :before-item!   before-fn
+             :process-item!  (fn [item]
+                               (analyze-one-file! conn repo-path analysis-opts
+                                                  total stats-atom item))})
+           (let [results @stats-atom
+                 elapsed (- (System/currentTimeMillis) start-ms)
+                 tu      (:total-usage results)
+                 cost    (:cost-usd tu 0.0)]
+             (log! (str "Done. " (:ok results 0) " analyzed"
+                        (when (pos? (:parse-error results 0))
+                          (str ", " (:parse-error results 0) " parse errors (retryable)"))
+                        (when (pos? (:error results 0))
+                          (str ", " (:error results 0) " errors"))
+                        ". tokens=" (:input-tokens tu) "/" (:output-tokens tu)
+                        (when (pos? cost) (str " cost=" (format-cost cost)))
+                        " (" (format-eta elapsed) ")"))
+             {:files-analyzed      (:ok results 0)
+              :files-skipped       0
+              :files-parse-errored (:parse-error results 0)
+              :files-errored       (:error results 0)
+              :elapsed-ms          elapsed
+              :total-usage         tu})))))))
