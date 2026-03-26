@@ -85,6 +85,31 @@
   (is (= [] (git/parse-commits nil)))
   (is (= [] (git/parse-commits "   "))))
 
+(deftest parse-commit-body-with-null-bytes
+  (testing "null bytes in commit body do not shift numstat field"
+    (let [;; Build a record manually with a null byte embedded in the body.
+          ;; make-record places message between %x00 delimiters, so an
+          ;; embedded \x00 would create an extra split field.
+          log     (str "\u0001"
+                       "deadbeef" "\u0000"
+                       "" "\u0000"
+                       "Author" "\u0000"
+                       "a@x.com" "\u0000"
+                       iso-ts "\u0000"
+                       "Author" "\u0000"
+                       "a@x.com" "\u0000"
+                       iso-ts "\u0000"
+                       "body with\u0000embedded null\n\u0000"
+                       "\n10\t5\tsrc/a.clj\n")
+          commits (git/parse-commits log)
+          c       (first commits)]
+      (is (= 1 (count commits)))
+      (is (= "deadbeef" (:sha c)))
+      (is (= "body with\u0000embedded null" (:message c)))
+      (is (= ["src/a.clj"] (:changed-files c)))
+      (is (= 10 (:additions c)))
+      (is (= 5 (:deletions c))))))
+
 (deftest parse-commit-no-changed-files
   (let [log     (make-record "sha1" "" "A" "a@x.com" iso-ts "A" "a@x.com" iso-ts "init" nil)
         commits (git/parse-commits log)]
