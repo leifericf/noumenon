@@ -550,6 +550,11 @@ end")
          all-results (into std-results c-results)
          final       (tally-and-transact! conn all-results)
          final       (update final :batch #(flush-batch! conn %))
+         ;; Always record that postprocess ran (even if 0 edges found)
+         _           (when (zero? (:imports-resolved final))
+                       (d/transact conn {:tx-data [{:db/id "datomic.tx"
+                                                    :tx/op :postprocess
+                                                    :tx/source :deterministic}]}))
          {:keys [files-processed imports-resolved files-errored]} final
          files-skipped (reduce + (map :file-count skipped-tools))]
      (log! (str "  Postprocessed " files-processed " files, "
