@@ -100,11 +100,14 @@
                   :properties repo-path-prop
                   :required ["repo_path"]}}
    {:name "noumenon_query"
-    :description "Run a named Datalog query against the knowledge graph"
+    :description "Run a named Datalog query against the knowledge graph. Some queries require params — use noumenon_list_queries to see which."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"query_name" {:type "string"
-                                                    :description "Named query — call noumenon_list_queries first to see available names"}})
+                                                    :description "Named query — call noumenon_list_queries first to see available names"}
+                                      "params" {:type "object"
+                                                :description "Optional parameters for parameterized queries (string keys and values)"
+                                                :additionalProperties {:type "string"}}})
                   :required ["query_name" "repo_path"]}}
    {:name "noumenon_list_queries"
     :description "List available named Datalog queries"
@@ -126,7 +129,7 @@
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"question" {:type "string" :description "Question to ask about the repository"}
-                                      "provider" {:type "string" :description "LLM provider: glm, claude, claude-api, or claude-cli"}
+                                      "provider" {:type "string" :description "LLM provider: glm, claude-api, or claude-cli (aliases: claude = claude-cli)"}
                                       "model" {:type "string" :description "Model alias (e.g. sonnet, haiku, opus)"}
                                       "max_iterations" {:type "integer" :description "Max query iterations (default: 10, max: 50)"}})
                   :required ["question" "repo_path"]}}])
@@ -180,12 +183,16 @@
 (defn- handle-query [args defaults]
   (with-conn args defaults
     (fn [{:keys [db]}]
-      (let [qname  (args "query_name")
-            result (query/run-named-query db qname)]
+      (let [params (args "params")
+            result (query/run-named-query db (args "query_name") params)]
         (if (:ok result)
-          (let [rows (:ok result)]
-            (tool-result (str "Query '" qname "': " (count rows) " results\n"
-                              (pr-str rows))))
+          (let [rows       (:ok result)
+                query-name (args "query_name")
+                query-def  (query/load-named-query query-name)
+                header     (when-let [cols (:columns query-def)]
+                             (str "Columns: " (str/join ", " cols) "\n"))
+                summary    (str "Query '" query-name "': " (count rows) " results\n")]
+            (tool-result (str summary header (pr-str rows))))
           (tool-error (:error result)))))))
 
 (defn- handle-list-queries [_args _defaults]
