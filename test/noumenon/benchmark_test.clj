@@ -5,6 +5,23 @@
             [noumenon.benchmark :as bench]
             [noumenon.query :as query]))
 
+;; --- Helper macro ---
+
+(def ^:private test-qs
+  [{:id :t01 :question "Q1?" :category :test :query-name "test" :rubric "r1"}
+   {:id :t02 :question "Q2?" :category :test :query-name "test" :rubric "r2"}])
+
+(defmacro with-bench-mocks
+  "Wrap body with standard benchmark mocks: load-questions, query-context,
+   raw-context, repo-head-sha. Accepts optional :questions override."
+  [opts & body]
+  (let [qs (or (:questions opts) `test-qs)]
+    `(with-redefs [bench/load-questions (fn [] ~qs)
+                   bench/query-context  (fn [_db# _qn#] "mock query context")
+                   bench/raw-context    (fn [_rp#] "mock raw context")
+                   bench/repo-head-sha  (fn [_rp#] "abc123")]
+       ~@body)))
+
 ;; --- Tier 0: Pure function tests ---
 
 (deftest load-questions-returns-10
@@ -254,13 +271,7 @@
 (deftest full-run-with-mock-llm-produces-checkpoint
   (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
                           (str "bench-run-" (System/currentTimeMillis))))]
-    (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                                :query-name "test" :rubric "r1"}
-                                               {:id :t02 :question "Q2?" :category :test
-                                                :query-name "test" :rubric "r2"}])
-                  bench/query-context  (fn [_db _qn] "mock query context")
-                  bench/raw-context    (fn [_rp] "mock raw context")
-                  bench/repo-head-sha  (fn [_rp] "abc123")]
+    (with-bench-mocks {}
       (let [result (bench/run-benchmark! nil "." mock-llm :checkpoint-dir dir :concurrency 1)]
         (testing "returns expected keys"
           (is (string? (:run-id result)))
@@ -283,13 +294,7 @@
           (.delete f))))))
 
 (deftest simulated-interruption-preserves-checkpoint
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}
-                                             {:id :t02 :question "Q2?" :category :test
-                                              :query-name "test" :rubric "r2"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {}
     (let [dir        (str (io/file (System/getProperty "java.io.tmpdir")
                                    (str "bench-intr-" (System/currentTimeMillis))))
           calls      (atom 0)
@@ -372,13 +377,7 @@
 ;; --- Tier 1: Resume integration ---
 
 (deftest resume-skips-completed-stages
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}
-                                             {:id :t02 :question "Q2?" :category :test
-                                              :query-name "test" :rubric "r2"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {}
     (let [dir   (str (io/file (System/getProperty "java.io.tmpdir")
                               (str "bench-resume-" (System/currentTimeMillis))))
           calls (atom 0)
@@ -413,11 +412,8 @@
             (.delete f)))))))
 
 (deftest resume-all-complete-no-llm-calls
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] (throw (ex-info "Should not be called" {})))
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {:questions [{:id :t01 :question "Q1?" :category :test
+                                  :query-name "test" :rubric "r1"}]}
     (let [dir   (str (io/file (System/getProperty "java.io.tmpdir")
                               (str "bench-allcomplete-" (System/currentTimeMillis))))
           calls (atom 0)
@@ -507,15 +503,12 @@
 ;; --- Tier 1: Budget integration ---
 
 (deftest max-questions-stops-at-correct-point
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}
-                                             {:id :t02 :question "Q2?" :category :test
-                                              :query-name "test" :rubric "r2"}
-                                             {:id :t03 :question "Q3?" :category :test
-                                              :query-name "test" :rubric "r3"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {:questions [{:id :t01 :question "Q1?" :category :test
+                                  :query-name "test" :rubric "r1"}
+                                 {:id :t02 :question "Q2?" :category :test
+                                  :query-name "test" :rubric "r2"}
+                                 {:id :t03 :question "Q3?" :category :test
+                                  :query-name "test" :rubric "r3"}]}
     (let [dir   (str (io/file (System/getProperty "java.io.tmpdir")
                               (str "bench-budget-" (System/currentTimeMillis))))
           calls (atom 0)]
@@ -541,15 +534,12 @@
             (.delete f)))))))
 
 (deftest budget-limited-run-is-resumable
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}
-                                             {:id :t02 :question "Q2?" :category :test
-                                              :query-name "test" :rubric "r2"}
-                                             {:id :t03 :question "Q3?" :category :test
-                                              :query-name "test" :rubric "r3"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {:questions [{:id :t01 :question "Q1?" :category :test
+                                  :query-name "test" :rubric "r1"}
+                                 {:id :t02 :question "Q2?" :category :test
+                                  :query-name "test" :rubric "r2"}
+                                 {:id :t03 :question "Q3?" :category :test
+                                  :query-name "test" :rubric "r3"}]}
     (let [dir      (str (io/file (System/getProperty "java.io.tmpdir")
                                  (str "bench-budgetresume-" (System/currentTimeMillis))))
           mock-fn  (fn [prompt]
@@ -611,11 +601,8 @@
 ;; --- Tier 1: Usage in checkpoint ---
 
 (deftest checkpoint-contains-usage
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {:questions [{:id :t01 :question "Q1?" :category :test
+                                  :query-name "test" :rubric "r1"}]}
     (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
                             (str "bench-usage-" (System/currentTimeMillis))))]
       (try
@@ -638,11 +625,8 @@
 ;; --- Tier 0: Model/provider configurability ---
 
 (deftest model-config-stored-in-checkpoint-metadata
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {:questions [{:id :t01 :question "Q1?" :category :test
+                                  :query-name "test" :rubric "r1"}]}
     (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
                             (str "bench-modelcfg-" (System/currentTimeMillis))))
           mc  {:model "haiku" :judge-model "sonnet" :provider "claude"}]
@@ -669,11 +653,8 @@
     (is (= [:model-config] (mapv :field (:mismatches result))))))
 
 (deftest judge-llm-used-for-judge-stages
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {:questions [{:id :t01 :question "Q1?" :category :test
+                                  :query-name "test" :rubric "r1"}]}
     (let [dir          (str (io/file (System/getProperty "java.io.tmpdir")
                                      (str "bench-judgellm-" (System/currentTimeMillis))))
           answer-calls (atom 0)
@@ -697,11 +678,8 @@
 ;; --- Tier 0: Prompt hashes ---
 
 (deftest checkpoint-contains-prompt-hashes
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {:questions [{:id :t01 :question "Q1?" :category :test
+                                  :query-name "test" :rubric "r1"}]}
     (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
                             (str "bench-hash-" (System/currentTimeMillis))))]
       (try
@@ -736,13 +714,7 @@
 ;; --- Tier 1: Cost budget integration ---
 
 (deftest max-cost-stops-run
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}
-                                             {:id :t02 :question "Q2?" :category :test
-                                              :query-name "test" :rubric "r2"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {}
     (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
                             (str "bench-maxcost-" (System/currentTimeMillis))))
           ;; Each call costs 0.001, 4 calls per question = 0.004
@@ -768,13 +740,7 @@
 ;; --- Tier 1: Concurrent execution ---
 
 (deftest concurrent-run-completes-all-stages
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}
-                                             {:id :t02 :question "Q2?" :category :test
-                                              :query-name "test" :rubric "r2"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {}
     (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
                             (str "bench-conc-" (System/currentTimeMillis))))]
       (try
@@ -796,13 +762,7 @@
             (.delete f)))))))
 
 (deftest resume-after-concurrent-run
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}
-                                             {:id :t02 :question "Q2?" :category :test
-                                              :query-name "test" :rubric "r2"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {}
     (let [dir        (str (io/file (System/getProperty "java.io.tmpdir")
                                    (str "bench-concresume-" (System/currentTimeMillis))))
           fail-calls (atom 0)
@@ -833,13 +793,7 @@
             (.delete f)))))))
 
 (deftest budget-with-concurrency
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}
-                                             {:id :t02 :question "Q2?" :category :test
-                                              :query-name "test" :rubric "r2"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {}
     (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
                             (str "bench-concbudget-" (System/currentTimeMillis))))
           expensive-llm (fn [prompt]
@@ -863,13 +817,7 @@
             (.delete f)))))))
 
 (deftest llm-failure-during-concurrent-run
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}
-                                             {:id :t02 :question "Q2?" :category :test
-                                              :query-name "test" :rubric "r2"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {}
     (let [dir   (str (io/file (System/getProperty "java.io.tmpdir")
                               (str "bench-concfail-" (System/currentTimeMillis))))
           calls (atom 0)
@@ -891,13 +839,7 @@
             (.delete f)))))))
 
 (deftest concurrency-1-matches-sequential
-  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
-                                              :query-name "test" :rubric "r1"}
-                                             {:id :t02 :question "Q2?" :category :test
-                                              :query-name "test" :rubric "r2"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
-                bench/raw-context    (fn [_rp] "mock raw context")
-                bench/repo-head-sha  (fn [_rp] "abc123")]
+  (with-bench-mocks {}
     (let [dir1   (str (io/file (System/getProperty "java.io.tmpdir")
                                (str "bench-seq1-" (System/currentTimeMillis))))
           dir2   (str (io/file (System/getProperty "java.io.tmpdir")
@@ -1240,3 +1182,51 @@
         (finally
           (doseq [f (reverse (file-seq (io/file dir)))]
             (.delete f)))))))
+
+;; --- Tier 0: Rate gate ---
+
+(deftest acquire-rate-gate-enforces-minimum-delay
+  (let [gate (atom 0)
+        delay-ms 50]
+    (bench/acquire-rate-gate! gate delay-ms)
+    (let [t1 (System/currentTimeMillis)]
+      (bench/acquire-rate-gate! gate delay-ms)
+      (let [elapsed (- (System/currentTimeMillis) t1)]
+        (is (>= elapsed (- delay-ms 5))
+            (str "Expected at least ~" delay-ms "ms delay, got " elapsed "ms"))))))
+
+(deftest acquire-rate-gate-zero-delay-no-block
+  (let [gate (atom 0)
+        t1   (System/currentTimeMillis)]
+    (bench/acquire-rate-gate! gate 0)
+    (bench/acquire-rate-gate! gate 0)
+    (let [elapsed (- (System/currentTimeMillis) t1)]
+      (is (< elapsed 20) "Zero delay should not block"))))
+
+;; --- Tier 1: run-stage LLM path ---
+
+(deftest run-stage-answer-with-mock-llm
+  (let [q        {:id :t01 :question "What is Ring?" :query-name "files-by-complexity"
+                  :rubric "r" :category :test}
+        rubric   (bench/load-rubric)
+        mock-fn  (fn [_prompt]
+                   {:text "Ring is a web library" :usage mock-usage :resolved-model "mock-v1"})
+        result   (with-redefs [bench/query-context (fn [_db _qn] "mock context")]
+                   (bench/run-stage [:t01 :query :answer] q rubric nil nil {} mock-fn mock-fn))]
+    (is (= :ok (:status result)))
+    (is (= "Ring is a web library" (:result result)))
+    (is (= "mock-v1" (:resolved-model result)))
+    (is (some? (:completed-at result)))))
+
+(deftest run-stage-judge-with-mock-llm
+  (let [q        {:id :t01 :question "What is Ring?" :query-name "files-by-complexity"
+                  :rubric "Explain the library" :category :test}
+        rubric   (bench/load-rubric)
+        stages   {[:t01 :query :answer] {:status :ok :result "Ring is a web library"}}
+        mock-fn  (fn [_prompt]
+                   {:text (pr-str {:score :correct :reasoning "Good answer"})
+                    :usage mock-usage :resolved-model "mock-v1"})
+        result   (bench/run-stage [:t01 :query :judge] q rubric nil nil stages mock-fn mock-fn)]
+    (is (= :ok (:status result)))
+    (is (= :correct (get-in result [:result :score])))
+    (is (= "Good answer" (get-in result [:result :reasoning])))))

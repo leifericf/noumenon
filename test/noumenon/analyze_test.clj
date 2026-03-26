@@ -135,6 +135,14 @@
     (is (string? (:template pt)))
     (is (str/includes? (:template pt) "{{file-path}}"))))
 
+;; --- Tier 0: git-show ---
+
+(deftest git-show-returns-file-content
+  (let [content (analyze/git-show (System/getProperty "user.dir") "deps.edn")]
+    (is (string? content))
+    (is (not (str/blank? content)))
+    (is (str/includes? content "deps"))))
+
 ;; --- Tier 1: Integration tests ---
 
 (defn- make-conn

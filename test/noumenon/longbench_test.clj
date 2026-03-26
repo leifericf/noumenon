@@ -1,5 +1,6 @@
 (ns noumenon.longbench-test
   (:require [clojure.test :refer [deftest is testing]]
+            [noumenon.benchmark :as bench]
             [noumenon.longbench :as lb]))
 
 ;; --- Tier 0: Pure function tests ---
@@ -209,5 +210,52 @@
             (is (some? (:run-id result)))))
         (finally
           ;; Cleanup
+          (doseq [f (reverse (file-seq (java.io.File. tmp-dir)))]
+            (.delete f)))))))
+
+(deftest run-longbench-resume-skips-completed
+  (testing "resume skips already-completed questions, runs only remaining"
+    (let [call-count (atom 0)
+          mock-llm   (fn [_msgs]
+                       (swap! call-count inc)
+                       {:text  "The correct answer is (B)"
+                        :usage {:input-tokens 100 :output-tokens 10
+                                :cost-usd 0.001 :duration-ms 50}
+                        :model "mock"})
+          test-qs    [{:_id "q1" :domain "Code Repository Understanding"
+                       :difficulty "easy" :length "short"
+                       :question "Q1?" :choice_A "A" :choice_B "B"
+                       :choice_C "C" :choice_D "D" :answer "B"
+                       :context "code1"}
+                      {:_id "q2" :domain "Code Repository Understanding"
+                       :difficulty "hard" :length "long"
+                       :question "Q2?" :choice_A "A" :choice_B "B"
+                       :choice_C "C" :choice_D "D" :answer "A"
+                       :context "code2"}
+                      {:_id "q3" :domain "Code Repository Understanding"
+                       :difficulty "easy" :length "medium"
+                       :question "Q3?" :choice_A "A" :choice_B "B"
+                       :choice_C "C" :choice_D "D" :answer "B"
+                       :context "code3"}]
+          tmp-dir    (str (System/getProperty "java.io.tmpdir")
+                          "/longbench-resume-test-" (System/currentTimeMillis))
+          checkpoint {:run-id   (bench/generate-run-id)
+                      :metadata {:started-at (java.util.Date.)
+                                 :budget     {}}
+                      :results  {"q1" {:prediction "B" :correct true
+                                       :usage {:input-tokens 100 :output-tokens 10
+                                               :cost-usd 0.001 :duration-ms 50}}}}]
+      (try
+        (with-redefs [lb/load-code-repo-questions (constantly test-qs)]
+          (let [result (lb/run-longbench-resume! mock-llm checkpoint
+                                                 :checkpoint-dir tmp-dir
+                                                 :concurrency 1)]
+            (testing "LLM called only for remaining questions (q2, q3)"
+              (is (= 2 @call-count)))
+            (testing "all 3 questions in final results"
+              (is (= 3 (count (:results result)))))
+            (testing "aggregate covers all completed"
+              (is (= 3 (:total (:aggregate result)))))))
+        (finally
           (doseq [f (reverse (file-seq (java.io.File. tmp-dir)))]
             (.delete f)))))))

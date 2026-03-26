@@ -359,3 +359,15 @@
   (let [{:keys [exit stderr]} (run-capturing ["agent" "question" "/tmp/nonexistent-repo-xyz"])]
     (is (= 1 exit))
     (is (str/includes? stderr "No database found"))))
+
+;; --- Tier 1: Query subcommand integration ---
+
+(deftest query-files-by-complexity
+  (let [tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-query-test-" (random-uuid))
+        _       (run-capturing ["import" "--db-dir" tmp-dir repo-path])
+        {:keys [exit stdout stderr]} (run-capturing ["query" "files-by-complexity"
+                                                     "--db-dir" tmp-dir repo-path])]
+    (testing "query exits successfully"
+      (is (= 0 exit) (str "Expected exit 0, stderr: " stderr)))
+    (testing "stdout contains query results"
+      (is (not (str/blank? stdout))))))

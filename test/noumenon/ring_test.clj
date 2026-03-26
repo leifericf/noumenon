@@ -19,7 +19,7 @@
 
 (def ^:private db-dir
   (str (.getAbsolutePath (io/file (System/getProperty "java.io.tmpdir")))
-       "/noumenon-ring-test-" (System/currentTimeMillis)))
+       "/noumenon-ring-test-" (random-uuid)))
 
 (defn- ensure-ring-clone! []
   (when-not (.exists (io/file ring-dir ".git"))
