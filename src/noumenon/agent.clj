@@ -44,6 +44,17 @@
        (not (allowed-predicates sym))
        (str/includes? (str sym) ".")))
 
+(defn- dot-interop-form?
+  "True if form is a dot-interop list like (. Foo bar) or (.. Foo bar baz),
+   or contains a symbol starting with '.' (e.g. .method)."
+  [form]
+  (and (seq? form)
+       (symbol? (first form))
+       (let [head (str (first form))]
+         (or (= "." head)
+             (= ".." head)
+             (str/starts-with? head ".")))))
+
 (defn- predicate-clause?
   "True if form is a Datalog predicate/function clause: a vector wrapping a single list."
   [form]
@@ -62,13 +73,17 @@
    predicate/function clauses and a deny-list + Java class check as fallback.
    Returns nil if safe, or an error string if unsafe."
   [query-form]
-  (or (->> (tree-seq coll? seq query-form)
-           (some #(cond
-                    (banned-form? %)        (str "Blocked symbol in query: " %)
-                    (java-class-reference? %) (str "Blocked symbol in query: " %))))
-      (->> (extract-predicate-syms query-form)
-           (some #(when-not (allowed-predicates %)
-                    (str "Predicate not on allowlist: " %))))))
+  (let [forms (tree-seq coll? seq query-form)]
+    (or (some #(when (dot-interop-form? %)
+                 (str "Blocked dot-interop in query: " (first %)))
+              forms)
+        (->> forms
+             (filter symbol?)
+             (some #(when (or (banned-symbols %) (java-class-reference? %))
+                      (str "Blocked symbol in query: " %))))
+        (->> (extract-predicate-syms query-form)
+             (some #(when-not (allowed-predicates %)
+                      (str "Predicate not on allowlist: " %)))))))
 
 ;; --- Prompt assembly ---
 
@@ -87,9 +102,9 @@
        (str/join "\n\n")))
 
 (defn- sanitize-repo-name
-  "Strip template metacharacters from repo-name to prevent prompt injection."
+  "Allowlist-sanitize repo-name to prevent prompt injection via the system prompt."
   [repo-name]
-  (str/replace repo-name #"[{}]" ""))
+  (str/replace repo-name #"[^a-zA-Z0-9\-_.]" ""))
 
 (defn build-system-prompt
   "Render the agent system prompt with live schema, rules, and examples."
