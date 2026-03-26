@@ -173,7 +173,8 @@
     (fn [{:keys [repo-path db-dir db-name]}]
       (let [conn     (db/connect-and-ensure-schema db-dir db-name)
             repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
-            sync-opts (cond-> {:concurrency (or concurrency 8)}
+            sync-opts (cond-> {:concurrency          (or concurrency 8)
+                               :analyze-concurrency  (or concurrency 3)}
                         analyze
                         (assoc :analyze? true
                                :model-id (llm/model-alias->id
@@ -196,7 +197,8 @@
       (let [conn       (db/connect-and-ensure-schema db-dir db-name)
             repo-uri   (.getCanonicalPath (java.io.File. (str repo-path)))
             interval-s (or interval 30)
-            sync-opts  (cond-> {:concurrency (or concurrency 8)}
+            sync-opts  (cond-> {:concurrency          (or concurrency 8)
+                                :analyze-concurrency  (or concurrency 3)}
                          analyze
                          (assoc :analyze? true
                                 :model-id (llm/model-alias->id

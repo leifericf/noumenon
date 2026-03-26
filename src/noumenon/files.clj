@@ -159,7 +159,8 @@
 
 (defn dir->tx-data
   "Build a Datomic entity map for a directory. Uses tempids for self and parent
-   so references resolve within a single transaction."
+   so references resolve within a single transaction. Safe to upsert since
+   :dir/path has :db.unique/identity."
   [dir-path]
   (let [parent (parent-of dir-path)]
     (cond-> {:db/id    (str "dir-" dir-path)
@@ -191,22 +192,15 @@
             db)
        (into #{} (map first))))
 
-(defn- imported-dir-paths
-  "Return the set of directory paths already imported."
-  [db]
-  (->> (d/q '[:find ?path :where [?e :dir/path ?path]] db)
-       (into #{} (map first))))
-
 (defn- build-import-plan
   "Build deterministic import plan maps from parsed ls-tree and existing set."
-  [all-files existing-files existing-dirs]
+  [all-files existing-files]
   (let [to-import  (remove #(existing-files (:path %)) all-files)
         file-paths (mapv :path all-files)
-        all-dirs   (paths->dirs file-paths)
-        dirs       (remove existing-dirs all-dirs)]
+        all-dirs   (paths->dirs file-paths)]
     {:all-files all-files
      :to-import to-import
-     :dirs dirs
+     :dirs all-dirs
      :skipped (- (count all-files) (count to-import))}))
 
 (defn- plan->tx-data
@@ -231,9 +225,8 @@
         line-counts (git-line-counts repo-path)
         db          (d/db conn)
         existing    (imported-file-paths db)
-        existing-ds (imported-dir-paths db)
         {:keys [to-import dirs skipped] :as plan}
-        (build-import-plan all-files existing existing-ds)
+        (build-import-plan all-files existing)
         tx-data     (plan->tx-data plan line-counts repo-uri)]
     (when (seq tx-data)
       (d/transact conn {:tx-data tx-data}))

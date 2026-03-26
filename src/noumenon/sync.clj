@@ -56,17 +56,22 @@
    :arch/layer :arch/subsystem
    :prov/confidence])
 
+(defn- unwrap-ref
+  "Extract raw entity ID from a pull ref map, or return v as-is for scalars."
+  [v]
+  (if (map? v) (:db/id v) v))
+
 (defn- retract-file-attrs
   "Build retraction tx-data for mutable attributes on a file entity."
   [db eid]
-  (let [entity (d/pull db (mapv #(hash-map :as % :limit 1000) mutable-file-attrs) eid)]
+  (let [entity (d/pull db mutable-file-attrs eid)]
     (->> mutable-file-attrs
          (mapcat (fn [attr]
                    (let [v (get entity attr)]
                      (cond
                        (nil? v)  nil
-                       (coll? v) (mapv (fn [item] [:db/retract eid attr item]) v)
-                       :else     [[:db/retract eid attr v]]))))
+                       (coll? v) (mapv (fn [item] [:db/retract eid attr (unwrap-ref item)]) v)
+                       :else     [[:db/retract eid attr (unwrap-ref v)]]))))
          vec)))
 
 (defn- retract-code-segments
@@ -156,7 +161,7 @@
                              (analyze/analyze-repo!
                               conn repo-path invoke-llm
                               {:model-id     (:model-id opts)
-                               :concurrency  (or (:concurrency opts) 3)
+                               :concurrency  (or (:analyze-concurrency opts) 3)
                                :min-delay-ms 0}))))
             _          (update-head-sha! conn repo-path repo-uri)
             elapsed    (- (System/currentTimeMillis) start-ms)]
