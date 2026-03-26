@@ -342,6 +342,18 @@
 
 ;; --- Checkpoint I/O ---
 
+(def ^:private run-id-pattern
+  "Valid run-id format: <timestamp-ms>-<uuid>."
+  #"^\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+(defn validate-run-id
+  "Validate run-id format to prevent path traversal. Throws on invalid input."
+  [run-id]
+  (when-not (and (string? run-id) (re-matches run-id-pattern run-id))
+    (throw (ex-info "Invalid run-id format — expected <timestamp>-<uuid>"
+                    {:run-id run-id})))
+  run-id)
+
 (defn generate-run-id
   "Generate a run ID: <timestamp-ms>-<uuid>."
   []
@@ -426,7 +438,8 @@
                                   {:path path :expected stored-hash :actual actual})))
                 (edn/read-string edn-str))
               ;; Legacy checkpoint without checksum — read as-is
-              (edn/read-string raw))]
+              (do (log! "Warning: checkpoint has no integrity checksum — may be tampered")
+                  (edn/read-string raw)))]
     (validate-checkpoint-stages cp)))
 
 ;; --- Resume ---
@@ -473,8 +486,9 @@
         (if (= "latest" resume-arg)
           (when (seq edn-files)
             (str (first edn-files)))
-          (let [target (str resume-arg ".edn")]
-            (some #(when (= (.getName %) target) (str %)) edn-files)))))))
+          (do (validate-run-id resume-arg)
+              (let [target (str resume-arg ".edn")]
+                (some #(when (= (.getName %) target) (str %)) edn-files))))))))
 
 ;; --- Budget ---
 
@@ -622,7 +636,7 @@
         cost-ans (llm/estimate-cost model est-in est-out)
         cost-jdg (llm/estimate-cost (or judge-model model) est-in est-out)
         total    (+ cost-ans cost-jdg)]
-    (log! (str "  ⚠ COST WARNING: Benchmarks are expensive. "
+    (log! (str "  *** COST WARNING: Benchmarks are expensive. "
                total-stages " stages × ~"
                (:input avg-tokens-per-stage) " input + ~"
                (:output avg-tokens-per-stage) " output tokens/stage"))
@@ -779,8 +793,8 @@
   [questions conditions shared checkpoint stop-flag concurrency mode run-id]
   (let [canary-qs    (filterv (comp canary-question-ids :id) questions)
         remaining-qs (filterv (comp not canary-question-ids :id) questions)
-        canary-pairs (for [q canary-qs, cond conditions] [(:id q) cond q])
-        rest-pairs   (for [q remaining-qs, cond conditions] [(:id q) cond q])]
+        canary-pairs (for [q canary-qs, condition conditions] [(:id q) condition q])
+        rest-pairs   (for [q remaining-qs, condition conditions] [(:id q) condition q])]
     (log! (str "bench/canary-start run-id=" run-id
                " questions=" (count canary-qs)))
     (run-pairs! canary-pairs shared concurrency)
@@ -860,7 +874,7 @@
                                 :model-config model-config
                                 :mode mode
                                 :budget budget})))
-        pairs          (for [q questions, cond conditions] [(:id q) cond q])
+        pairs          (for [q questions, condition conditions] [(:id q) condition q])
         shared         {:rubric-map rubric-map :db db :raw-ctx raw-ctx
                         :checkpoint checkpoint :cp-path cp-path
                         :invoke-llm invoke-llm :judge-llm judge-llm

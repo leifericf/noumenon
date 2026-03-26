@@ -83,7 +83,7 @@
 
 (def ^:private resume-flag
   {:flag "--resume" :key :resume :parse :optional-string
-   :desc "Resume from checkpoint (default: latest). Place before <repo-path> to avoid ambiguity."})
+   :desc "Resume from checkpoint. Optionally takes a run ID (default: latest). Place before positional args."})
 
 (defn- with-provider-valid
   [specs valid-set]
@@ -179,7 +179,11 @@
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
 (def ^:private query-command-spec
-  {:flags [db-dir-flag]
+  {:flags [db-dir-flag
+           {:flag "--param" :key :params :parse :kv-pair
+            :desc "Supply query input as key=value (repeatable)"
+            :error-missing :missing-param-value
+            :error-invalid :invalid-param-value}]
    :initial {:subcommand "query"}
    :positionals {:required 2 :error :query-missing-args :keys [:query-name :repo-path]}})
 
@@ -280,7 +284,7 @@
                 :epilog "Polls git HEAD every --interval seconds (default: 30).\nRuns sync automatically when new commits are detected.\nPass --analyze to also re-analyze changed files."}
    "query"     {:spec query-command-spec
                 :summary "Run a named Datalog query against the knowledge graph"
-                :usage "query [options] <query-name> <repo-path>"}
+                :usage "query [options] <query-name> <repo-path>\n       query list"}
    "status"    {:spec simple-command-spec
                 :summary "Show import counts for a repository"
                 :usage "status [options] <repo-path>"}
@@ -412,6 +416,19 @@
                 (if (or (nil? next-arg) (str/starts-with? next-arg "-"))
                   (recur more (assoc opts (:key spec) "latest") positional)
                   (recur (rest more) (assoc opts (:key spec) next-arg) positional)))
+
+              :kv-pair
+              (let [raw (first more)]
+                (if-not raw
+                  {:error (:error-missing spec)}
+                  (let [eq-idx (str/index-of raw "=")]
+                    (if (or (nil? eq-idx) (zero? eq-idx))
+                      {:error (:error-invalid spec) :value raw}
+                      (let [k (subs raw 0 eq-idx)
+                            v (subs raw (inc eq-idx))]
+                        (recur (rest more)
+                               (update opts (:key spec) assoc k v)
+                               positional))))))
 
               (let [raw (first more)]
                 (if-not raw

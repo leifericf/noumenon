@@ -24,27 +24,47 @@
 
 ;; --- Git diff parsing ---
 
+(def ^:private sha-pattern
+  "Matches a 40-character lowercase hex SHA."
+  #"[0-9a-f]{40}")
+
+(defn valid-sha?
+  "True if s is a well-formed 40-char hex SHA."
+  [s]
+  (boolean (and (string? s) (re-matches sha-pattern s))))
+
 (defn changed-files
   "Return {:added [...] :modified [...] :deleted [...]} between old-sha and HEAD.
-   Each value is a vector of repo-relative file paths."
+   Each value is a vector of repo-relative file paths.
+   Returns nil if old-sha is not a valid 40-char hex SHA."
   [repo-path old-sha]
-  (let [{:keys [exit out]}
-        (shell/sh "git" "-C" (str repo-path)
-                  "diff" "--name-status" old-sha "HEAD")]
-    (when (zero? exit)
-      (->> (str/split-lines out)
-           (remove str/blank?)
-           (reduce (fn [acc line]
-                     (let [[status path] (str/split line #"\t" 2)
-                           k (case (first status)
-                               \A :added
-                               \D :deleted
-                               (\M \R \T) :modified
-                               nil)]
-                       (if (and k path)
-                         (update acc k conj path)
-                         acc)))
-                   {:added [] :modified [] :deleted []})))))
+  (if-not (valid-sha? old-sha)
+    (do (log! "WARNING" (str "Invalid SHA format, skipping diff: " (pr-str old-sha)))
+        nil)
+    (let [{:keys [exit out]}
+          (shell/sh "git" "-C" (str repo-path)
+                    "diff" "--name-status" old-sha "HEAD")]
+      (when (zero? exit)
+        (->> (str/split-lines out)
+             (remove str/blank?)
+             (reduce (fn [acc line]
+                       (let [fields (str/split line #"\t")
+                             status (first fields)]
+                         (if (and status (>= (count fields) 2))
+                           (if (= \R (first status))
+                             (let [old-path (nth fields 1)
+                                   new-path (nth fields 2 nil)]
+                               (cond-> (update acc :deleted conj old-path)
+                                 new-path (update :added conj new-path)))
+                             (let [path (nth fields 1)
+                                   k    (case (first status)
+                                          \A :added
+                                          \D :deleted
+                                          (\M \T) :modified
+                                          nil)]
+                               (if k (update acc k conj path) acc)))
+                           acc)))
+                     {:added [] :modified [] :deleted []}))))))
 
 ;; --- Retraction ---
 
@@ -82,38 +102,40 @@
 
 (defn retract-stale!
   "Retract mutable attributes and code segments for modified/deleted files.
-   Returns count of files retracted."
+   Returns count of files actually retracted."
   [conn paths]
   (when (seq paths)
-    (let [db (d/db conn)
-          tx-data (->> paths
-                       (mapcat (fn [path]
-                                 (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
-                                                               :where [?e :file/path ?p]]
-                                                             db path))]
-                                   (concat (retract-file-attrs db eid)
-                                           (retract-code-segments db eid)))))
-                       vec)]
+    (let [db      (d/db conn)
+          results (->> paths
+                       (keep (fn [path]
+                               (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
+                                                             :where [?e :file/path ?p]]
+                                                           db path))]
+                                 (concat (retract-file-attrs db eid)
+                                         (retract-code-segments db eid)))))
+                       vec)
+          tx-data (into [] cat results)]
       (when (seq tx-data)
         (d/transact conn {:tx-data tx-data}))
-      (count paths))))
+      (count results))))
 
 (defn- retract-deleted-files!
-  "Retract entire file entities for deleted files. Returns count."
+  "Retract entire file entities for deleted files. Returns count actually retracted."
   [conn paths]
   (when (seq paths)
-    (let [db (d/db conn)
-          tx-data (->> paths
-                       (mapcat (fn [path]
-                                 (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
-                                                               :where [?e :file/path ?p]]
-                                                             db path))]
-                                   (concat (retract-code-segments db eid)
-                                           [[:db/retractEntity eid]]))))
-                       vec)]
+    (let [db      (d/db conn)
+          results (->> paths
+                       (keep (fn [path]
+                               (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
+                                                             :where [?e :file/path ?p]]
+                                                           db path))]
+                                 (concat (retract-code-segments db eid)
+                                         [[:db/retractEntity eid]]))))
+                       vec)
+          tx-data (into [] cat results)]
       (when (seq tx-data)
         (d/transact conn {:tx-data tx-data}))
-      (count paths))))
+      (count results))))
 
 (defn- update-head-sha!
   "Store the current HEAD SHA on the repo entity."
@@ -140,7 +162,7 @@
     (if (and stored (= stored current))
       (do (log! "Already up to date" (str "(HEAD " (subs current 0 7) ")"))
           {:status :up-to-date :head-sha current :elapsed-ms 0})
-      (let [fresh?     (nil? stored)
+      (let [fresh?     (or (nil? stored) (not (valid-sha? stored)))
             changes    (when-not fresh? (changed-files repo-path stored))
             _          (when (seq (:modified changes))
                          (retract-stale! conn (:modified changes)))

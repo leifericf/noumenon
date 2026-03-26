@@ -24,10 +24,9 @@
 (def ^:private code-repo-domain "Code Repository Understanding")
 (def ^:private max-context-tokens 200000)
 
-;; SHA-256 of the expected dataset file. Set on first verified download.
-;; To update: sha256sum data/longbench/data.json
-(def ^:private expected-sha256
-  "6380b9a1e4bba7e3bbcf3ca08b3e7e5c5a23e5a6f0fc3e9d8a1d4b0e2c6a9f17")
+;; SHA-256 of the expected dataset file. Set after first verified download.
+;; To update: sha256sum data/longbench/data.json and paste the hex digest here.
+(def ^:private expected-sha256 nil)
 
 ;; --- Download ---
 
@@ -45,15 +44,17 @@
     (format "%064x" (BigInteger. 1 (.digest md)))))
 
 (defn- verify-integrity!
-  "Verify SHA-256 of downloaded file. Logs warning on mismatch but does not abort,
-   since the expected hash may need updating when the upstream dataset changes."
+  "Verify SHA-256 of downloaded file. Throws on mismatch. Skips when no
+   expected hash is configured (logs the actual hash for future pinning)."
   [^java.io.File f]
   (let [actual (sha256-hex f)]
-    (when (not= actual expected-sha256)
-      (log! (str "longbench/integrity-warning"
-                 " expected-sha256=" expected-sha256
+    (if (nil? expected-sha256)
+      (log! (str "longbench/integrity-skip"
                  " actual-sha256=" actual
-                 " — verify the dataset file is authentic")))))
+                 " — pin this hash in expected-sha256 after verification"))
+      (when (not= actual expected-sha256)
+        (throw (ex-info "Dataset integrity check failed: SHA-256 mismatch"
+                        {:expected expected-sha256 :actual actual}))))))
 
 (defn download-dataset!
   "Download LongBench v2 dataset from HuggingFace. Skips if already cached.
@@ -81,9 +82,15 @@
             (throw (ex-info (str "Download failed: HTTP " status
                                  ". Manual download: " dataset-url)
                             {:status status :url dataset-url})))
+          (let [content-len (-> response .headers (.firstValue "content-length")
+                                (.orElse nil))]
+            (log! (str "longbench/downloading url=" dataset-url
+                       (when content-len (str " size=" content-len " bytes")))))
           (with-open [in (.body response)
                       out (io/output-stream tmp)]
             (io/copy in out :buffer-size 65536))
+          (log! (str "longbench/download-saved path=" (.getPath tmp)
+                     " bytes=" (.length tmp)))
           (Files/move (.toPath tmp) (.toPath f)
                       (into-array java.nio.file.CopyOption
                                   [StandardCopyOption/REPLACE_EXISTING]))
@@ -201,8 +208,9 @@
 (def ^:private jsonl-lock (Object.))
 
 (defn- result-jsonl-path
-  "Path for per-question JSONL results."
+  "Path for per-question JSONL results. Validates run-id to prevent path traversal."
   [run-id]
+  (bench/validate-run-id run-id)
   (str "data/longbench/results/" run-id ".jsonl"))
 
 (defn- write-result-line!

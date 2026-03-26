@@ -231,7 +231,7 @@
 
 (defn do-query
   "Run the query subcommand. Returns {:exit n :result map-or-nil}."
-  [{:keys [query-name list-queries] :as opts}]
+  [{:keys [query-name list-queries params] :as opts}]
   (if list-queries
     (do-query-list)
     (with-valid-repo
@@ -240,9 +240,12 @@
         (with-existing-db
           ctx
           (fn [{:keys [db]}]
-            (let [{:keys [ok error]} (query/run-named-query db query-name)]
+            (let [{:keys [ok error]} (query/run-named-query db query-name params)]
               (if error
-                (do (print-error! error) {:exit 1})
+                (do (print-error! error)
+                    (when (str/starts-with? (str error) "Missing required inputs")
+                      (log! "Hint: use --param key=value to supply query inputs."))
+                    {:exit 1})
                 {:exit 0 :result ok}))))))))
 
 (defn do-agent
@@ -301,10 +304,10 @@
                        :files   (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
                        :dirs    (count (d/q '[:find ?e :where [?e :dir/path _]] db))
                        :db-path (db-path c)}]
-            (println (str (:commits stats) " commits, "
-                          (:files stats) " files, "
-                          (:dirs stats) " directories"
-                          " -- db: " (:db-path stats)))
+            (log! (str (:commits stats) " commits, "
+                       (:files stats) " files, "
+                       (:dirs stats) " directories"
+                       " -- db: " (:db-path stats)))
             {:exit 0 :result stats}))))))
 
 ;; --- Databases ---
@@ -438,14 +441,21 @@
       {:exit 1}
 
       (not (:ok compat))
-      (do (print-error!
-           (str "Incompatible checkpoint. Mismatched fields:\n"
-                (str/join "\n"
-                          (map #(str "  " (name (:field %))
-                                     ": checkpoint=" (:checkpoint %)
-                                     " current=" (:current %))
-                               (:mismatches compat)))))
-          {:exit 1})
+      (let [field-labels {:repo-path          "Repository path"
+                          :commit-sha         "Git HEAD commit"
+                          :question-set-hash  "Question set"
+                          :model-config       "Model configuration"
+                          :mode               "Run mode"
+                          :rubric-hash        "Rubric"
+                          :answer-prompt-hash "Answer prompt"}]
+        (print-error!
+         (str "Incompatible checkpoint. Mismatched fields:\n"
+              (str/join "\n"
+                        (map #(str "  " (get field-labels (:field %) (name (:field %)))
+                                   ": checkpoint=" (:checkpoint %)
+                                   " current=" (:current %))
+                             (:mismatches compat)))))
+        {:exit 1})
 
       :else
       (run-benchmark-impl! db repo-path answer-llm
@@ -546,51 +556,55 @@
       (log! (str "Resume with: " cli/program-name " longbench run --resume"))
       {:exit 2})))
 
+(defn- print-longbench-detail!
+  [results]
+  (let [id-width (max 2 (apply max (map (comp count str :_id) results)))
+        id-fmt   (str "%-" id-width "s")]
+    (println)
+    (println (format (str "  " id-fmt "  %-5s %-5s  %s")
+                     "ID" "Pred" "Truth" "Correct?"))
+    (println (format (str "  " id-fmt "  %-5s %-5s  %s")
+                     (apply str (repeat id-width "-"))
+                     "----" "-----" "--------"))
+    (doseq [r results]
+      (println (format (str "  " id-fmt "  %-5s %-5s  %s")
+                       (:_id r)
+                       (or (:pred r) "nil")
+                       (:answer r)
+                       (if (:judge r) "yes" "no"))))))
+
 (defn- do-longbench-results
   [{:keys [run-id detail]}]
-  (let [rid      (or run-id
-                     (when-let [cp (longbench/find-latest-run)]
-                       (-> (java.io.File. ^String cp) .getName
-                           (str/replace #"\.edn$" ""))))
-        _        (when-not rid
-                   (print-error! "No runs found.")
-                   (throw (ex-info "No runs found" {})))
-        results  (longbench/load-results rid)]
-    (if-not results
-      (do (print-error! (str "No results found for run: " rid))
-          {:exit 1})
-      (let [agg (longbench/aggregate-results
-                 (mapv (fn [r] {:prediction (:pred r) :answer (:answer r)
-                                :difficulty (:difficulty r) :length (:length r)})
-                       results))
-            fmt (fn [v] (if v (format "%5.1f%%" (double v)) "  n/a "))]
-        (println (str "Run: " rid))
-        (println (str "Questions: " (:total agg)))
-        (println)
-        (println "Accuracy (%) by difficulty and length:")
-        (println (format "  %6s  %6s  %6s  %6s  %6s  %6s"
-                         "Score" "Easy" "Hard" "Short" "Medium" "Long"))
-        (println (format "  %6s  %6s  %6s  %6s  %6s  %6s"
-                         "------" "------" "------" "------" "------" "------"))
-        (println (format "  %s  %s  %s  %s  %s  %s"
-                         (fmt (:overall agg)) (fmt (:easy agg)) (fmt (:hard agg))
-                         (fmt (:short agg)) (fmt (:medium agg)) (fmt (:long agg))))
-        (when detail
-          (let [id-width (max 2 (apply max (map (comp count str :_id) results)))
-                id-fmt   (str "%-" id-width "s")]
-            (println)
-            (println (format (str "  " id-fmt "  %-5s %-5s  %s")
-                             "ID" "Pred" "Truth" "Correct?"))
-            (println (format (str "  " id-fmt "  %-5s %-5s  %s")
-                             (apply str (repeat id-width "-"))
-                             "----" "-----" "--------"))
-            (doseq [r results]
-              (println (format (str "  " id-fmt "  %-5s %-5s  %s")
-                               (:_id r)
-                               (or (:pred r) "nil")
-                               (:answer r)
-                               (if (:judge r) "yes" "no"))))))
-        {:exit 0}))))
+  (let [rid (or run-id
+                (when-let [cp (longbench/find-latest-run)]
+                  (-> (java.io.File. ^String cp) .getName
+                      (str/replace #"\.edn$" ""))))]
+    (cond
+      (not rid)
+      (do (print-error! "No runs found.") {:exit 1})
+
+      :else
+      (if-let [results (longbench/load-results rid)]
+        (let [agg (longbench/aggregate-results
+                   (mapv (fn [r] {:prediction (:pred r) :answer (:answer r)
+                                  :difficulty (:difficulty r) :length (:length r)})
+                         results))
+              fmt (fn [v] (if v (format "%5.1f%%" (double v)) "  n/a "))]
+          (println (str "Run: " rid))
+          (println (str "Questions: " (:total agg)))
+          (println)
+          (println "Accuracy (%) by difficulty and length:")
+          (println (format "  %6s  %6s  %6s  %6s  %6s  %6s"
+                           "Score" "Easy" "Hard" "Short" "Medium" "Long"))
+          (println (format "  %6s  %6s  %6s  %6s  %6s  %6s"
+                           "------" "------" "------" "------" "------" "------"))
+          (println (format "  %s  %s  %s  %s  %s  %s"
+                           (fmt (:overall agg)) (fmt (:easy agg)) (fmt (:hard agg))
+                           (fmt (:short agg)) (fmt (:medium agg)) (fmt (:long agg))))
+          (when detail (print-longbench-detail! results))
+          {:exit 0})
+        (do (print-error! (str "No results found for run: " rid))
+            {:exit 1})))))
 
 (defn do-longbench
   "Run the longbench subcommand. Returns {:exit n}."
@@ -643,14 +657,17 @@
    :agent-missing-args           "Missing required arguments for agent command."
    :agent-missing-question        "Missing -q <question> argument."
    :invalid-max-iterations       #(str "Invalid --max-iterations value: " (:value %))
-   :missing-max-iterations-value "Missing value for --max-iterations."})
+   :missing-max-iterations-value "Missing value for --max-iterations."
+   :missing-param-value          "Missing value for --param. Use --param key=value."
+   :invalid-param-value          #(str "Invalid --param value: " (:value %) ". Expected key=value format.")})
 
 (def ^:private errors-with-global-usage
   #{:no-args})
 
 (def ^:private errors-with-subcommand-usage
   #{:no-repo-path :missing-db-dir-value :unknown-flag
-    :agent-missing-question :agent-missing-args :query-missing-args})
+    :agent-missing-question :agent-missing-args :query-missing-args
+    :missing-param-value :invalid-param-value})
 
 ;; --- Entry point ---
 
@@ -700,6 +717,7 @@
                      "longbench" (do-longbench parsed)
                      "serve"     (do (mcp/serve! parsed) {:exit 0}))]
         (when (and (:result result)
+                   (zero? (:exit result))
                    (not (#{"benchmark" "longbench" "serve" "status" "databases" "watch"} (:subcommand parsed))))
           (prn (:result result)))
         result))))
