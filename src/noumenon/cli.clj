@@ -67,7 +67,7 @@
 
 (def ^:private concurrency-flags
   [{:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
-    :desc "Parallel workers, 1-20 (default: 3)"
+    :desc "Parallel workers, 1-20 (default varies: analyze=3, others=8)"
     :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value}
    {:flag "--min-delay" :key :min-delay :parse :non-neg-int
     :desc "Min delay between LLM requests in ms (default: 0)"
@@ -295,12 +295,12 @@
                                 :desc "Override storage directory (default: data/datomic/)"
                                 :error-missing :missing-db-dir-value}
                                {:flag "--provider" :key :provider :parse :string
-                                :desc "LLM provider for ask tool (default: glm)"
+                                :desc "Default LLM provider (default: glm)"
                                 :valid all-valid-providers
                                 :error-invalid :invalid-provider
                                 :error-missing :missing-provider-value}
                                {:flag "--model" :key :model :parse :string
-                                :desc "Model alias for ask tool"
+                                :desc "Default model alias"
                                 :error-missing :missing-model-value}
                                {:flag "--no-auto-sync" :key :no-auto-sync :parse :bool
                                 :desc "Disable automatic sync before queries (default: enabled)"}]

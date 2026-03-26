@@ -198,7 +198,7 @@ Run `clj -M:run --help` for global help, or `clj -M:run <command> --help` for de
 
 ### Unified CLI and MCP interface
 
-The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir`, `--provider`, and `--model` from the `serve` command flags.
+The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir`, `--provider`, and `--model` from the `serve` command flags. `noumenon_ask` and `noumenon_analyze` also accept `provider` and `model` per-call to override server defaults.
 
 | Command | CLI | MCP tool | Description |
 |---|---|---|---|
@@ -272,8 +272,8 @@ The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir
 - `--db-dir` — storage directory (default: `data/datomic/`)
 
 **`serve`**
-- `--provider` — LLM provider for ask tool (default: `glm`)
-- `--model` — model alias for ask tool
+- `--provider` — default LLM provider (default: `glm`)
+- `--model` — default model alias
 - `--no-auto-sync` — disable automatic sync before queries
 - `--db-dir` — storage directory (default: `data/datomic/`)
 
@@ -443,7 +443,7 @@ You do not need extra skills, custom sub-agents, or special `CLAUDE.md` wiring j
 | Tool | Required params | Optional params | Description |
 |---|---|---|---|
 | `noumenon_import` | `repo_path` | | Import git history and files |
-| `noumenon_analyze` | `repo_path` | `concurrency` (default: 3) | Run LLM semantic analysis |
+| `noumenon_analyze` | `repo_path` | `provider`, `model`, `concurrency` (default: 3) | Run LLM semantic analysis |
 | `noumenon_postprocess` | `repo_path` | `concurrency` (default: 8) | Extract import graph (no LLM) |
 | `noumenon_sync` | `repo_path` | `analyze` (default: false) | Sync with latest git state |
 | `noumenon_ask` | `repo_path`, `question` | `provider`, `model`, `max_iterations` (default: 10) | Ask a question via iterative querying |
@@ -493,8 +493,7 @@ Separate from the project benchmark, `longbench` runs LongBench v2 code-reposito
 
 ```bash
 clj -M:run longbench download
-clj -M:run longbench run --provider glm --model sonnet
-clj -M:run longbench results
+clj -M:run longbench experiment --config path/to/experiment.edn
 ```
 
 ## Cost Planning (Rough)
