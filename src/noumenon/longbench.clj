@@ -1,10 +1,10 @@
 (ns noumenon.longbench
-  (:require [clojure.core.async :as async]
-            [clojure.data.json :as json]
+  (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [noumenon.benchmark :as bench]
-            [noumenon.llm :as llm])
+            [noumenon.llm :as llm]
+            [noumenon.pipeline :as pipeline])
   (:import [java.net URI]
            [java.net.http HttpClient HttpClient$Redirect HttpRequest
             HttpResponse$BodyHandlers]
@@ -161,23 +161,8 @@
      :long     (accuracy (get by-len "long"))
      :total    (count scored)}))
 
-;; --- Budget check (1 question = 1 unit, unlike benchmark's 4-stage model) ---
-
-(defn- budget-check
-  "Check if budget is exhausted. Returns :ok or {:exhausted reason}."
-  [questions-completed session-cost-usd budget started-at-ms]
-  (let [{:keys [max-questions max-cost-usd stop-after-ms]} budget]
-    (cond
-      (and max-questions (>= questions-completed max-questions))
-      {:exhausted :max-questions}
-
-      (and max-cost-usd (> session-cost-usd max-cost-usd))
-      {:exhausted :max-cost}
-
-      (and stop-after-ms (>= (- (System/currentTimeMillis) started-at-ms) stop-after-ms))
-      {:exhausted :stop-after}
-
-      :else :ok)))
+;; Budget check: reuse benchmark's with stages-per-question=1
+;; (longbench counts 1 question = 1 unit, not 4 stages)
 
 ;; --- Per-question result JSONL ---
 
@@ -208,9 +193,51 @@
 
 ;; --- Shared pipeline ---
 
+(defn- run-and-record-question!
+  "Invoke LLM for one question, record prediction in checkpoint and JSONL."
+  [{:keys [question invoke-llm checkpoint-atom cp-path jsonl-path total session-cost]}]
+  (let [raw-ctx  (:context question)
+        ctx      (truncate-middle raw-ctx)
+        _        (when (not= (count ctx) (count raw-ctx))
+                   (binding [*out* *err*]
+                     (println (str "longbench/context-truncated"
+                                   " q=" (:_id question)
+                                   " original=" (count raw-ctx)
+                                   " truncated=" (count ctx)))))
+        prompt   (build-prompt (assoc question :context ctx))
+        response (invoke-llm [{:role "user" :content prompt}])
+        pred     (extract-answer (:text response))
+        correct  (= pred (:answer question))]
+    (swap! session-cost + (get-in response [:usage :cost-usd] 0.0))
+    (swap! checkpoint-atom assoc-in [:results (:_id question)]
+           {:prediction pred :correct correct :usage (:usage response)})
+    (bench/checkpoint-write-latest! cp-path checkpoint-atom)
+    (write-result-line! jsonl-path question pred (:text response))
+    (binding [*out* *err*]
+      (println (str "longbench/question-complete"
+                    " q=" (:_id question)
+                    " pred=" (or pred "nil")
+                    " correct=" correct
+                    " [" (count (:results @checkpoint-atom)) "/" total "]")))))
+
+(defn- process-question!
+  "Check budget, acquire rate gate, then run LLM on one question."
+  [{:keys [checkpoint-atom session-cost stop-flag budget start-ms
+           rate-gate min-delay-ms] :as opts}]
+  (let [completed (count (:results @checkpoint-atom))
+        b         (bench/budget-check completed @session-cost budget start-ms 1)]
+    (if (not= :ok b)
+      (when (compare-and-set! stop-flag nil (:exhausted b))
+        (binding [*out* *err*]
+          (println (str "longbench/budget-exhausted limit=" (name (:exhausted b))))))
+      (do
+        (bench/acquire-rate-gate! rate-gate min-delay-ms)
+        (when-not @stop-flag
+          (run-and-record-question! opts))))))
+
 (defn- run-pipeline!
   "Run LLM pipeline over remaining questions. Shared by fresh and resume paths.
-   Returns {:stop-reason kw-or-nil}. Mutates checkpoint-atom in place."
+   Returns stop-reason keyword or nil. Mutates checkpoint-atom in place."
   [invoke-llm remaining checkpoint-atom
    {:keys [cp-path jsonl-path total budget concurrency min-delay-ms]}]
   (let [session-cost (atom 0.0)
@@ -218,57 +245,18 @@
         error-atom   (atom nil)
         rate-gate    (atom 0)
         start-ms     (System/currentTimeMillis)
-        in-ch        (async/to-chan! (vec remaining))
-        out-ch       (async/chan (max 1 (count remaining)))]
-    (async/pipeline-blocking
-     concurrency out-ch
-     (map (fn [question]
-            (try
-              (when-not @stop-flag
-                (let [completed (count (:results @checkpoint-atom))
-                      b        (budget-check completed @session-cost budget start-ms)]
-                  (if (not= :ok b)
-                    (when (compare-and-set! stop-flag nil (:exhausted b))
-                      (binding [*out* *err*]
-                        (println (str "longbench/budget-exhausted limit="
-                                      (name (:exhausted b))))))
-                    (do
-                      (bench/acquire-rate-gate! rate-gate min-delay-ms)
-                      (when-not @stop-flag
-                        (let [ctx      (truncate-middle (:context question))
-                              _        (when (not= (count ctx) (count (:context question)))
-                                         (binding [*out* *err*]
-                                           (println (str "longbench/context-truncated"
-                                                         " q=" (:_id question)
-                                                         " original=" (count (:context question))
-                                                         " truncated=" (count ctx)))))
-                              prompt   (build-prompt (assoc question :context ctx))
-                              response (invoke-llm [{:role "user" :content prompt}])
-                              pred     (extract-answer (:text response))
-                              correct  (= pred (:answer question))]
-                          (swap! session-cost + (get-in response [:usage :cost-usd] 0.0))
-                          (swap! checkpoint-atom assoc-in [:results (:_id question)]
-                                 {:prediction pred
-                                  :correct    correct
-                                  :usage      (:usage response)})
-                          (bench/checkpoint-write-latest! cp-path checkpoint-atom)
-                          (write-result-line! jsonl-path question pred (:text response))
-                          (binding [*out* *err*]
-                            (println (str "longbench/question-complete"
-                                          " q=" (:_id question)
-                                          " pred=" (or pred "nil")
-                                          " correct=" correct
-                                          " [" (count (:results @checkpoint-atom))
-                                          "/" total "]")))))))))
-              (catch Exception e
-                (when (compare-and-set! error-atom nil e)
-                  (compare-and-set! stop-flag nil :error))))
-            :done))
-     in-ch)
-    (loop [] (when (async/<!! out-ch) (recur)))
-    (when-let [e @error-atom]
-      (throw e))
-    @stop-flag))
+        shared       {:invoke-llm invoke-llm :checkpoint-atom checkpoint-atom
+                      :cp-path cp-path :jsonl-path jsonl-path :total total
+                      :session-cost session-cost :stop-flag stop-flag
+                      :budget budget :start-ms start-ms
+                      :rate-gate rate-gate :min-delay-ms min-delay-ms}]
+    (pipeline/run-concurrent!
+     remaining
+     {:concurrency concurrency
+      :stop-flag stop-flag
+      :error-atom error-atom
+      :process-item! (fn [question]
+                       (process-question! (assoc shared :question question)))})))
 
 (defn- finalize-run
   "Aggregate results, write final checkpoint, log summary. Returns result map."

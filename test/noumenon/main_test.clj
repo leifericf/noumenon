@@ -204,6 +204,17 @@
     (is (= 1 exit))
     (is (str/includes? stderr "No database found"))))
 
+(deftest benchmark-provider-aliases-are-accepted
+  (doseq [provider ["claude" "claude-cli" "claude-api" "glm"]]
+    (let [tmp-dir (str (System/getProperty "java.io.tmpdir")
+                       "/noumenon-prov-alias-" provider "-" (random-uuid))
+          {:keys [exit stderr]} (run-capturing ["benchmark" "--provider" provider
+                                                "--db-dir" tmp-dir repo-path])]
+      (is (= 1 exit))
+      (is (or (str/includes? stderr "No database found")
+              (str/includes? stderr "NOUMENON_ZAI_TOKEN")
+              (str/includes? stderr "ANTHROPIC_API_KEY"))))))
+
 (deftest benchmark-invalid-provider
   (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "openai" "."])]
     (is (= 1 exit))
@@ -361,7 +372,7 @@
 (deftest agent-no-database
   (let [{:keys [exit stderr]} (run-capturing ["agent" "question" "/tmp/nonexistent-repo-xyz"])]
     (is (= 1 exit))
-    (is (str/includes? stderr "No database found"))))
+    (is (str/includes? stderr "Path does not exist"))))
 
 ;; --- Tier 1: Query subcommand integration ---
 

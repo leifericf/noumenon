@@ -79,17 +79,68 @@
 (defn dispatch-tool
   "Dispatch a parsed tool call. Returns {:result string} or {:answer string}."
   [db tool-call]
-  (case (:tool tool-call)
-    :query  {:result (dispatch-query db (:args tool-call))}
-    :schema {:result (dispatch-schema db)}
-    :rules  {:result (dispatch-rules)}
-    :answer {:answer (get-in tool-call [:args :text] "")}
-    {:result (str "Unknown tool: " (:tool tool-call)
-                  ". Available: :query, :schema, :rules, :answer")}))
+  (let [handlers {:query  (fn [args] {:result (dispatch-query db args)})
+                  :schema (fn [_] {:result (dispatch-schema db)})
+                  :rules  (fn [_] {:result (dispatch-rules)})
+                  :answer (fn [args] {:answer (:text args "")})}]
+    (if-let [handle (handlers (:tool tool-call))]
+      (handle (:args tool-call))
+      {:result (str "Unknown tool: " (:tool tool-call)
+                    ". Available: :query, :schema, :rules, :answer")})))
 
 ;; --- Agent loop ---
 
 (def ^:private default-max-iterations 10)
+
+(defn- parse-error-transition
+  [messages response-text parse-error]
+  (let [error-msg (str "Your response could not be parsed as EDN. Error: "
+                       parse-error
+                       "\nPlease respond with exactly one EDN map.")]
+    (conj messages
+          {:role "assistant" :content response-text}
+          {:role "user" :content error-msg})))
+
+(defn- tool-result-transition
+  [messages response-text result]
+  (conj messages
+        {:role "assistant" :content response-text}
+        {:role "user" :content (str "Tool result:\n" result)}))
+
+(defn- next-state
+  [{:keys [db invoke-fn system-prompt]}
+   {:keys [messages steps iterations total-usage max-iterations]}]
+  (if (>= iterations max-iterations)
+    {:done {:answer (or (some :answer steps)
+                        "Budget exhausted: reached maximum iterations without a final answer.")
+            :steps  steps
+            :usage  (assoc total-usage :iterations iterations)
+            :status :budget-exhausted}}
+    (let [full-messages (into [{:role "user" :content system-prompt}] messages)
+          response      (invoke-fn full-messages)
+          usage         (merge-with + total-usage
+                                    (select-keys (:usage response) [:input-tokens :output-tokens]))
+          parsed        (parse-response (:text response))
+          step          {:iteration (inc iterations)
+                         :raw-text (:text response)
+                         :parsed parsed}]
+      (if-let [parse-error (:parse-error parsed)]
+        {:messages (parse-error-transition messages (:text response) parse-error)
+         :steps (conj steps (assoc step :error parse-error))
+         :iterations (inc iterations)
+         :total-usage usage
+         :max-iterations max-iterations}
+        (let [{:keys [result answer]} (dispatch-tool db parsed)]
+          (if answer
+            {:done {:answer answer
+                    :steps  (conj steps (assoc step :answer answer))
+                    :usage  (assoc usage :iterations (inc iterations))
+                    :status :answered}}
+            {:messages (tool-result-transition messages (:text response) result)
+             :steps (conj steps (assoc step :tool-result result))
+             :iterations (inc iterations)
+             :total-usage usage
+             :max-iterations max-iterations}))))))
 
 (defn ask
   "Run the agent loop: prompt → parse → dispatch → repeat.
@@ -97,47 +148,14 @@
   [db question {:keys [invoke-fn repo-name max-iterations]
                 :or   {max-iterations default-max-iterations}}]
   (let [system-prompt (build-system-prompt db repo-name)
-        initial-msgs  [{:role "user" :content question}]]
-    (loop [messages    initial-msgs
-           steps       []
-           iterations  0
-           total-usage {:input-tokens 0 :output-tokens 0}]
-      (if (>= iterations max-iterations)
-        {:answer (or (some :answer steps)
-                     "Budget exhausted: reached maximum iterations without a final answer.")
-         :steps  steps
-         :usage  (assoc total-usage :iterations iterations)
-         :status :budget-exhausted}
-        (let [full-messages (into [{:role "user" :content system-prompt}] messages)
-              response      (invoke-fn full-messages)
-              usage         (merge-with + total-usage
-                                        (select-keys (:usage response) [:input-tokens :output-tokens]))
-              parsed        (parse-response (:text response))
-              step          {:iteration  (inc iterations)
-                             :raw-text   (:text response)
-                             :parsed     parsed}]
-          (if (:parse-error parsed)
-            ;; Feed parse error back to agent
-            (let [error-msg (str "Your response could not be parsed as EDN. Error: "
-                                 (:parse-error parsed)
-                                 "\nPlease respond with exactly one EDN map.")]
-              (recur (conj messages
-                           {:role "assistant" :content (:text response)}
-                           {:role "user" :content error-msg})
-                     (conj steps (assoc step :error (:parse-error parsed)))
-                     (inc iterations)
-                     usage))
-            (let [{:keys [result answer]} (dispatch-tool db parsed)]
-              (if answer
-                ;; Agent emitted final answer
-                {:answer answer
-                 :steps  (conj steps (assoc step :answer answer))
-                 :usage  (assoc usage :iterations (inc iterations))
-                 :status :answered}
-                ;; Feed tool result back
-                (recur (conj messages
-                             {:role "assistant" :content (:text response)}
-                             {:role "user" :content (str "Tool result:\n" result)})
-                       (conj steps (assoc step :tool-result result))
-                       (inc iterations)
-                       usage)))))))))
+        context      {:db db :invoke-fn invoke-fn :system-prompt system-prompt}
+        initial      {:messages [{:role "user" :content question}]
+                      :steps []
+                      :iterations 0
+                      :total-usage {:input-tokens 0 :output-tokens 0}
+                      :max-iterations max-iterations}]
+    (loop [state initial]
+      (let [nxt (next-state context state)]
+        (if-let [done (:done nxt)]
+          done
+          (recur nxt))))))

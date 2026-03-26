@@ -17,22 +17,17 @@
   []
   (load-edn-resource "queries/rules.edn"))
 
-(def ^:private query-names
-  ["files-by-complexity"
-   "files-by-layer"
-   "component-dependencies"
-   "co-changed-files"
-   "top-contributors"])
-
 (defn load-named-query
   "Load a named query definition. Returns the query map or nil if not found."
   [query-name]
   (load-edn-resource (str "queries/" query-name ".edn")))
 
 (defn list-query-names
-  "Return the list of available named query names."
+  "Return available named queries from resources/queries/index.edn."
   []
-  query-names)
+  (->> (load-edn-resource "queries/index.edn")
+       (sort)
+       vec))
 
 ;; --- Schema introspection ---
 

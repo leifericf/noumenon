@@ -1,5 +1,7 @@
 (ns noumenon.query-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is]]
             [datomic.client.api :as d]
             [noumenon.db :as db]
             [noumenon.query :as query]))
@@ -25,6 +27,22 @@
     (is (some #{"files-by-complexity"} names))
     (is (some #{"co-changed-files"} names))
     (is (some #{"component-dependencies"} names))))
+
+(deftest list-query-names-sorted
+  (let [names (query/list-query-names)]
+    (is (= names (sort names)))))
+
+(deftest query-manifest-matches-query-files
+  (let [dir        (io/file (io/resource "queries/"))
+        file-names (->> (.listFiles dir)
+                        (keep (fn [f]
+                                (let [n (.getName f)]
+                                  (when (and (str/ends-with? n ".edn")
+                                             (not (#{"rules.edn" "index.edn"} n)))
+                                    (str/replace n #"\.edn$" "")))))
+                        set)
+        manifest   (set (query/list-query-names))]
+    (is (= file-names manifest))))
 
 (deftest all-named-queries-load
   (doseq [name (query/list-query-names)]

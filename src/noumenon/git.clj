@@ -112,6 +112,19 @@
   (let [existing (imported-shas db)]
     (into [] (remove #(existing (:sha %))) commits)))
 
+(defn- build-import-plan
+  "Build deterministic import plan for git commits."
+  [db commits]
+  (let [to-import (unimported-commits db commits)]
+    {:all commits
+     :to-import to-import
+     :skipped (- (count commits) (count to-import))}))
+
+(defn- transact-commits!
+  [conn commits]
+  (doseq [commit commits]
+    (d/transact conn {:tx-data (commit->tx-data commit)})))
+
 (defn import-commits!
   "Import git history from repo-path into Datomic via conn.
    Parses git log, filters already-imported commits, transacts one per tx.
@@ -120,16 +133,15 @@
   (let [start-ms  (System/currentTimeMillis)
         raw       (git-log repo-path)
         all       (parse-commits raw)
-        to-import (unimported-commits (d/db conn) all)
-        skipped   (- (count all) (count to-import))]
+        {:keys [to-import skipped] :as _plan}
+        (build-import-plan (d/db conn) all)]
     (when (and (empty? all) (seq raw))
       (binding [*out* *err*]
         (println "Warning: git log produced output but no commits were parsed")))
     (when (empty? all)
       (binding [*out* *err*]
         (println "Warning: no commits found in" (str repo-path))))
-    (doseq [commit to-import]
-      (d/transact conn {:tx-data (commit->tx-data commit)}))
+    (transact-commits! conn to-import)
     (let [elapsed (- (System/currentTimeMillis) start-ms)]
       (binding [*out* *err*]
         (println (str "Imported " (count to-import) " commits, "

@@ -3,6 +3,33 @@
             [clojure.string :as str]
             [org.httpkit.client :as http]))
 
+;; --- Provider/model defaults ---
+
+(def default-provider "glm")
+(def default-model-alias "sonnet")
+
+(def provider-aliases
+  {"claude" "claude-cli"})
+
+(def canonical-providers
+  #{"glm" "claude-api" "claude-cli"})
+
+(defn normalize-provider-name
+  "Normalize provider name string to canonical form.
+   Returns nil when the input is not a supported provider."
+  [provider]
+  (when provider
+    (let [normalized (get provider-aliases provider provider)]
+      (when (canonical-providers normalized)
+        normalized))))
+
+(defn provider->kw
+  "Convert a provider string/keyword to canonical provider keyword.
+   Defaults to :claude-cli for unknown inputs."
+  [provider]
+  (let [provider-name (if (keyword? provider) (name provider) provider)]
+    (keyword (or (normalize-provider-name provider-name) "claude-cli"))))
+
 ;; --- Usage tracking ---
 
 (def zero-usage
@@ -145,7 +172,7 @@
    Provider :claude-api — direct API to Anthropic, reads ANTHROPIC_API_KEY.
    Provider :claude-cli — flattens messages to single prompt string."
   [provider {:keys [model temperature max-tokens]}]
-  (case provider
+  (case (provider->kw provider)
     :glm
     (let [token (System/getenv "NOUMENON_ZAI_TOKEN")]
       (when-not token

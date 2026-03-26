@@ -11,6 +11,8 @@
 ;; --- Constants ---
 
 (def ^:private max-string-length 4096)
+(def ^:private max-file-content-chars (* 100 1000))
+(def ^:private max-segments 20)
 
 (def ^:private valid-complexity
   #{:trivial :simple :moderate :complex :very-complex})
@@ -74,6 +76,26 @@
       (integer? line-start)      (assoc :line-start line-start)
       (integer? line-end)        (assoc :line-end line-end))))
 
+(def ^:private analysis-sanitizers
+  {:summary    #(when (string? %) (clamp %))
+   :purpose    #(when (string? %) (clamp %))
+   :tags       #(when (and (coll? %) (seq %)) (vec (filter keyword? %)))
+   :complexity #(when (valid-complexity %) %)
+   :patterns   #(when (and (coll? %) (seq %)) (vec (filter keyword? %)))
+   :layer      #(when (valid-layer %) %)
+   :confidence #(when (and (number? %) (<= 0.0 % 1.0)) (double %))
+   :segments   #(when (and (coll? %) (seq %))
+                  (->> % (keep validate-segment) (take max-segments) vec))})
+
+(defn- sanitize-analysis
+  [parsed]
+  (->> analysis-sanitizers
+       (reduce-kv (fn [acc k sanitize]
+                    (if-let [v (sanitize (get parsed k))]
+                      (assoc acc k v)
+                      acc))
+                  {})))
+
 (defn parse-llm-response
   "Parse LLM stdout as EDN. Strips markdown fences on failure and retries once.
    Returns parsed map with validated/clamped values, or nil."
@@ -87,38 +109,9 @@
           parsed    (or (try-parse (str/trim raw))
                         (try-parse (strip-markdown-fences raw)))]
       (when parsed
-        (let [{:keys [summary purpose tags complexity patterns layer
-                      confidence segments]} parsed
-              known-keys (cond-> {}
-                           (string? summary)
-                           (assoc :summary (clamp summary))
-
-                           (string? purpose)
-                           (assoc :purpose (clamp purpose))
-
-                           (and (coll? tags) (seq tags))
-                           (assoc :tags (vec (filter keyword? tags)))
-
-                           (valid-complexity complexity)
-                           (assoc :complexity complexity)
-
-                           (and (coll? patterns) (seq patterns))
-                           (assoc :patterns (vec (filter keyword? patterns)))
-
-                           (valid-layer layer)
-                           (assoc :layer layer)
-
-                           (and (number? confidence)
-                                (<= 0.0 confidence 1.0))
-                           (assoc :confidence (double confidence))
-
-                           (and (coll? segments) (seq segments))
-                           (assoc :segments (->> segments
-                                                 (keep validate-segment)
-                                                 (take 20)
-                                                 vec)))]
-          (when (seq known-keys)
-            known-keys))))))
+        (let [analysis (sanitize-analysis parsed)]
+          (when (seq analysis)
+            analysis))))))
 
 ;; --- Tx-data building ---
 
@@ -185,33 +178,36 @@
 
 ;; --- Orchestration ---
 
+(defn- truncate-content
+  "Truncate content to max-file-content-chars. Returns [content truncated?]."
+  [content]
+  (if (> (count content) max-file-content-chars)
+    [(subs content 0 max-file-content-chars) true]
+    [content false]))
+
 (defn analyze-file!
   "Analyze a single file. Returns {:status :ok/:parse-error/:error, :usage map-or-nil}."
-  [conn repo-path file-map prompt-template prompt-hash-val invoke-llm]
+  [conn repo-path file-map {:keys [prompt-template prompt-hash-val invoke-llm]}]
   (let [{:keys [file/path file/lang]} file-map
         repo-name (last (str/split (str repo-path) #"/"))]
     (try
-      (let [content  (git-show repo-path path)
-            content  (if (> (count content) (* 100 1000))
-                       (do (binding [*out* *err*]
-                             (println (str "  Warning: truncating " path
-                                           " (" (count content) " chars)")))
-                           (subs content 0 (* 100 1000)))
-                       content)
+      (let [raw-content          (git-show repo-path path)
+            [content truncated?] (truncate-content raw-content)
+            _                    (when truncated?
+                                   (binding [*out* *err*]
+                                     (println (str "  Warning: truncating " path
+                                                   " (" (count raw-content) " chars)"))))
             prompt   (render-prompt prompt-template
                                     {:file-path  path
                                      :lang       lang
                                      :line-count (count (str/split-lines content))
                                      :content    content
                                      :repo-name  repo-name})
-            response (invoke-llm prompt)
-            raw      (:text response)
-            usage    (:usage response)
-            resolved (:resolved-model response)
-            analysis (parse-llm-response raw)]
+            {:keys [text usage resolved-model]} (invoke-llm prompt)
+            analysis (parse-llm-response text)]
         (if analysis
           (let [tx-data (analysis->tx-data path analysis
-                                           {:model-version   (or resolved "unknown")
+                                           {:model-version   (or resolved-model "unknown")
                                             :prompt-hash-val prompt-hash-val
                                             :analyzer        "noumenon.analyze/0.1.0"})]
             (d/transact conn {:tx-data tx-data})
@@ -224,18 +220,38 @@
           (println (str "  Error analyzing " path ": " (.getMessage e))))
         {:status :error}))))
 
+(defn- analyze-one-file!
+  "Analyze one file with progress logging. Returns updated accumulator."
+  [conn repo-path analysis-opts total acc [idx file-map]]
+  (binding [*out* *err*]
+    (print (str "  [" (inc idx) "/" total "] " (:file/path file-map) " ... "))
+    (flush))
+  (let [start              (System/currentTimeMillis)
+        {:keys [status usage]} (analyze-file! conn repo-path file-map analysis-opts)
+        dur                (- (System/currentTimeMillis) start)]
+    (binding [*out* *err*]
+      (println (str (format "%.1f" (/ dur 1000.0)) "s "
+                    (name status)
+                    (when usage
+                      (str " tokens=" (:input-tokens usage)
+                           "/" (:output-tokens usage))))))
+    (-> acc
+        (update status (fnil inc 0))
+        (update :total-usage llm/sum-usage (or usage llm/zero-usage)))))
+
 (defn analyze-repo!
   "Analyze all source files in repo-path that need analysis.
    `invoke-llm` is a function (prompt -> {:text string :usage map}) for testability.
    Returns summary map with :total-usage."
   [conn repo-path invoke-llm]
-  (let [db             (d/db conn)
-        files          (files-needing-analysis db)
-        total          (count files)
-        prompt-map     (load-prompt-template)
-        template       (:template prompt-map)
-        p-hash         (prompt-hash template)
-        start-ms       (System/currentTimeMillis)]
+  (let [db            (d/db conn)
+        files         (files-needing-analysis db)
+        total         (count files)
+        prompt-map    (load-prompt-template)
+        analysis-opts {:prompt-template (:template prompt-map)
+                       :prompt-hash-val (prompt-hash (:template prompt-map))
+                       :invoke-llm invoke-llm}
+        start-ms      (System/currentTimeMillis)]
     (if (zero? total)
       (do (binding [*out* *err*]
             (println "All files already analyzed, nothing to do."))
@@ -244,27 +260,9 @@
       (do
         (binding [*out* *err*]
           (println (str "Analyzing " total " files...")))
-        (let [results (reduce
-                       (fn [acc [idx file-map]]
-                         (binding [*out* *err*]
-                           (print (str "  [" (inc idx) "/" total "] "
-                                       (:file/path file-map) " ... "))
-                           (flush))
-                         (let [start  (System/currentTimeMillis)
-                               {:keys [status usage]} (analyze-file! conn repo-path file-map
-                                                                     template p-hash invoke-llm)
-                               dur    (- (System/currentTimeMillis) start)]
-                           (binding [*out* *err*]
-                             (println (str (format "%.1f" (/ dur 1000.0)) "s "
-                                           (name status)
-                                           (when usage
-                                             (str " tokens=" (:input-tokens usage)
-                                                  "/" (:output-tokens usage))))))
-                           (-> acc
-                               (update status (fnil inc 0))
-                               (update :total-usage llm/sum-usage (or usage llm/zero-usage)))))
-                       {:ok 0 :parse-error 0 :error 0 :total-usage llm/zero-usage}
-                       (map-indexed vector files))
+        (let [results (reduce (partial analyze-one-file! conn repo-path analysis-opts total)
+                              {:ok 0 :parse-error 0 :error 0 :total-usage llm/zero-usage}
+                              (map-indexed vector files))
               elapsed (- (System/currentTimeMillis) start-ms)
               tu      (:total-usage results)]
           (binding [*out* *err*]

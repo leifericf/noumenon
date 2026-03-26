@@ -158,10 +158,10 @@
   "Build a Datomic entity map for a directory. Uses tempids for self and parent
    so references resolve within a single transaction."
   [dir-path]
-  (cond-> {:db/id    (str "dir-" dir-path)
-           :dir/path dir-path}
-    (parent-of dir-path)
-    (assoc :dir/parent (str "dir-" (parent-of dir-path)))))
+  (let [parent (parent-of dir-path)]
+    (cond-> {:db/id    (str "dir-" dir-path)
+             :dir/path dir-path}
+      parent (assoc :dir/parent (str "dir-" parent)))))
 
 (defn file->tx-data
   "Build a Datomic entity map for a file.
@@ -188,6 +188,24 @@
             db)
        (into #{} (map first))))
 
+(defn- build-import-plan
+  "Build deterministic import plan maps from parsed ls-tree and existing set."
+  [all-files existing]
+  (let [to-import  (remove #(existing (:path %)) all-files)
+        file-paths (mapv :path all-files)
+        dirs       (paths->dirs file-paths)]
+    {:all-files all-files
+     :to-import to-import
+     :dirs dirs
+     :skipped (- (count all-files) (count to-import))}))
+
+(defn- plan->tx-data
+  [{:keys [to-import dirs]} line-counts]
+  (let [dir-tx  (mapv dir->tx-data dirs)
+        file-tx (mapv #(file->tx-data % line-counts) to-import)]
+    (into (into dir-tx file-tx)
+          [{:db/id "datomic.tx" :tx/op :import :tx/source :deterministic}])))
+
 (defn import-files!
   "Import file and directory structure from repo-path into Datomic via conn.
    Returns a summary map with :files-imported, :dirs-imported, :files-skipped, :elapsed-ms."
@@ -197,14 +215,9 @@
         all-files   (parse-ls-tree raw)
         line-counts (git-line-counts repo-path)
         existing    (imported-file-paths (d/db conn))
-        to-import   (remove #(existing (:path %)) all-files)
-        skipped     (- (count all-files) (count to-import))
-        file-paths  (mapv :path all-files)
-        dirs        (paths->dirs file-paths)
-        dir-tx      (mapv dir->tx-data dirs)
-        file-tx     (mapv #(file->tx-data % line-counts) to-import)
-        tx-data     (into (into dir-tx file-tx)
-                          [{:db/id "datomic.tx" :tx/op :import :tx/source :deterministic}])]
+        {:keys [to-import dirs skipped] :as plan}
+        (build-import-plan all-files existing)
+        tx-data     (plan->tx-data plan line-counts)]
     (when (seq tx-data)
       (d/transact conn {:tx-data tx-data}))
     (let [elapsed (- (System/currentTimeMillis) start-ms)]

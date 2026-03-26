@@ -980,7 +980,9 @@
           stages  {[:q01 :query :answer] {:status :ok :result "ring/core.clj is complex"}}
           llm-called (atom false)
           mock-llm   (fn [_] (reset! llm-called true) {:text "" :usage llm/zero-usage})
-          result  (bench/run-stage [:q01 :query :judge] q {} nil nil stages mock-llm mock-llm)]
+          result  (bench/run-stage [:q01 :query :judge]
+                                   {:question q :rubric-map {} :db nil :raw-ctx nil
+                                    :stages stages :invoke-llm mock-llm :judge-llm mock-llm})]
       (is (false? @llm-called) "LLM should not be called for deterministic scoring")
       (is (= :correct (get-in result [:result :score])))
       (is (= 0 (get-in result [:usage :input-tokens]))))))
@@ -1213,7 +1215,9 @@
         mock-fn  (fn [_prompt]
                    {:text "Ring is a web library" :usage mock-usage :resolved-model "mock-v1"})
         result   (with-redefs [bench/query-context (fn [_db _qn] "mock context")]
-                   (bench/run-stage [:t01 :query :answer] q rubric nil nil {} mock-fn mock-fn))]
+                   (bench/run-stage [:t01 :query :answer]
+                                    {:question q :rubric-map rubric :db nil :raw-ctx nil
+                                     :stages {} :invoke-llm mock-fn :judge-llm mock-fn}))]
     (is (= :ok (:status result)))
     (is (= "Ring is a web library" (:result result)))
     (is (= "mock-v1" (:resolved-model result)))
@@ -1227,7 +1231,9 @@
         mock-fn  (fn [_prompt]
                    {:text (pr-str {:score :correct :reasoning "Good answer"})
                     :usage mock-usage :resolved-model "mock-v1"})
-        result   (bench/run-stage [:t01 :query :judge] q rubric nil nil stages mock-fn mock-fn)]
+        result   (bench/run-stage [:t01 :query :judge]
+                                  {:question q :rubric-map rubric :db nil :raw-ctx nil
+                                   :stages stages :invoke-llm mock-fn :judge-llm mock-fn})]
     (is (= :ok (:status result)))
     (is (= :correct (get-in result [:result :score])))
     (is (= "Good answer" (get-in result [:result :reasoning])))))
