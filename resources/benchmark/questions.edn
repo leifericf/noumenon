@@ -1,0 +1,62 @@
+[;; Single-hop questions — answerable from one query result
+ {:id         :q01
+  :question   "Which Ring source files are rated as 'complex' or 'very-complex'?"
+  :category   :single-hop
+  :query-name "files-by-complexity"
+  :rubric     "Must list all files with :complex or :very-complex rating. Partial credit for listing some."}
+
+ {:id         :q02
+  :question   "What architectural layer is ring/middleware/params.clj classified as?"
+  :category   :single-hop
+  :query-name "files-by-layer"
+  :rubric     "Must state the correct layer keyword for the specific file."}
+
+ {:id         :q03
+  :question   "Who are the top 3 contributors to Ring by commit count?"
+  :category   :single-hop
+  :query-name "top-contributors"
+  :rubric     "Must name the top 3 contributors in correct rank order with approximate counts."}
+
+ ;; Multi-hop questions — require combining multiple facts
+ {:id         :q04
+  :question   "Which files are most frequently changed together in Ring? What does this suggest about coupling?"
+  :category   :multi-hop
+  :query-name "co-changed-files"
+  :rubric     "Must identify the top co-changed pairs and provide a reasonable coupling analysis."}
+
+ {:id         :q05
+  :question   "Are there any files classified as 'trivial' complexity that are in the 'core' architectural layer? If so, what do they do?"
+  :category   :multi-hop
+  :query-name "files-by-complexity"
+  :rubric     "Must cross-reference complexity and layer data. Correct answer whether yes or no with supporting evidence."}
+
+ {:id         :q06
+  :question   "Which component has the most transitive dependencies in Ring?"
+  :category   :multi-hop
+  :query-name "component-dependencies"
+  :rubric     "Must identify the component with the longest transitive dependency chain."}
+
+ ;; Architectural questions — require synthesis and reasoning
+ {:id         :q07
+  :question   "Describe the overall architecture of Ring in terms of its layers and how they relate."
+  :category   :architectural
+  :query-name "files-by-layer"
+  :rubric     "Must describe multiple layers, their roles, and inter-layer relationships. Generic answers score low."}
+
+ {:id         :q08
+  :question   "What design patterns are most prevalent across Ring's codebase? How do they support the library's goals?"
+  :category   :architectural
+  :query-name "files-by-complexity"
+  :rubric     "Must name specific patterns found in the analysis and explain their purpose in Ring's context."}
+
+ {:id         :q09
+  :question   "Based on the file complexity distribution, where would you focus a code review? Why?"
+  :category   :architectural
+  :query-name "files-by-complexity"
+  :rubric     "Must reference specific high-complexity files and give concrete review rationale."}
+
+ {:id         :q10
+  :question   "What are the main subsystems in Ring and how do they depend on each other?"
+  :category   :architectural
+  :query-name "component-dependencies"
+  :rubric     "Must identify distinct subsystems and describe dependency relationships between them."}]

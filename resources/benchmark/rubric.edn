@@ -1,0 +1,26 @@
+{:scoring
+ {:correct  1.0
+  :partial  0.5
+  :wrong    0.0}
+
+ :judge-template
+ "You are an expert judge evaluating AI answers about the Ring Clojure library.
+
+Question: {{question}}
+
+Scoring rubric: {{rubric}}
+
+--- Answer to evaluate ---
+{{answer}}
+--- End of answer ---
+
+Score this answer as one of:
+- correct (1.0): Fully addresses the question with accurate, specific information
+- partial (0.5): Partially correct or missing key details
+- wrong (0.0): Incorrect, irrelevant, or too vague to be useful
+
+Respond with ONLY a raw EDN map:
+{:score :correct | :partial | :wrong
+ :reasoning \"1-2 sentence explanation of the score\"}"
+
+ :version "0.2.0"}
