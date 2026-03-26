@@ -188,7 +188,8 @@
   "Shell out to git log on the given repo path. Returns raw output string.
    Throws on non-zero exit (not a git repo, path doesn't exist, etc.)."
   [repo-path]
-  (let [{:keys [exit out err]} (shell/sh "git" "-C" (str repo-path) "log" "--reverse"
+  (let [{:keys [exit out err]} (shell/sh "git" "-C" (str repo-path) "log"
+                                         "--topo-order" "--reverse"
                                          (str "--format=" git-log-format) "--numstat")]
     (when (not= 0 exit)
       (throw (ex-info (str "git log failed: " (str/trim err))
