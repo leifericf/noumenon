@@ -25,18 +25,6 @@
     'alter-var-root 'slurp 'spit 'sh 'clojure.java.shell/sh
     'binding 'Thread 'System 'Runtime 'ProcessBuilder})
 
-(def ^:private banned-names
-  "String names of banned symbols, for matching keywords and strings too."
-  (into #{} (map str) banned-symbols))
-
-(defn- banned-form?
-  "True if x is a symbol, keyword, or string matching a banned name."
-  [x]
-  (cond
-    (symbol? x)  (banned-symbols x)
-    (keyword? x) (banned-names (name x))
-    (string? x)  (banned-names x)))
-
 (defn- java-class-reference?
   "True if sym looks like a Java class (contains a dot but is not on the allowlist)."
   [sym]
@@ -77,10 +65,15 @@
     (or (some #(when (dot-interop-form? %)
                  (str "Blocked dot-interop in query: " (first %)))
               forms)
-        (->> forms
-             (filter symbol?)
-             (some #(when (or (banned-symbols %) (java-class-reference? %))
-                      (str "Blocked symbol in query: " %))))
+        (let [banned-strs (into #{} (map str) banned-symbols)]
+          (->> forms
+               (some #(cond
+                        (and (symbol? %) (or (banned-symbols %) (java-class-reference? %)))
+                        (str "Blocked symbol in query: " %)
+                        (and (keyword? %) (banned-strs (name %)))
+                        (str "Blocked symbol in query: " %)
+                        (and (string? %) (banned-strs %))
+                        (str "Blocked symbol in query: " %)))))
         (->> (extract-predicate-syms query-form)
              (some #(when-not (allowed-predicates %)
                       (str "Predicate not on allowlist: " %)))))))

@@ -593,18 +593,6 @@
     (validate-stage-result stage-key (:result stage-data)))
   checkpoint)
 
-(def ^:private run-id-pattern
-  "Valid run-id: <timestamp-ms>-<uuid>."
-  #"^\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-
-(defn validate-run-id
-  "Validate that a run-id matches the expected format. Throws on invalid input."
-  [run-id]
-  (when-not (and (string? run-id) (re-matches run-id-pattern run-id))
-    (throw (ex-info "Invalid run-id format — possible path traversal"
-                    {:run-id run-id})))
-  run-id)
-
 (defn checkpoint-read
   "Read and parse checkpoint EDN from path. Verifies SHA-256 checksum if present.
    Validates run-id format and stage result integrity.
