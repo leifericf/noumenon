@@ -226,7 +226,7 @@
                              {:name        qname
                               :description (or (:description (query/load-named-query qname)) "")})))]
     (doseq [{:keys [name description]} queries]
-      (println (format "  %-28s %s" name description)))
+      (log! (format "  %-28s %s" name description)))
     {:exit 0 :result queries}))
 
 (defn do-query
@@ -560,18 +560,18 @@
   [results]
   (let [id-width (max 2 (apply max (map (comp count str :_id) results)))
         id-fmt   (str "%-" id-width "s")]
-    (println)
-    (println (format (str "  " id-fmt "  %-5s %-5s  %s")
-                     "ID" "Pred" "Truth" "Correct?"))
-    (println (format (str "  " id-fmt "  %-5s %-5s  %s")
-                     (apply str (repeat id-width "-"))
-                     "----" "-----" "--------"))
+    (log!)
+    (log! (format (str "  " id-fmt "  %-5s %-5s  %s")
+                  "ID" "Pred" "Truth" "Correct?"))
+    (log! (format (str "  " id-fmt "  %-5s %-5s  %s")
+                  (apply str (repeat id-width "-"))
+                  "----" "-----" "--------"))
     (doseq [r results]
-      (println (format (str "  " id-fmt "  %-5s %-5s  %s")
-                       (:_id r)
-                       (or (:pred r) "nil")
-                       (:answer r)
-                       (if (:judge r) "yes" "no"))))))
+      (log! (format (str "  " id-fmt "  %-5s %-5s  %s")
+                    (:_id r)
+                    (or (:pred r) "nil")
+                    (:answer r)
+                    (if (:judge r) "yes" "no"))))))
 
 (defn- do-longbench-results
   [{:keys [run-id detail]}]
@@ -590,17 +590,17 @@
                                   :difficulty (:difficulty r) :length (:length r)})
                          results))
               fmt (fn [v] (if v (format "%5.1f%%" (double v)) "  n/a "))]
-          (println (str "Run: " rid))
-          (println (str "Questions: " (:total agg)))
-          (println)
-          (println "Accuracy (%) by difficulty and length:")
-          (println (format "  %6s  %6s  %6s  %6s  %6s  %6s"
-                           "Score" "Easy" "Hard" "Short" "Medium" "Long"))
-          (println (format "  %6s  %6s  %6s  %6s  %6s  %6s"
-                           "------" "------" "------" "------" "------" "------"))
-          (println (format "  %s  %s  %s  %s  %s  %s"
-                           (fmt (:overall agg)) (fmt (:easy agg)) (fmt (:hard agg))
-                           (fmt (:short agg)) (fmt (:medium agg)) (fmt (:long agg))))
+          (log! (str "Run: " rid))
+          (log! (str "Questions: " (:total agg)))
+          (log!)
+          (log! "Accuracy (%) by difficulty and length:")
+          (log! (format "  %6s  %6s  %6s  %6s  %6s  %6s"
+                        "Score" "Easy" "Hard" "Short" "Medium" "Long"))
+          (log! (format "  %6s  %6s  %6s  %6s  %6s  %6s"
+                        "------" "------" "------" "------" "------" "------"))
+          (log! (format "  %s  %s  %s  %s  %s  %s"
+                        (fmt (:overall agg)) (fmt (:easy agg)) (fmt (:hard agg))
+                        (fmt (:short agg)) (fmt (:medium agg)) (fmt (:long agg))))
           (when detail (print-longbench-detail! results))
           {:exit 0})
         (do (print-error! (str "No results found for run: " rid))
@@ -667,7 +667,10 @@
 (def ^:private errors-with-subcommand-usage
   #{:no-repo-path :missing-db-dir-value :unknown-flag
     :agent-missing-question :agent-missing-args :query-missing-args
-    :missing-param-value :invalid-param-value})
+    :missing-param-value :invalid-param-value
+    :invalid-concurrency :missing-concurrency-value
+    :invalid-min-delay :missing-min-delay-value
+    :invalid-max-iterations :missing-max-iterations-value})
 
 ;; --- Entry point ---
 
