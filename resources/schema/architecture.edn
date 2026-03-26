@@ -40,12 +40,7 @@
  {:db/ident       :code/calls
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/many
-  :db/doc         "Outbound call references to other code segments"}
-
- {:db/ident       :code/called-by
-  :db/valueType   :db.type/ref
-  :db/cardinality :db.cardinality/many
-  :db/doc         "Inbound call references from other code segments"}
+  :db/doc         "Outbound call references to other code segments (use :code/_calls for reverse)"}
 
  ;; --- Architectural Layers ---
  {:db/ident       :arch/layer

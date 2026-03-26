@@ -2,6 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [datomic.client.api :as d]
+            [noumenon.analyze :as analyze]
             [noumenon.db :as db]
             [noumenon.files :as files]
             [noumenon.git :as git]))
@@ -25,7 +26,7 @@
   (if (empty? args)
     {:error :no-args}
     (let [[sub & rest-args] args]
-      (if-not (#{"import" "status"} sub)
+      (if-not (#{"import" "status" "analyze"} sub)
         {:error :unknown-subcommand :subcommand sub}
         (loop [remaining rest-args
                opts {}]
@@ -52,6 +53,7 @@
              ""
              "Subcommands:"
              "  import   Import git history and file structure into Datomic"
+             "  analyze  Enrich imported files with LLM-driven semantic analysis"
              "  status   Show import counts for a repository"
              ""
              "Options:"
@@ -97,6 +99,23 @@
        :result (merge (select-keys git-r [:commits-imported :commits-skipped])
                       (select-keys files-r [:files-imported :files-skipped :dirs-imported])
                       {:db-path db-path})})))
+
+(defn do-analyze
+  "Run the analyze subcommand. Returns {:exit n :result map-or-nil}."
+  [{:keys [repo-path] :as opts}]
+  (if-let [err (validate-repo-path repo-path)]
+    (do (print-error! err) {:exit 1})
+    (let [db-dir  (resolve-db-dir opts)
+          db-name (derive-db-name repo-path)]
+      (if-not (db-exists? db-dir db-name)
+        (do (print-error! (str "No database found for \"" db-name
+                               "\". Run `import` first."))
+            {:exit 1})
+        (let [conn   (db/connect-and-ensure-schema db-dir db-name)
+              result (analyze/analyze-repo! conn repo-path
+                                            analyze/invoke-claude-cli)]
+          {:exit   0
+           :result result})))))
 
 (defn do-status
   "Run the status subcommand. Returns {:exit n :result map-or-nil}."
@@ -152,8 +171,9 @@
 
       ;; no error — dispatch subcommand
       (let [result (case (:subcommand parsed)
-                     "import" (do-import parsed)
-                     "status" (do-status parsed))]
+                     "import"  (do-import parsed)
+                     "analyze" (do-analyze parsed)
+                     "status"  (do-status parsed))]
         (when (:result result)
           (prn (:result result)))
         result))))

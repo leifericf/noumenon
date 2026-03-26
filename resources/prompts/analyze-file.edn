@@ -1,0 +1,32 @@
+{:template
+ "You are analyzing a source file from the {{lang}} project \"{{repo-name}}\".
+
+File: {{file-path}}
+Lines: {{line-count}}
+
+```{{lang-name}}
+{{content}}
+```
+
+Respond with ONLY a raw EDN map (no markdown fences, no explanation) with these keys:
+
+{:summary     \"One-paragraph plain-English summary of what this file does\"
+ :purpose     \"Why this file exists — its role in the project\"
+ :tags        [:error-handling :io :parsing :locking :allocation :concurrency :configuration :testing :serialization :networking :validation :logging :caching :security :routing :middleware :protocol :state-management]
+ :complexity  :trivial | :simple | :moderate | :complex | :very-complex
+ :patterns    [:callback :state-machine :producer-consumer :ref-counting :builder :factory :decorator :adapter :observer :pipeline :ring-handler :middleware-chain]
+ :layer       :core | :subsystem | :driver | :api | :util
+ :confidence  0.0-1.0
+ :segments    [{:name \"function-or-def-name\"
+                :kind :function | :macro | :protocol | :multimethod | :record | :type | :struct | :enum | :typedef | :global | :include | :namespace
+                :line-start 1
+                :line-end 10}]}
+
+Rules:
+- Include only tags and patterns that actually apply. Omit keys with empty collections.
+- :segments should list the major definitions, not every helper. Cap at 20 segments.
+- :complexity reflects cyclomatic/cognitive complexity, not file length.
+- :confidence is your self-assessed confidence that the analysis is accurate (0.0-1.0).
+- Keep :summary and :purpose each under 2000 characters."
+
+ :version "0.1.0"}

@@ -1,7 +1,7 @@
 [{:db/ident       :prov/confidence
   :db/valueType   :db.type/double
   :db/cardinality :db.cardinality/one
-  :db/doc         "LLM confidence score, 0.0–1.0"}
+  :db/doc         "LLM confidence score, 0.0–1.0 — asserted on entity (file/code-segment), not on tx"}
 
  {:db/ident       :prov/model-version
   :db/valueType   :db.type/string
