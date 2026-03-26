@@ -12,7 +12,6 @@
             [noumenon.agent :as agent]
             [noumenon.llm :as llm]
             [noumenon.imports :as imports]
-            [noumenon.longbench :as longbench]
             [noumenon.mcp :as mcp]
             [noumenon.query :as query]
             [noumenon.sync :as sync]
@@ -469,39 +468,6 @@
           (print-error! (.getMessage e))
           {:exit 1})))))
 
-;; --- LongBench ---
-
-(defn- do-longbench-experiment
-  [{:keys [config]}]
-  (when-not (.exists (io/file config))
-    (print-error! (str "Config file not found: " config))
-    (throw (ex-info "Config not found" {:path config})))
-  (let [cfg (longbench/load-experiment-config config)]
-    (longbench/run-experiment! cfg)
-    {:exit 0}))
-
-(defn do-longbench
-  "Run the longbench subcommand. Returns {:exit n}."
-  [{:keys [longbench-command] :as opts}]
-  (case longbench-command
-    "download"   (try
-                   (log! "Downloading LongBench dataset...")
-                   (longbench/download-dataset!)
-                   (log! "Download complete.")
-                   {:exit 0}
-                   (catch Exception e
-                     (print-error! (.getMessage e))
-                     {:exit 1}))
-    "experiment" (try
-                   (do-longbench-experiment opts)
-                   (catch clojure.lang.ExceptionInfo e
-                     (let [data (ex-data e)]
-                       (if (#{429 500 502 503} (:status data))
-                         (do (print-error! (str "API error: " (.getMessage e)))
-                             {:exit 2})
-                         (do (print-error! (.getMessage e))
-                             {:exit 1})))))))
-
 ;; --- Error dispatch ---
 
 (def ^:private error-messages
@@ -528,10 +494,6 @@
    :missing-concurrency-value    "Missing value for --concurrency."
    :invalid-min-delay            #(str "Invalid --min-delay value: " (:value %) ". Must be >= 0.")
    :missing-min-delay-value      "Missing value for --min-delay."
-   :longbench-no-subcommand      "Missing longbench subcommand. Expected: download, experiment."
-   :longbench-unknown-subcommand #(str "Unknown longbench subcommand: " (:longbench-command %)
-                                       ". Expected: download, experiment.")
-   :missing-config-value         "Missing value for --config."
    :ask-missing-args              "Missing required arguments for ask command."
    :ask-missing-question          "Missing -q <question> argument."
    :invalid-max-iterations       #(str "Invalid --max-iterations value: " (:value %))
@@ -550,8 +512,7 @@
     :missing-param-value :invalid-param-value
     :invalid-concurrency :missing-concurrency-value
     :invalid-min-delay :missing-min-delay-value
-    :invalid-max-iterations :missing-max-iterations-value
-    :missing-config-value})
+    :invalid-max-iterations :missing-max-iterations-value})
 
 ;; --- Entry point ---
 
@@ -599,11 +560,10 @@
                      "status"         (do-status parsed)
                      "list-databases" (do-list-databases parsed)
                      "benchmark"      (do-benchmark parsed)
-                     "longbench"      (do-longbench parsed)
                      "serve"          (do (mcp/serve! parsed) {:exit 0}))]
         (when (and (:result result)
                    (zero? (:exit result))
-                   (not (#{"benchmark" "longbench" "serve" "status" "list-databases"
+                   (not (#{"benchmark" "serve" "status" "list-databases"
                            "show-schema" "watch"} (:subcommand parsed))))
           (prn (:result result)))
         result))))

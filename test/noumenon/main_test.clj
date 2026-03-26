@@ -326,33 +326,6 @@
     (is (= 1 exit))
     (is (str/includes? stderr "Missing value for --min-delay"))))
 
-;; --- Tier 0: LongBench CLI arg parsing ---
-
-(deftest longbench-no-subcommand
-  (let [{:keys [exit stderr]} (run-capturing ["longbench"])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Missing longbench subcommand"))))
-
-(deftest longbench-unknown-subcommand
-  (let [{:keys [exit stderr]} (run-capturing ["longbench" "frobnicate"])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Unknown longbench subcommand: frobnicate"))))
-
-(deftest longbench-run-rejected
-  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run"])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Unknown longbench subcommand: run"))))
-
-(deftest longbench-results-rejected
-  (let [{:keys [exit stderr]} (run-capturing ["longbench" "results"])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Unknown longbench subcommand: results"))))
-
-(deftest longbench-experiment-missing-config
-  (let [{:keys [exit stderr]} (run-capturing ["longbench" "experiment"])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Missing value for --config"))))
-
 ;; --- Help and version ---
 
 (deftest global-help
@@ -380,12 +353,6 @@
     (is (= 0 exit))
     (is (str/includes? stdout "--question"))
     (is (str/includes? stdout "Exit codes"))))
-
-(deftest longbench-help
-  (let [{:keys [exit stdout]} (run-capturing ["longbench" "--help"])]
-    (is (= 0 exit))
-    (is (str/includes? stdout "download"))
-    (is (str/includes? stdout "experiment"))))
 
 (deftest version-flag
   (let [{:keys [exit stdout stderr]} (run-capturing ["--version"])]

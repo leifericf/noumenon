@@ -30,8 +30,6 @@ AI-assisted codebase understanding.
 - **Benchmark framework** — Evaluate knowledge graph efficacy with deterministic
   scoring and optional LLM-judged evaluation. Supports checkpointing, resume,
   and budget guardrails.
-- **LongBench v2 integration** — Config-driven experiment framework for
-  long-context benchmark evaluation.
 - **Concurrent processing** — Configurable parallelism for analysis (`--concurrency`,
   default 3) and postprocessing (`--concurrency`, default 8).
 - **Database management** — `list-databases` command with entity counts, pipeline
@@ -42,7 +40,7 @@ AI-assisted codebase understanding.
 ### CLI Commands
 
 `import`, `analyze`, `postprocess`, `sync`, `watch`, `query`, `ask`,
-`show-schema`, `status`, `list-databases`, `serve`, `benchmark`, `longbench`
+`show-schema`, `status`, `list-databases`, `serve`, `benchmark`
 
 ### Supported Languages
 

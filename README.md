@@ -38,7 +38,7 @@ And more complex questions such as:
 - Named EDN queries in `resources/queries/` for repeatable analysis
 - Deterministic import graph extraction (`postprocess`) for impact tracing
 - AI-powered `ask` mode that reasons by querying, not guessing
-- Benchmark flows (`benchmark`, `longbench`) to measure quality and cost
+- A/B benchmark framework to measure knowledge graph efficacy and cost
 
 ## Requirements
 
@@ -181,7 +181,7 @@ flowchart LR
   E --> G
   F --> G
 
-  C --> H[Benchmark / LongBench\nEvaluation workflows]
+  C --> H[Benchmark\nEvaluation workflows]
 ```
 
 `postprocess` is optional but recommended when you want deterministic dependency and test-impact analysis. `sync` can replace the manual `import` + `postprocess` workflow and handles incremental updates.
@@ -215,7 +215,6 @@ The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir
 | Watch | `watch <path>` | -- | Auto-sync on new commits (CLI-only) |
 | Serve | `serve` | -- | Start MCP server (CLI-only) |
 | Benchmark | `benchmark <path>` | -- | Evaluate knowledge graph efficacy (CLI-only) |
-| LongBench | `longbench <sub>` | -- | LongBench v2 experiments (CLI-only) |
 
 ### CLI options by command
 
@@ -294,9 +293,6 @@ The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir
 - `--full` — all questions including LLM-judged
 - `--canary` — run q01+q02 first as canary
 - `--db-dir` — storage directory (default: `data/datomic/`)
-
-**`longbench`** `<download|experiment>`
-- `--config` — path to experiment config EDN file (experiment only)
 
 Universal flags: `-h` / `--help`, `--version`
 
@@ -488,15 +484,6 @@ clj -M:run benchmark --max-cost 2.0 /path/to/repo
 clj -M:run benchmark --resume /path/to/repo
 ```
 
-### LongBench v2
-
-Separate from the project benchmark, `longbench` runs LongBench v2 code-repository tasks:
-
-```bash
-clj -M:run longbench download
-clj -M:run longbench experiment --config path/to/experiment.edn
-```
-
 ## Cost Planning (Rough)
 
 These are planning estimates, not guarantees. Actual usage depends on file sizes, retries, model choice, provider billing, and whether you run partial workflows.
@@ -523,7 +510,6 @@ Project benchmark has `40` questions (`22` deterministic, `18` LLM-judged). Defa
 | Default (deterministic, both conditions) | 44 (22 × 2 answer stages) | 220,000 | 35,200 | ~$1.19 |
 | Full (`--full`, all 40 questions) | 124 (80 answer + 44 LLM judge) | 620,000 | 99,200 | ~$3.35 |
 | Fast (`--fast`, deterministic + query-only) | 22 (22 × 1 answer stage) | 110,000 | 17,600 | ~$0.60 |
-| LongBench (`longbench run`) | depends on selected question count | scales linearly with questions | scales linearly with questions | model/provider dependent |
 
 \* Cost examples use Anthropic Sonnet pricing assumptions (`$3/M` input tokens, `$15/M` output tokens). Providers without public per-token pricing metadata (for example `glm`) still report token usage, but USD estimates may be `0.0`.
 

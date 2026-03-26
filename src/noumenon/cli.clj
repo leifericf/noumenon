@@ -217,12 +217,6 @@
    :initial {:subcommand "benchmark"}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
-(def ^:private longbench-experiment-command-spec
-  {:flags [{:flag "--config" :key :config :parse :string
-            :desc "Path to experiment config EDN file"
-            :error-missing :missing-config-value}]
-   :initial {:subcommand "longbench" :longbench-command "experiment"}})
-
 (def ^:private ask-command-spec
   {:flags [{:flag "-q" :key :question :parse :string
             :desc "Alias for --question"
@@ -310,17 +304,10 @@
                        :initial {:subcommand "serve"}
                        :positionals {:required 0 :error nil :keys []}}
                 :summary "Start MCP server (JSON-RPC over stdio)"
-                :usage "serve [options]"}
-   "longbench" {:spec {:subcommands
-                       {"download"   {:summary "Download LongBench v2 dataset"}
-                        "experiment" {:spec longbench-experiment-command-spec
-                                      :summary "Run a config-driven experiment"
-                                      :usage "longbench experiment --config <path>"}}}
-                :summary "LongBench v2 experiment framework"
-                :usage "longbench <download|experiment> [options]"}})
+                :usage "serve [options]"}})
 
 (def ^:private command-order
-  ["import" "analyze" "postprocess" "sync" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark" "longbench"])
+  ["import" "analyze" "postprocess" "sync" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark"])
 
 ;; --- Help text generation ---
 
@@ -351,33 +338,14 @@
 
 (defn format-subcommand-help [subcommand]
   (when-let [{:keys [spec usage summary epilog]} (command-registry subcommand)]
-    (if-let [subs (:subcommands spec)]
-      ;; Nested subcommand (longbench)
-      (str/join "\n"
-                (concat
-                 [(str summary)
-                  ""
-                  (str "Usage: " program-name " " usage)
-                  ""
-                  "Subcommands:"]
-                 (mapv (fn [[name {:keys [summary]}]]
-                         (format "  %-12s %s" name summary))
-                       subs)
-                 (mapcat (fn [[sub-name {:keys [spec]}]]
-                           (when (seq (:flags spec))
-                             [""
-                              (str (str/capitalize sub-name) " options:")
-                              (format-flags (:flags spec))]))
-                         subs)))
-      ;; Normal subcommand
-      (str/join "\n"
-                (cond-> [(str summary)
-                         ""
-                         (str "Usage: " program-name " " usage)
-                         ""
-                         "Options:"
-                         (format-flags (:flags spec))]
-                  epilog (conj "" epilog))))))
+    (str/join "\n"
+              (cond-> [(str summary)
+                       ""
+                       (str "Usage: " program-name " " usage)
+                       ""
+                       "Options:"
+                       (format-flags (:flags spec))]
+                epilog (conj "" epilog)))))
 
 ;; --- Core parser ---
 
@@ -486,33 +454,6 @@
         ;; Default: deterministic only, both conditions
         :else           (assoc result :deterministic-only true)))))
 
-(defn parse-longbench-experiment-args [args]
-  (if (contains-help? args)
-    {:help "longbench"}
-    (let [result (parse-command longbench-experiment-command-spec args)]
-      (if (:error result)
-        result
-        (if-not (:config result)
-          {:error :missing-config-value}
-          result)))))
-
-(defn parse-longbench-args [args]
-  (cond
-    (contains-help? args)
-    {:help "longbench"}
-
-    (empty? args)
-    {:error :longbench-no-subcommand :subcommand "longbench"}
-
-    :else
-    (let [[sub & rest-args] args]
-      (case sub
-        "download"   {:subcommand "longbench" :longbench-command "download"}
-        "experiment" (parse-longbench-experiment-args rest-args)
-        {:error :longbench-unknown-subcommand
-         :subcommand "longbench"
-         :longbench-command sub}))))
-
 (defn- validate-ask-question
   "Ensure ask opts include :question. Returns opts or {:error ...}."
   [opts]
@@ -565,7 +506,6 @@
       (let [[sub & rest-args] args]
         (case sub
           "benchmark"      (parse-benchmark-args rest-args)
-          "longbench"      (parse-longbench-args rest-args)
           "ask"            (parse-ask-args rest-args)
           "serve"          (if (contains-help? rest-args)
                              {:help "serve"}
