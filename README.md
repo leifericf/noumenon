@@ -307,6 +307,23 @@ Import + LLM analysis works with any language. `postprocess` adds deterministic 
 | Import extraction | Erlang | `-include` / `-include_lib` detection | none (regex) |
 | Analysis only | many others | LLM-only semantics | n/a |
 
+Markdown files (`.md`) are imported as file entities but not analyzed — they are prose, not code or config.
+
+### Sensitive File Protection
+
+Noumenon automatically excludes files matching known sensitive patterns from LLM analysis and import extraction. File contents for these paths are **never read or sent to any AI provider**:
+
+| Pattern | Examples |
+|---|---|
+| Environment files | `.env`, `.env.local`, `.env.production` (not `.env.example`) |
+| Crypto keys | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `*.jks`, `*.cert` |
+| Credential files | `credentials.json`, `token.json`, `.npmrc`, `.pypirc`, `.netrc`, `.htpasswd`, `.pgpass` |
+| SSH material | `.ssh/*`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*` |
+
+These files are still recorded in the knowledge graph as file entities (path, size, extension) but their contents are never accessed.
+
+**Your responsibility:** This blocklist covers well-known secret *files*. If you embed secrets directly in source code (hardcoded API keys, tokens, passwords), Noumenon will not detect them — that content will be sent to the LLM like any other code. Use `.gitignore`, pre-commit hooks, or tools like [git-secrets](https://github.com/awslabs/git-secrets) or [gitleaks](https://github.com/gitleaks/gitleaks) to prevent secrets from entering your repository.
+
 ## MCP Server
 
 Run Noumenon as an MCP server so agents can call it as a tool:

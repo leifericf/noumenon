@@ -269,7 +269,8 @@
                 :epilog "Accepts a local path or a Git URL (https://, git@).\nURLs are auto-cloned to data/repos/<name>/."}
    "analyze"      {:spec analyze-command-spec
                    :summary "Enrich imported files with LLM-driven semantic analysis"
-                   :usage "analyze [options] <repo-path>"}
+                   :usage "analyze [options] <repo-path>"
+                   :epilog "Sensitive files (.env, *.pem, credentials, SSH keys, etc.) are\nautomatically excluded — their contents are never sent to the LLM."}
    "postprocess"  {:spec postprocess-command-spec
                    :summary "Extract cross-file import graph deterministically"
                    :usage "postprocess [options] <repo-path>"
