@@ -204,9 +204,11 @@
                         {:flag "--skip-raw" :key :skip-raw :parse :bool
                          :desc "Omit raw-context condition (halves LLM calls)"}
                         {:flag "--skip-judge" :key :skip-judge :parse :bool
-                         :desc "Skip LLM judge stages (deterministic scores only)"}
+                         :desc "Skip LLM judge stages; use deterministic scoring where available"}
                         {:flag "--fast" :key :fast :parse :bool
-                         :desc "Sugar for --skip-raw --skip-judge"}
+                         :desc "Deterministic questions only, query condition only (cheapest mode)"}
+                        {:flag "--full" :key :full :parse :bool
+                         :desc "Run all questions including LLM-judged (default runs deterministic only)"}
                         {:flag "--canary" :key :canary :parse :bool
                          :desc "Run q01+q02 first as canary; warn if both fail"}]))
    :initial {:subcommand "benchmark"}
@@ -283,8 +285,9 @@
                 :usage "agent -q <question> [options] <repo-path>"
                 :epilog "Exit codes: 0 = answered, 1 = error, 2 = budget exhausted (no answer found)."}
    "benchmark" {:spec benchmark-command-spec
-                :summary "Run benchmark suite against a repository"
-                :usage "benchmark [options] <repo-path>"}
+                :summary "Evaluate knowledge graph efficacy against a repository"
+                :usage "benchmark [options] <repo-path>"
+                :epilog "By default, runs 22 deterministic questions (objective, reproducible).\nPass --full to include 18 LLM-judged architectural questions.\nUse --fast for cheapest mode (deterministic + query-only, no raw context)."}
    "serve"     {:spec {:flags [{:flag "--db-dir" :key :db-dir :parse :string
                                 :desc "Override storage directory (default: data/datomic/)"
                                 :error-missing :missing-db-dir-value}
@@ -466,11 +469,16 @@
   (if (contains-help? args)
     {:help "benchmark"}
     (let [result (parse-command benchmark-command-spec args)]
-      (if (or (:error result) (not (:fast result)))
-        result
-        (-> result
-            (assoc :skip-raw true :skip-judge true)
-            (dissoc :fast))))))
+      (cond
+        (:error result) result
+        ;; --fast: deterministic only + skip raw (cheapest mode)
+        (:fast result)  (-> result
+                            (assoc :skip-raw true :skip-judge true :deterministic-only true)
+                            (dissoc :fast :full))
+        ;; --full: all questions, both conditions (most expensive)
+        (:full result)  (dissoc result :full)
+        ;; Default: deterministic only, both conditions
+        :else           (assoc result :deterministic-only true)))))
 
 (defn parse-longbench-experiment-args [args]
   (if (contains-help? args)
