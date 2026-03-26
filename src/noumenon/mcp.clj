@@ -126,8 +126,12 @@
     :description "Run LLM analysis on repository files to enrich the knowledge graph with semantic metadata. Only analyzes files not yet analyzed. Requires a prior import."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
-                                     {"concurrency" {:type "integer"
-                                                     :description "Number of concurrent LLM calls (default: 3, max: 10)"}})
+                                     {"provider" {:type "string"
+                                                  :description "LLM provider: glm, claude-api, or claude-cli (aliases: claude = claude-cli)"}
+                                      "model" {:type "string"
+                                               :description "Model alias (e.g. sonnet, haiku, opus)"}
+                                      "concurrency" {:type "integer"
+                                                     :description "Number of concurrent LLM calls (default: 3, max: 20)"}})
                   :required ["repo_path"]}}
    {:name "noumenon_postprocess"
     :description "Extract cross-file import graph deterministically. No LLM calls — uses language-specific parsers. Requires a prior import."
@@ -258,11 +262,11 @@
 (defn- handle-analyze [args defaults]
   (with-conn args defaults
     (fn [{:keys [conn repo-path]}]
-      (let [provider-kw (llm/provider->kw (or (:provider defaults) llm/default-provider))
-            model-id    (llm/model-alias->id (or (:model defaults) llm/default-model-alias))
+      (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
+            model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
             invoke-llm  (llm/make-prompt-fn
                          (llm/make-invoke-fn provider-kw {:model model-id}))
-            concurrency (min (or (args "concurrency") 3) 10)
+            concurrency (min (or (args "concurrency") 3) 20)
             result      (analyze/analyze-repo! conn repo-path invoke-llm
                                                {:model-id    model-id
                                                 :concurrency concurrency})]
