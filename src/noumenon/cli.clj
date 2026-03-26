@@ -117,6 +117,14 @@
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
+(def ^:private postprocess-command-spec
+  {:flags [db-dir-flag
+           {:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
+            :desc "Parallel workers, 1-20 (default: 8)"
+            :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value}]
+   :initial {}
+   :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
+
 (def ^:private databases-command-spec
   {:flags [db-dir-flag
            {:flag "--delete" :key :delete :parse :string
@@ -218,7 +226,7 @@
    "analyze"      {:spec analyze-command-spec
                    :summary "Enrich imported files with LLM-driven semantic analysis"
                    :usage "analyze [options] <repo-path>"}
-   "postprocess"  {:spec simple-command-spec
+   "postprocess"  {:spec postprocess-command-spec
                    :summary "Extract cross-file import graph deterministically"
                    :usage "postprocess [options] <repo-path>"
                    :epilog "Parses source code imports and resolves them to repo files.\nFull support: Clojure. Import extraction: Elixir, Python, JS/TS, C/C++, Go, Rust, Java, Erlang.\nOther languages are skipped. External tools (elixir, python3, node, etc.) required on PATH."}
@@ -470,8 +478,9 @@
     {:subcommand "query" :list-queries true}
     :else
     (let [spec (case sub
-                 "query"   query-command-spec
-                 "analyze" analyze-command-spec
+                 "query"       query-command-spec
+                 "analyze"     analyze-command-spec
+                 "postprocess" postprocess-command-spec
                  simple-command-spec)
           result (parse-command spec args)]
       (assoc result :subcommand sub))))

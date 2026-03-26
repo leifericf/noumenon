@@ -148,14 +148,15 @@
 
 (defn do-postprocess
   "Run the postprocess subcommand. Returns {:exit n :result map-or-nil}."
-  [opts]
+  [{:keys [concurrency] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
       (with-existing-db
         ctx
         (fn [{:keys [conn repo-path]}]
-          (let [result (imports/postprocess-repo! conn repo-path)]
+          (let [result (imports/postprocess-repo! conn repo-path
+                                                  {:concurrency (or concurrency 8)})]
             (log! (str "Next: run '" cli/program-name " query file-imports "
                        repo-path "' to explore the import graph."))
             {:exit 0 :result result}))))))

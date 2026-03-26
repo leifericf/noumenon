@@ -1,7 +1,8 @@
 (ns noumenon.imports
   "Deterministic import extraction — parses source code to build a file→file
    dependency graph without an LLM. Dispatches on :file/lang via multimethods."
-  (:require [clojure.java.shell :as shell]
+  (:require [clojure.core.async :as async]
+            [clojure.java.shell :as shell]
             [clojure.string :as str]
             [clojure.tools.namespace.parse :as ns-parse]
             [datomic.client.api :as d]
@@ -359,19 +360,6 @@ end")
     {:file/path    file-path
      :file/imports (mapv (fn [p] [:file/path p]) import-paths)}))
 
-(defn- c-files-tx-data
-  "Handle C/C++ files specially — uses compiler for extraction + resolution."
-  [repo-path c-files all-paths]
-  (keep (fn [{:keys [file/path]}]
-          (when-let [deps (extract-c-includes-from-compiler repo-path path)]
-            (let [resolved (->> deps
-                                (filter all-paths)
-                                (remove #{path})
-                                distinct
-                                vec)]
-              (file->tx-data path resolved))))
-        c-files))
-
 (def ^:private batch-size 50)
 
 (defn- flush-batch!
@@ -383,69 +371,135 @@ end")
                                             :tx/source :deterministic})}))
   [])
 
-(defn- process-tx-items
-  "Reduce over tx-data items, accumulating counts and flushing in batches.
-   Each item is a tx-data map (from file->tx-data or c-files-tx-data)."
-  [conn init tx-items]
-  (let [{:keys [batch] :as final}
-        (reduce (fn [{:keys [batch] :as acc} tx]
-                  (let [batch' (conj batch tx)
-                        acc'   (-> acc
-                                   (update :files-processed inc)
-                                   (update :imports-resolved + (count (:file/imports tx))))]
-                    (if (>= (count batch') batch-size)
-                      (assoc acc' :batch (flush-batch! conn batch'))
-                      (assoc acc' :batch batch'))))
-                init
-                tx-items)]
-    (assoc final :batch (flush-batch! conn batch))))
+(defn- extract-one
+  "Extract and resolve imports for a single file. Returns tx-data map or nil."
+  [repo-path all-paths {:keys [file/path file/lang]}]
+  (try
+    (let [content  (analyze/git-show repo-path path)
+          resolved (postprocess-file lang content path all-paths)]
+      (file->tx-data path resolved))
+    (catch Exception _
+      {:error? true :file/path path})))
+
+(defn- extract-one-c
+  "Extract includes for a C/C++ file via compiler. Returns tx-data map or nil."
+  [repo-path all-paths {:keys [file/path]}]
+  (try
+    (when-let [deps (extract-c-includes-from-compiler repo-path path)]
+      (let [resolved (->> deps (filter all-paths) (remove #{path}) distinct vec)]
+        (file->tx-data path resolved)))
+    (catch Exception _
+      {:error? true :file/path path})))
+
+(def ^:private no-imports
+  "Sentinel for files with no imports (nil cannot traverse core.async channels)."
+  ::no-imports)
+
+(def ^:private progress-interval
+  "Log progress every N files."
+  500)
+
+(defn- with-progress
+  "Wrap extract-fn to log periodic progress. Returns wrapped fn."
+  [extract-fn total]
+  (let [counter (atom 0)]
+    (fn [file]
+      (let [result (extract-fn file)
+            n      (swap! counter inc)]
+        (when (zero? (mod n progress-interval))
+          (log! (str "  [" n "/" total "] extracting imports...")))
+        result))))
+
+(defn- run-extraction
+  "Run extract-fn over files with bounded concurrency. Returns vec of results."
+  [extract-fn files concurrency]
+  (let [total (count files)
+        f     (if (> total progress-interval)
+                (with-progress extract-fn total)
+                extract-fn)]
+    (if (<= concurrency 1)
+      (mapv f files)
+      (let [in-ch  (async/to-chan! (vec files))
+            out-ch (async/chan total)]
+        (async/pipeline-blocking
+         concurrency out-ch
+         (map #(or (f %) no-imports))
+         in-ch)
+        (loop [results (transient [])]
+          (if-let [v (async/<!! out-ch)]
+            (recur (conj! results (when-not (identical? v no-imports) v)))
+            (persistent! results)))))))
+
+(defn- extract-all
+  "Extract imports for standard (non-C) files. Returns vec of results."
+  [repo-path all-paths files concurrency]
+  (run-extraction #(extract-one repo-path all-paths %) files concurrency))
+
+(defn- extract-all-c
+  "Extract includes for C/C++ files via compiler. Returns vec of results."
+  [repo-path all-paths files concurrency]
+  (run-extraction #(extract-one-c repo-path all-paths %) files concurrency))
+
+(defn- tally-and-transact!
+  "Tally results and transact in batches. Returns summary map."
+  [conn results]
+  (reduce (fn [{:keys [batch] :as acc} result]
+            (cond
+              (nil? result)
+              (update acc :files-processed inc)
+
+              (:error? result)
+              (-> acc (update :files-errored inc))
+
+              :else
+              (let [batch' (conj batch result)
+                    acc'   (-> acc
+                               (update :files-processed inc)
+                               (update :imports-resolved + (count (:file/imports result))))]
+                (if (>= (count batch') batch-size)
+                  (assoc acc' :batch (flush-batch! conn batch'))
+                  (assoc acc' :batch batch')))))
+          {:files-processed 0 :imports-resolved 0
+           :files-skipped 0 :files-errored 0 :batch []}
+          results))
 
 (defn postprocess-repo!
   "Extract cross-file import graph deterministically and transact into Datomic.
-   Returns a summary map."
-  [conn repo-path]
-  (let [db        (d/db conn)
-        all-files (files-with-lang db)
-        all-paths (into #{} (map :file/path) all-files)
-        tools     (probe-tools)
-        counts-by-lang (frequencies (map :file/lang all-files))
-        _         (log-tool-availability! tools counts-by-lang)
-        c-langs   #{:c :cpp}
-        c-files   (filter (comp c-langs :file/lang) all-files)
-        std-files (remove (comp c-langs :file/lang) all-files)
-        needs-tool #{:python :javascript :typescript :elixir :go}
-        std-files  (remove (fn [{:keys [file/lang]}]
-                             (and (needs-tool lang)
-                                  (not (get-in tools [lang :available?]))))
-                           std-files)
-        init      {:files-processed 0 :imports-resolved 0
-                   :files-skipped 0 :files-errored 0 :batch []}
-        ;; Build tx-data for standard files, tracking errors via reduce
-        std-result (reduce (fn [acc {:keys [file/path file/lang]}]
-                             (try
-                               (let [content  (analyze/git-show repo-path path)
-                                     resolved (postprocess-file lang content path all-paths)]
-                                 (if-let [tx (file->tx-data path resolved)]
-                                   (let [batch' (conj (:batch acc) tx)]
-                                     (cond-> (-> acc
-                                                 (update :files-processed inc)
-                                                 (update :imports-resolved + (count resolved)))
-                                       (>= (count batch') batch-size)
-                                       (assoc :batch (flush-batch! conn batch'))
-                                       (< (count batch') batch-size)
-                                       (assoc :batch batch')))
-                                   (update acc :files-processed inc)))
-                               (catch Exception _
-                                 (update acc :files-errored inc))))
-                           init
-                           std-files)
-        ;; Process C/C++ files
-        c-tx-items (when (and (seq c-files) (get-in tools [:c :available?]))
-                     (c-files-tx-data repo-path c-files all-paths))
-        final      (process-tx-items conn std-result (or c-tx-items []))
-        {:keys [files-processed imports-resolved files-errored]} final]
-    (log! (str "  Postprocessed " files-processed " files, "
-               imports-resolved " import edges resolved"
-               (when (pos? files-errored)
-                 (str ", " files-errored " errors"))))
-    (dissoc final :batch)))
+   Returns a summary map. `opts` may include :concurrency (default 8)."
+  ([conn repo-path] (postprocess-repo! conn repo-path {}))
+  ([conn repo-path {:keys [concurrency] :or {concurrency 8}}]
+   (let [db        (d/db conn)
+         all-files (files-with-lang db)
+         all-paths (into #{} (map :file/path) all-files)
+         tools     (probe-tools)
+         counts-by-lang (frequencies (map :file/lang all-files))
+         _         (log-tool-availability! tools counts-by-lang)
+         c-langs   #{:c :cpp}
+         c-files   (filter (comp c-langs :file/lang) all-files)
+         std-files (remove (comp c-langs :file/lang) all-files)
+         needs-tool #{:python :javascript :typescript :elixir :go}
+         std-files  (remove (fn [{:keys [file/lang]}]
+                              (and (needs-tool lang)
+                                   (not (get-in tools [lang :available?]))))
+                            std-files)
+         total     (+ (count std-files) (count c-files))
+         _         (log! (str "  Extracting imports from " total " files"
+                              (when (> concurrency 1)
+                                (str " (concurrency=" concurrency ")"))
+                              "..."))
+         ;; Extract imports — parallel when concurrency > 1
+         std-results (extract-all repo-path all-paths std-files concurrency)
+         c-results   (when (and (seq c-files) (get-in tools [:c :available?]))
+                       (extract-all-c repo-path all-paths c-files concurrency))
+         ;; Tally and transact (sequential batches)
+         all-results (into std-results c-results)
+         final       (tally-and-transact! conn all-results)
+         final       (update final :batch #(flush-batch! conn %))
+         {:keys [files-processed imports-resolved files-errored]} final]
+     (log! (str "  Postprocessed " files-processed " files, "
+                imports-resolved " import edges resolved"
+                (when (> concurrency 1)
+                  (str " (concurrency=" concurrency ")"))
+                (when (pos? files-errored)
+                  (str ", " files-errored " errors"))))
+     (dissoc final :batch))))
