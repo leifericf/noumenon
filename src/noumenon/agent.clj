@@ -228,7 +228,7 @@
   [db question {:keys [invoke-fn repo-name max-iterations]
                 :or   {max-iterations default-max-iterations}}]
   (let [system-prompt (build-system-prompt db repo-name)
-        context      {:db db :invoke-fn invoke-fn :system-prompt system-prompt}
+        context      {:db db :invoke-fn invoke-fn}
         initial      {:messages [{:role "user" :content (str system-prompt "\n\n" question)}]
                       :steps []
                       :iterations 0

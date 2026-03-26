@@ -37,8 +37,8 @@
   (let [score-keys (fn [r] (->> (keys r) (filter #(str/ends-with? (name %) "-score"))))
         scores (mapv (fn [r]
                        (let [sks (score-keys r)
-                             vals (map #(get r %) sks)]
-                         {:id (:id r) :scores (vec vals)}))
+                             score-vals (map #(get r %) sks)]
+                         {:id (:id r) :scores (vec score-vals)}))
                      canary-results)
         all-wrong? (every? (fn [s] (every? #{:wrong} (:scores s))) scores)]
     (if all-wrong?

@@ -285,12 +285,13 @@
 (defn- handle-update [args defaults]
   (validate-string-length! "repo_path" (args "repo_path") max-repo-path-len)
   (validate-llm-inputs! args)
-  (let [repo-path (args "repo_path")]
+  (let [raw-path (args "repo_path")
+        repo-path (.getCanonicalPath (io/file raw-path))]
     (validate-repo-path! repo-path)
     (let [db-dir   (util/resolve-db-dir defaults)
           db-name  (util/derive-db-name repo-path)
           conn     (get-or-create-conn db-dir db-name)
-          repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
+          repo-uri repo-path
           analyze? (args "analyze")
           opts     (cond-> {:concurrency 8}
                      analyze?
@@ -304,11 +305,14 @@
                                           {:model (llm/model-alias->id
                                                    (or (:model defaults) llm/default-model-alias))}))))
           result   (sync/update-repo! conn repo-path repo-uri opts)]
-      (tool-result (str "Update complete."
-                        (when-let [a (:added result)] (str " " a " files added."))
-                        (when-let [m (:modified result)] (str " " m " modified."))
-                        (when-let [d (:deleted result)] (str " " d " deleted."))
-                        (when-let [c (:commits result)] (str " " c " new commits.")))))))
+      (tool-result
+       (let [changes (str (when-let [a (:added result)] (str " " a " files added."))
+                          (when-let [m (:modified result)] (str " " m " modified."))
+                          (when-let [d (:deleted result)] (str " " d " deleted."))
+                          (when-let [c (:commits result)] (str " " c " new commits.")))]
+         (if (seq changes)
+           (str "Update complete." changes)
+           "Already up to date."))))))
 
 (defn- handle-ask [args defaults]
   (validate-string-length! "question" (args "question") max-question-len)
@@ -375,7 +379,15 @@
   (let [db-dir (util/resolve-db-dir defaults)
         names  (db/list-db-dirs db-dir)]
     (if (seq names)
-      (tool-result (pr-str (mapv #(db/db-stats db-dir %) names)))
+      (let [stats (mapv #(db/db-stats db-dir %) names)]
+        (tool-result
+         (str/join "\n"
+                   (map (fn [{:keys [name commits files dirs cost error]}]
+                          (if error
+                            (str name " (error: " error ")")
+                            (str name ": " commits " commits, " files " files, " dirs " dirs"
+                                 (when (pos? cost) (str ", $" (format "%.2f" cost))))))
+                        stats))))
       (tool-result "No databases found."))))
 
 (defn- handle-benchmark-run [args defaults]

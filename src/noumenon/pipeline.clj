@@ -11,7 +11,7 @@
   [items {:keys [concurrency stop-flag error-atom before-item! process-item!]
           :or   {concurrency 1 stop-flag (atom nil) error-atom (atom nil)}}]
   (let [in-ch  (async/to-chan! (vec items))
-        out-ch (async/chan (max 1 (count items)))]
+        out-ch (async/chan (max 1 concurrency))]
     (async/pipeline-blocking
      concurrency
      out-ch
