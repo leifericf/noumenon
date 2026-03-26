@@ -8,6 +8,7 @@
             [noumenon.db :as db]
             [noumenon.files :as files]
             [noumenon.git :as git]
+            [noumenon.benchmark :as bench]
             [noumenon.imports :as imports]
             [noumenon.llm :as llm]
             [noumenon.query :as query]
@@ -144,7 +145,31 @@
                   :required ["repo_path"]}}
    {:name "noumenon_list_databases"
     :description "List all noumenon databases with entity counts, pipeline stages, and cost."
-    :inputSchema {:type "object" :properties {}}}])
+    :inputSchema {:type "object" :properties {}}}
+   {:name "noumenon_benchmark_run"
+    :description "Run a benchmark comparing LLM answers across knowledge graph layers. WARNING: Expensive — uses many LLM calls. Use max_questions to limit scope."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"provider" {:type "string" :description "LLM provider: glm, claude-api, or claude-cli"}
+                                      "model" {:type "string" :description "Model alias (e.g. sonnet, haiku, opus)"}
+                                      "max_questions" {:type "integer" :description "Limit to N questions (default: all). Use 2 for a quick canary test."}
+                                      "layers" {:type "string" :description "Comma-separated layers: raw,import,enrich,full (default: raw,full)"}
+                                      "report" {:type "boolean" :description "Generate Markdown report (default: false)"}})
+                  :required ["repo_path"]}}
+   {:name "noumenon_benchmark_results"
+    :description "Get benchmark results from the database. Returns the latest run by default, or a specific run by ID."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"run_id" {:type "string" :description "Specific run ID (default: latest)"}
+                                      "detail" {:type "boolean" :description "Include per-question results (default: false)"}})
+                  :required ["repo_path"]}}
+   {:name "noumenon_benchmark_compare"
+    :description "Compare two benchmark runs, showing score differences per layer."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"run_id_a" {:type "string" :description "First run ID"}
+                                      "run_id_b" {:type "string" :description "Second run ID"}})
+                  :required ["repo_path" "run_id_a" "run_id_b"]}}])
 
 ;; --- Tool handlers ---
 
@@ -291,17 +316,109 @@
       (tool-result (pr-str (mapv #(db/db-stats db-dir %) names)))
       (tool-result "No databases found."))))
 
+(defn- handle-benchmark-run [args defaults]
+  (with-conn args defaults
+    (fn [{:keys [conn db repo-path]}]
+      (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
+            model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
+            invoke-llm  (llm/make-prompt-fn
+                         (llm/make-invoke-fn provider-kw {:model model-id}))
+            layers-str  (args "layers")
+            layers      (when layers-str (mapv keyword (str/split layers-str #",")))
+            mode        (cond-> {}
+                          layers (assoc :layers layers))
+            result      (bench/run-benchmark! db repo-path invoke-llm
+                                              :conn conn
+                                              :mode mode
+                                              :budget {:max-questions (args "max_questions")}
+                                              :report? (args "report")
+                                              :concurrency 3)]
+        (tool-result
+         (str "Benchmark complete. Run ID: " (:run-id result)
+              "\nQuestions: " (get-in result [:aggregate :question-count])
+              (when-let [fm (get-in result [:aggregate :full-mean])]
+                (str "\nFull mean: " (format "%.1f%%" (* 100.0 (double fm)))))
+              (when-let [rm (get-in result [:aggregate :raw-mean])]
+                (str "\nRaw mean: " (format "%.1f%%" (* 100.0 (double rm)))))
+              (when-let [rp (:report-path result)]
+                (str "\nReport: " rp))))))))
+
+(defn- handle-benchmark-results [args defaults]
+  (with-conn args defaults
+    (fn [{:keys [db]}]
+      (let [run-id (args "run_id")
+            detail? (args "detail")
+            ;; Find the run — latest or by ID
+            runs (if run-id
+                   (d/q '[:find (pull ?r [*]) :in $ ?id
+                          :where [?r :bench.run/id ?id]]
+                        db run-id)
+                   (d/q '[:find (pull ?r [*])
+                          :where [?r :bench.run/id _]]
+                        db))
+            run  (->> runs (map first) (sort-by :bench.run/started-at) last)]
+        (if-not run
+          (tool-error "No benchmark runs found.")
+          (let [base (str "Run: " (:bench.run/id run)
+                          "\nStatus: " (name (:bench.run/status run))
+                          "\nCommit: " (:bench.run/commit-sha run)
+                          "\nQuestions: " (:bench.run/question-count run)
+                          (when-let [fm (:bench.run/full-mean run)]
+                            (str "\nFull mean: " (format "%.1f%%" (* 100.0 (double fm)))))
+                          (when-let [rm (:bench.run/raw-mean run)]
+                            (str "\nRaw mean: " (format "%.1f%%" (* 100.0 (double rm)))))
+                          (when (:bench.run/canonical? run) "\nCanonical: true"))
+                detail (when detail?
+                         (let [results (:bench.run/results run)]
+                           (str "\n\nPer-question results:\n"
+                                (str/join "\n"
+                                          (map (fn [r]
+                                                 (str (name (:bench.result/question-id r))
+                                                      " " (name (or (:bench.result/category r) :unknown))
+                                                      " full=" (name (or (:bench.result/full-score r) :n/a))
+                                                      " raw=" (name (or (:bench.result/raw-score r) :n/a))))
+                                               (sort-by :bench.result/question-id results))))))]
+            (tool-result (str base detail))))))))
+
+(defn- handle-benchmark-compare [args defaults]
+  (with-conn args defaults
+    (fn [{:keys [db]}]
+      (let [id-a (args "run_id_a")
+            id-b (args "run_id_b")
+            pull-run (fn [id]
+                       (ffirst (d/q '[:find (pull ?r [*]) :in $ ?id
+                                      :where [?r :bench.run/id ?id]]
+                                    db id)))
+            run-a (pull-run id-a)
+            run-b (pull-run id-b)]
+        (cond
+          (not run-a) (tool-error (str "Run not found: " id-a))
+          (not run-b) (tool-error (str "Run not found: " id-b))
+          :else
+          (let [{:keys [deltas]} (bench/compare-runs run-a run-b)]
+            (tool-result
+             (str "Comparing " id-a " vs " id-b "\n\n"
+                  (str/join "\n"
+                            (map (fn [[k v]]
+                                   (str (name k) ": "
+                                        (if (pos? v) "+" "")
+                                        (format "%.1f" (* 100.0 v)) "pp"))
+                                 (sort-by key deltas)))))))))))
+
 (def ^:private tool-handlers
-  {"noumenon_import"         handle-import
-   "noumenon_status"         handle-status
-   "noumenon_query"          handle-query
-   "noumenon_list_queries"   handle-list-queries
-   "noumenon_get_schema"     handle-get-schema
-   "noumenon_update"         handle-update
-   "noumenon_ask"            handle-ask
-   "noumenon_analyze"        handle-analyze
-   "noumenon_enrich"         handle-enrich
-   "noumenon_list_databases" handle-list-databases})
+  {"noumenon_import"            handle-import
+   "noumenon_status"            handle-status
+   "noumenon_query"             handle-query
+   "noumenon_list_queries"      handle-list-queries
+   "noumenon_get_schema"        handle-get-schema
+   "noumenon_update"            handle-update
+   "noumenon_ask"               handle-ask
+   "noumenon_analyze"           handle-analyze
+   "noumenon_enrich"            handle-enrich
+   "noumenon_list_databases"    handle-list-databases
+   "noumenon_benchmark_run"     handle-benchmark-run
+   "noumenon_benchmark_results" handle-benchmark-results
+   "noumenon_benchmark_compare" handle-benchmark-compare})
 
 ;; --- MCP method handlers ---
 
