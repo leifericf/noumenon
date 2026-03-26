@@ -226,7 +226,7 @@
                              {:name        qname
                               :description (or (:description (query/load-named-query qname)) "")})))]
     (doseq [{:keys [name description]} queries]
-      (log! (format "  %-28s %s" name description)))
+      (println (format "  %-28s %s" name description)))
     {:exit 0 :result queries}))
 
 (defn do-query
@@ -304,10 +304,10 @@
                        :files   (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
                        :dirs    (count (d/q '[:find ?e :where [?e :dir/path _]] db))
                        :db-path (db-path c)}]
-            (log! (str (:commits stats) " commits, "
-                       (:files stats) " files, "
-                       (:dirs stats) " directories"
-                       " -- db: " (:db-path stats)))
+            (println (str (:commits stats) " commits, "
+                          (:files stats) " files, "
+                          (:dirs stats) " directories"
+                          " -- db: " (:db-path stats)))
             {:exit 0 :result stats}))))))
 
 ;; --- Databases ---
@@ -441,21 +441,14 @@
       {:exit 1}
 
       (not (:ok compat))
-      (let [field-labels {:repo-path          "Repository path"
-                          :commit-sha         "Git HEAD commit"
-                          :question-set-hash  "Question set"
-                          :model-config       "Model configuration"
-                          :mode               "Run mode"
-                          :rubric-hash        "Rubric"
-                          :answer-prompt-hash "Answer prompt"}]
-        (print-error!
-         (str "Incompatible checkpoint. Mismatched fields:\n"
-              (str/join "\n"
-                        (map #(str "  " (get field-labels (:field %) (name (:field %)))
-                                   ": checkpoint=" (:checkpoint %)
-                                   " current=" (:current %))
-                             (:mismatches compat)))))
-        {:exit 1})
+      (do (print-error!
+           (str "Incompatible checkpoint. Mismatched fields:\n"
+                (str/join "\n"
+                          (map #(str "  " (name (:field %))
+                                     ": checkpoint=" (:checkpoint %)
+                                     " current=" (:current %))
+                               (:mismatches compat)))))
+          {:exit 1})
 
       :else
       (run-benchmark-impl! db repo-path answer-llm
@@ -464,7 +457,7 @@
 (defn do-benchmark
   "Run the benchmark subcommand. Returns {:exit n}."
   [{:keys [resume max-questions stop-after max-cost model judge-model provider
-           concurrency min-delay skip-raw skip-judge deterministic-only canary] :as opts}]
+           concurrency min-delay skip-raw skip-judge canary] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
@@ -487,9 +480,8 @@
                                                    :stop-after-ms (when stop-after (* stop-after 1000))
                                                    :max-cost-usd  max-cost}
                                   :mode           (cond-> {}
-                                                    skip-raw           (assoc :skip-raw true)
-                                                    skip-judge         (assoc :skip-judge true)
-                                                    deterministic-only (assoc :deterministic-only true))
+                                                    skip-raw   (assoc :skip-raw true)
+                                                    skip-judge (assoc :skip-judge true))
                                   :canary         canary
                                   :concurrency    concurrency
                                   :min-delay      min-delay}]
@@ -502,36 +494,125 @@
 
 ;; --- LongBench ---
 
-(defn- do-longbench-experiment
-  [{:keys [config]}]
-  (when-not (.exists (io/file config))
-    (print-error! (str "Config file not found: " config))
-    (throw (ex-info "Config not found" {:path config})))
-  (let [cfg (longbench/load-experiment-config config)]
-    (longbench/run-experiment! cfg)
-    {:exit 0}))
+(defn- do-longbench-run
+  [{:keys [resume max-questions stop-after max-cost model provider concurrency min-delay]}]
+  (try
+    (let [provider-kw    (llm/provider->kw (or provider llm/default-provider))
+          model-id       (llm/model-alias->id (or model llm/default-model-alias))
+          checkpoint-dir "data/longbench/runs"
+          invoke-llm     (llm/make-invoke-fn provider-kw
+                                             {:model       model-id
+                                              :temperature 0.1
+                                              :max-tokens  128})
+          budget         {:max-questions max-questions
+                          :stop-after-ms (when stop-after (* stop-after 1000))
+                          :max-cost-usd  max-cost}]
+      (when (= :claude-cli provider-kw)
+        (log! "longbench/param-deviation provider=claude-cli temperature=default max_tokens=default"))
+      (if resume
+        (let [cp-path (bench/find-checkpoint checkpoint-dir
+                                             (if (string? resume) resume "latest"))]
+          (if-not cp-path
+            (do (print-error! (if (= "latest" resume)
+                                "No checkpoint files found"
+                                (str "Checkpoint not found: " resume)))
+                {:exit 1})
+            (let [cp (try (bench/checkpoint-read cp-path)
+                          (catch Exception e
+                            (print-error! (str "Failed to parse checkpoint: "
+                                               (.getMessage e)))
+                            nil))]
+              (if-not cp
+                {:exit 1}
+                (do (longbench/run-longbench-resume! invoke-llm cp
+                                                     :checkpoint-dir checkpoint-dir
+                                                     :budget budget
+                                                     :concurrency (or concurrency 3)
+                                                     :min-delay-ms (or min-delay 0))
+                    {:exit 0})))))
+        (do
+          (longbench/run-longbench! invoke-llm
+                                    :checkpoint-dir checkpoint-dir
+                                    :budget budget
+                                    :concurrency (or concurrency 3)
+                                    :min-delay-ms (or min-delay 0))
+          {:exit 0})))
+    (catch clojure.lang.ExceptionInfo e
+      (let [data (ex-data e)]
+        (if (#{429 500 502 503} (:status data))
+          (do (print-error! (str "API error: " (.getMessage e)))
+              {:exit 2})
+          (do (print-error! (.getMessage e))
+              {:exit 1}))))
+    (catch Exception e
+      (print-error! (.getMessage e))
+      (log! (str "Resume with: " cli/program-name " longbench run --resume"))
+      {:exit 2})))
+
+(defn- do-longbench-results
+  [{:keys [run-id detail]}]
+  (let [rid      (or run-id
+                     (when-let [cp (longbench/find-latest-run)]
+                       (-> (java.io.File. ^String cp) .getName
+                           (str/replace #"\.edn$" ""))))
+        _        (when-not rid
+                   (print-error! "No runs found.")
+                   (throw (ex-info "No runs found" {})))
+        results  (longbench/load-results rid)]
+    (if-not results
+      (do (print-error! (str "No results found for run: " rid))
+          {:exit 1})
+      (let [agg (longbench/aggregate-results
+                 (mapv (fn [r] {:prediction (:pred r) :answer (:answer r)
+                                :difficulty (:difficulty r) :length (:length r)})
+                       results))
+            fmt (fn [v] (if v (format "%5.1f%%" (double v)) "  n/a "))]
+        (println (str "Run: " rid))
+        (println (str "Questions: " (:total agg)))
+        (println)
+        (println "Accuracy (%) by difficulty and length:")
+        (println (format "  %6s  %6s  %6s  %6s  %6s  %6s"
+                         "Score" "Easy" "Hard" "Short" "Medium" "Long"))
+        (println (format "  %6s  %6s  %6s  %6s  %6s  %6s"
+                         "------" "------" "------" "------" "------" "------"))
+        (println (format "  %s  %s  %s  %s  %s  %s"
+                         (fmt (:overall agg)) (fmt (:easy agg)) (fmt (:hard agg))
+                         (fmt (:short agg)) (fmt (:medium agg)) (fmt (:long agg))))
+        (when detail
+          (let [id-width (max 2 (apply max (map (comp count str :_id) results)))
+                id-fmt   (str "%-" id-width "s")]
+            (println)
+            (println (format (str "  " id-fmt "  %-5s %-5s  %s")
+                             "ID" "Pred" "Truth" "Correct?"))
+            (println (format (str "  " id-fmt "  %-5s %-5s  %s")
+                             (apply str (repeat id-width "-"))
+                             "----" "-----" "--------"))
+            (doseq [r results]
+              (println (format (str "  " id-fmt "  %-5s %-5s  %s")
+                               (:_id r)
+                               (or (:pred r) "nil")
+                               (:answer r)
+                               (if (:judge r) "yes" "no"))))))
+        {:exit 0}))))
 
 (defn do-longbench
   "Run the longbench subcommand. Returns {:exit n}."
   [{:keys [longbench-command] :as opts}]
   (case longbench-command
-    "download"   (try
-                   (log! "Downloading LongBench dataset...")
-                   (longbench/download-dataset!)
-                   (log! "Download complete.")
-                   {:exit 0}
-                   (catch Exception e
-                     (print-error! (.getMessage e))
-                     {:exit 1}))
-    "experiment" (try
-                   (do-longbench-experiment opts)
-                   (catch clojure.lang.ExceptionInfo e
-                     (let [data (ex-data e)]
-                       (if (#{429 500 502 503} (:status data))
-                         (do (print-error! (str "API error: " (.getMessage e)))
-                             {:exit 2})
-                         (do (print-error! (.getMessage e))
-                             {:exit 1})))))))
+    "download" (try
+                 (log! "Downloading LongBench dataset...")
+                 (longbench/download-dataset!)
+                 (log! "Download complete.")
+                 {:exit 0}
+                 (catch Exception e
+                   (print-error! (.getMessage e))
+                   {:exit 1}))
+    "run"      (do-longbench-run opts)
+    "results"  (try
+                 (do-longbench-results opts)
+                 (catch clojure.lang.ExceptionInfo e
+                   (print-error! (.getMessage e))
+                   {:exit 1}))))
 
 ;; --- Error dispatch ---
 
@@ -559,10 +640,9 @@
    :missing-concurrency-value    "Missing value for --concurrency."
    :invalid-min-delay            #(str "Invalid --min-delay value: " (:value %) ". Must be >= 0.")
    :missing-min-delay-value      "Missing value for --min-delay."
-   :longbench-no-subcommand      "Missing longbench subcommand. Expected: download, experiment."
+   :longbench-no-subcommand      "Missing longbench subcommand. Expected: download, run, or results."
    :longbench-unknown-subcommand #(str "Unknown longbench subcommand: " (:longbench-command %)
-                                       ". Expected: download, experiment.")
-   :missing-config-value         "Missing value for --config."
+                                       ". Expected: download, run, or results.")
    :agent-missing-args           "Missing required arguments for agent command."
    :agent-missing-question        "Missing -q <question> argument."
    :invalid-max-iterations       #(str "Invalid --max-iterations value: " (:value %))
@@ -576,11 +656,7 @@
 (def ^:private errors-with-subcommand-usage
   #{:no-repo-path :missing-db-dir-value :unknown-flag
     :agent-missing-question :agent-missing-args :query-missing-args
-    :missing-param-value :invalid-param-value
-    :invalid-concurrency :missing-concurrency-value
-    :invalid-min-delay :missing-min-delay-value
-    :invalid-max-iterations :missing-max-iterations-value
-    :missing-config-value})
+    :missing-param-value :invalid-param-value})
 
 ;; --- Entry point ---
 
@@ -630,7 +706,6 @@
                      "longbench" (do-longbench parsed)
                      "serve"     (do (mcp/serve! parsed) {:exit 0}))]
         (when (and (:result result)
-                   (zero? (:exit result))
                    (not (#{"benchmark" "longbench" "serve" "status" "databases" "watch"} (:subcommand parsed))))
           (prn (:result result)))
         result))))

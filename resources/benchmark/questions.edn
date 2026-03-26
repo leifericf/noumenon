@@ -1,20 +1,20 @@
 [;; Single-hop questions — answerable from one query result
  {:id         :q01
-  :question   "Which source files are rated as 'complex' or 'very-complex'?"
+  :question   "Which Ring source files are rated as 'complex' or 'very-complex'?"
   :category   :single-hop
   :query-name "files-by-complexity"
   :scoring    :deterministic
   :rubric     "Must list all files with :complex or :very-complex rating. Partial credit for listing some."}
 
  {:id         :q02
-  :question   "What architectural layer is {{target-file}} classified as?"
+  :question   "What architectural layer is ring/middleware/params.clj classified as?"
   :category   :single-hop
   :query-name "files-by-layer"
   :scoring    :deterministic
   :rubric     "Must state the correct layer keyword for the specific file."}
 
  {:id         :q03
-  :question   "Who are the top 3 contributors by commit count?"
+  :question   "Who are the top 3 contributors to Ring by commit count?"
   :category   :single-hop
   :query-name "top-contributors"
   :scoring    :deterministic
@@ -22,37 +22,35 @@
 
  ;; Multi-hop questions — require combining multiple facts
  {:id         :q04
-  :question   "Which files are most frequently changed together? What does this suggest about coupling?"
+  :question   "Which files are most frequently changed together in Ring? What does this suggest about coupling?"
   :category   :multi-hop
   :query-name "co-changed-files"
   :rubric     "Must identify the top co-changed pairs and provide a reasonable coupling analysis."}
 
  {:id         :q05
-  :question   "Which files are classified as 'trivial' complexity AND in the 'core' architectural layer?"
-  :category   :single-hop
+  :question   "Are there any files classified as 'trivial' complexity that are in the 'core' architectural layer? If so, what do they do?"
+  :category   :multi-hop
   :query-name "files-by-complexity"
-  :scoring    :deterministic
-  :rubric     "Must list files that are both trivial complexity and core layer, or correctly state none exist."}
+  :rubric     "Must cross-reference complexity and layer data. Correct answer whether yes or no with supporting evidence."}
 
  {:id         :q06
-  :question   "Which component has the most transitive dependencies?"
-  :category   :single-hop
+  :question   "Which component has the most transitive dependencies in Ring?"
+  :category   :multi-hop
   :query-name "component-dependencies"
-  :scoring    :deterministic
-  :rubric     "Must identify the component with the most transitive dependencies."}
+  :rubric     "Must identify the component with the longest transitive dependency chain."}
 
  ;; Architectural questions — require synthesis and reasoning
  {:id         :q07
-  :question   "Describe the overall architecture in terms of its layers and how they relate."
+  :question   "Describe the overall architecture of Ring in terms of its layers and how they relate."
   :category   :architectural
   :query-name "files-by-layer"
   :rubric     "Must describe multiple layers, their roles, and inter-layer relationships. Generic answers score low."}
 
  {:id         :q08
-  :question   "What design patterns are most prevalent across the codebase? How do they support the project's goals?"
+  :question   "What design patterns are most prevalent across Ring's codebase? How do they support the library's goals?"
   :category   :architectural
   :query-name "files-by-complexity"
-  :rubric     "Must name specific patterns found in the analysis and explain their purpose."}
+  :rubric     "Must name specific patterns found in the analysis and explain their purpose in Ring's context."}
 
  {:id         :q09
   :question   "Based on the file complexity distribution, where would you focus a code review? Why?"
@@ -61,12 +59,12 @@
   :rubric     "Must reference specific high-complexity files and give concrete review rationale."}
 
  {:id         :q10
-  :question   "What are the main subsystems and how do they depend on each other?"
+  :question   "What are the main subsystems in Ring and how do they depend on each other?"
   :category   :architectural
   :query-name "component-dependencies"
   :rubric     "Must identify distinct subsystems and describe dependency relationships between them."}
 
- ;; --- Questions exercising enriched graph ---
+ ;; --- New questions exercising enriched graph ---
 
  ;; Single-hop — deterministic scoring
  {:id         :q11
@@ -97,15 +95,13 @@
   :scoring    :deterministic
   :rubric     "Must list top directories by total additions+deletions."}
 
- ;; Converted to deterministic — factual core extracted
- {:id         :q15
-  :question   "Which files appear in both the top 5 by commit count and have 'complex' or 'very-complex' rating?"
-  :category   :single-hop
-  :query-name "hotspots"
-  :scoring    :deterministic
-  :rubric     "Must list files that are both high-churn and high-complexity, or correctly state none exist."}
-
  ;; Multi-hop — LLM-judged
+ {:id         :q15
+  :question   "Which files are both high-churn and high-complexity? What does this suggest?"
+  :category   :multi-hop
+  :query-name "hotspots"
+  :rubric     "Must cross-reference churn data with complexity ratings and provide analysis."}
+
  {:id         :q16
   :question   "Are there directories with concentrated technical debt? What patterns do you see?"
   :category   :multi-hop
@@ -155,27 +151,23 @@
   :query-name "ai-authored-segments"
   :rubric     "Must identify AI-likelihood segments and compare their complexity and smell patterns."}
 
- ;; Converted to deterministic — factual core extracted
  {:id         :q24
-  :question   "Which code segments are never called by any other segment?"
-  :category   :single-hop
+  :question   "Are there any functions that appear to be dead code (never called by other segments)?"
+  :category   :multi-hop
   :query-name "uncalled-segments"
-  :scoring    :deterministic
-  :rubric     "Must list uncalled segments, or correctly state none exist."}
+  :rubric     "Must identify uncalled segments and assess whether they are truly unused."}
 
  {:id         :q25
-  :question   "Which files have the most external dependencies? List the top 5."
-  :category   :single-hop
+  :question   "Which files have the most external dependencies? What does that suggest about coupling?"
+  :category   :multi-hop
   :query-name "dependency-hotspots"
-  :scoring    :deterministic
-  :rubric     "Must list the top 5 files by dependency count."}
+  :rubric     "Must identify high-dependency files and reason about coupling risks."}
 
  {:id         :q26
-  :question   "Which code segments are marked as pure (side-effect-free)?"
-  :category   :single-hop
+  :question   "Which functions are pure and would be safest to refactor?"
+  :category   :multi-hop
   :query-name "pure-segments"
-  :scoring    :deterministic
-  :rubric     "Must list pure segments, or correctly state none exist."}
+  :rubric     "Must identify pure segments and explain why purity makes refactoring safer."}
 
  ;; --- Import graph questions (requires postprocess) ---
 
@@ -202,7 +194,7 @@
   :rubric     "Must list files with no import edges in either direction."}
 
  {:id         :q30
-  :question   "What files does {{target-file}} directly import?"
+  :question   "What files does ring/middleware/params.clj directly import?"
   :category   :single-hop
   :query-name "file-imports"
   :scoring    :deterministic
@@ -210,13 +202,13 @@
 
  ;; Multi-hop — LLM-judged
  {:id         :q31
-  :question   "Which tests should I run after changing a core module?"
+  :question   "Which tests should I run after changing ring/core/protocols.clj?"
   :category   :multi-hop
   :query-name "test-impact"
   :rubric     "Must use transitive import analysis to identify test files that depend on the changed file."}
 
  {:id         :q32
-  :question   "What is the full transitive impact of changing a widely-imported utility file? How many files are affected?"
+  :question   "What is the full transitive impact of changing ring/util.clj? How many files are affected?"
   :category   :multi-hop
   :query-name "transitive-impact"
   :rubric     "Must trace the full import tree and count/list all transitively dependent files."}
@@ -229,7 +221,7 @@
 
  ;; Architectural — LLM-judged
  {:id         :q34
-  :question   "Which architectural layer boundaries are being violated by import edges? What does the import graph reveal about layering?"
+  :question   "Which architectural layer boundaries are being violated by import edges? What does the import graph reveal about Ring's layering?"
   :category   :architectural
   :query-name "boundary-crossings"
   :rubric     "Must identify specific cross-layer imports and reason about whether they indicate design issues."}
@@ -238,41 +230,4 @@
   :question   "Based on the import graph, which files have the highest blast radius if changed? How does this compare to the co-change hotspots?"
   :category   :architectural
   :query-name "import-hotspots"
-  :rubric     "Must combine import fan-in with co-change data to give a comprehensive risk assessment."}
-
- ;; --- New deterministic questions ---
-
- {:id         :q36
-  :question   "Which dependencies are shared across the most files? List the top 5."
-  :category   :single-hop
-  :query-name "shared-dependencies"
-  :scoring    :deterministic
-  :rubric     "Must list the top 5 shared dependencies by file count."}
-
- {:id         :q37
-  :question   "Which file pairs have import edges that cross directory boundaries? List up to 5."
-  :category   :single-hop
-  :query-name "cross-dir-imports"
-  :scoring    :deterministic
-  :rubric     "Must list files with cross-directory imports, or correctly state none exist."}
-
- {:id         :q38
-  :question   "What is the distribution of commit types (fix, feat, refactor, etc.) by count?"
-  :category   :single-hop
-  :query-name "commit-kinds"
-  :scoring    :deterministic
-  :rubric     "Must list commit types in correct rank order by count."}
-
- {:id         :q39
-  :question   "Which directories have the lowest bus factor (fewest distinct commit authors)?"
-  :category   :single-hop
-  :query-name "bus-factor-by-dir"
-  :scoring    :deterministic
-  :rubric     "Must list directories with the fewest distinct authors."}
-
- {:id         :q40
-  :question   "Which commits touched the most distinct directories?"
-  :category   :single-hop
-  :query-name "commit-spread"
-  :scoring    :deterministic
-  :rubric     "Must list the top commits by directory spread count."}]
+  :rubric     "Must combine import fan-in with co-change data to give a comprehensive risk assessment."}]

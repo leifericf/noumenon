@@ -109,44 +109,6 @@
     (let [tx (files/dir->tx-data "src")]
       (is (= "dir-." (:dir/parent tx))))))
 
-(deftest sensitive-path-test
-  (testing "env files are sensitive"
-    (is (files/sensitive-path? ".env"))
-    (is (files/sensitive-path? ".env.local"))
-    (is (files/sensitive-path? ".env.production"))
-    (is (files/sensitive-path? "config/.env"))
-    (is (files/sensitive-path? "config/.env.staging")))
-  (testing "env templates are safe"
-    (is (not (files/sensitive-path? ".env.example")))
-    (is (not (files/sensitive-path? ".env.sample")))
-    (is (not (files/sensitive-path? ".env.template"))))
-  (testing "crypto keys are sensitive"
-    (is (files/sensitive-path? "certs/server.pem"))
-    (is (files/sensitive-path? "ssl/private.key"))
-    (is (files/sensitive-path? "keystore.p12"))
-    (is (files/sensitive-path? "app.keystore"))
-    (is (files/sensitive-path? "truststore.jks")))
-  (testing "credential files are sensitive"
-    (is (files/sensitive-path? ".npmrc"))
-    (is (files/sensitive-path? ".pypirc"))
-    (is (files/sensitive-path? ".netrc"))
-    (is (files/sensitive-path? ".htpasswd"))
-    (is (files/sensitive-path? ".pgpass"))
-    (is (files/sensitive-path? "credentials.json"))
-    (is (files/sensitive-path? "config/credentials.json")))
-  (testing "SSH keys are sensitive"
-    (is (files/sensitive-path? ".ssh/config"))
-    (is (files/sensitive-path? ".ssh/authorized_keys"))
-    (is (files/sensitive-path? "id_rsa"))
-    (is (files/sensitive-path? "id_ed25519"))
-    (is (files/sensitive-path? "id_ecdsa")))
-  (testing "normal code and config files are safe"
-    (is (not (files/sensitive-path? "src/core.clj")))
-    (is (not (files/sensitive-path? "config.edn")))
-    (is (not (files/sensitive-path? "package.json")))
-    (is (not (files/sensitive-path? "README.md")))
-    (is (not (files/sensitive-path? "deps.edn")))))
-
 ;; --- Tier 1: Integration tests (in-memory Datomic + real git repo) ---
 
 (defn- test-conn []

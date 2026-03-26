@@ -4,7 +4,6 @@
             [clojure.java.shell :as shell]
             [clojure.string :as str]
             [datomic.client.api :as d]
-            [noumenon.files :as files]
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
             [noumenon.util :as util :refer [escape-template-vars log! sha256-hex]])
@@ -249,20 +248,16 @@
 
 (defn files-needing-analysis
   "Return file entities (as maps with :file/path and :file/lang) that have
-   a recognized language but no :sem/summary yet.  Excludes sensitive files."
+   a recognized language but no :sem/summary yet."
   [db]
-  (let [candidates (->> (d/q '[:find ?path ?lang
-                               :where
-                               [?e :file/path ?path]
-                               [?e :file/lang ?lang]
-                               (not [?e :sem/summary _])]
-                             db)
-                        (mapv (fn [[path lang]] {:file/path path :file/lang lang})))
-        {sensitive true safe false} (group-by #(files/sensitive-path? (:file/path %))
-                                              candidates)]
-    (when (seq sensitive)
-      (log! (str "Skipping " (count sensitive) " sensitive file(s) from analysis")))
-    (sort-by :file/path safe)))
+  (->> (d/q '[:find ?path ?lang
+              :where
+              [?e :file/path ?path]
+              [?e :file/lang ?lang]
+              (not [?e :sem/summary _])]
+            db)
+       (mapv (fn [[path lang]] {:file/path path :file/lang lang}))
+       (sort-by :file/path)))
 
 ;; --- Orchestration ---
 

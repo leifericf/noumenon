@@ -83,7 +83,7 @@
 
 (def ^:private resume-flag
   {:flag "--resume" :key :resume :parse :optional-string
-   :desc "Resume from checkpoint. Optionally takes a run ID (default: latest). Place before positional args."})
+   :desc "Resume from checkpoint (default: latest). Place before <repo-path> to avoid ambiguity."})
 
 (defn- with-provider-valid
   [specs valid-set]
@@ -204,21 +204,33 @@
                         {:flag "--skip-raw" :key :skip-raw :parse :bool
                          :desc "Omit raw-context condition (halves LLM calls)"}
                         {:flag "--skip-judge" :key :skip-judge :parse :bool
-                         :desc "Skip LLM judge stages; use deterministic scoring where available"}
+                         :desc "Skip LLM judge stages (deterministic scores only)"}
                         {:flag "--fast" :key :fast :parse :bool
-                         :desc "Deterministic questions only, query condition only (cheapest mode)"}
-                        {:flag "--full" :key :full :parse :bool
-                         :desc "Run all questions including LLM-judged (default runs deterministic only)"}
+                         :desc "Sugar for --skip-raw --skip-judge"}
                         {:flag "--canary" :key :canary :parse :bool
                          :desc "Run q01+q02 first as canary; warn if both fail"}]))
    :initial {:subcommand "benchmark"}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
-(def ^:private longbench-experiment-command-spec
-  {:flags [{:flag "--config" :key :config :parse :string
-            :desc "Path to experiment config EDN file"
-            :error-missing :missing-config-value}]
-   :initial {:subcommand "longbench" :longbench-command "experiment"}})
+(def ^:private longbench-run-command-spec
+  {:flags (vec (concat [{:flag "--model" :key :model :parse :string
+                         :desc "Model alias (e.g. sonnet, haiku, opus)"
+                         :error-missing :missing-model-value}
+                        {:flag "--provider" :key :provider :parse :string
+                         :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
+                         :valid all-valid-providers
+                         :error-invalid :invalid-provider
+                         :error-missing :missing-provider-value}]
+                       concurrency-flags
+                       budget-flags
+                       [resume-flag]))
+   :initial {:subcommand "longbench" :longbench-command "run"}})
+
+(def ^:private longbench-results-command-spec
+  {:flags [{:flag "--detail" :key :detail :parse :bool
+            :desc "Show per-question detail table"}]
+   :initial {:subcommand "longbench" :longbench-command "results"}
+   :positionals {:required 0 :error nil :keys [:run-id]}})
 
 (def ^:private agent-command-spec
   {:flags [{:flag "-q" :key :question :parse :string
@@ -257,8 +269,7 @@
                 :epilog "Accepts a local path or a Git URL (https://, git@).\nURLs are auto-cloned to data/repos/<name>/."}
    "analyze"      {:spec analyze-command-spec
                    :summary "Enrich imported files with LLM-driven semantic analysis"
-                   :usage "analyze [options] <repo-path>"
-                   :epilog "Sensitive files (.env, *.pem, credentials, SSH keys, etc.) are\nautomatically excluded — their contents are never sent to the LLM."}
+                   :usage "analyze [options] <repo-path>"}
    "postprocess"  {:spec postprocess-command-spec
                    :summary "Extract cross-file import graph deterministically"
                    :usage "postprocess [options] <repo-path>"
@@ -273,7 +284,7 @@
                 :epilog "Polls git HEAD every --interval seconds (default: 30).\nRuns sync automatically when new commits are detected.\nPass --analyze to also re-analyze changed files."}
    "query"     {:spec query-command-spec
                 :summary "Run a named Datalog query against the knowledge graph"
-                :usage "query [options] <query-name> <repo-path>\n       query list"}
+                :usage "query [options] <query-name> <repo-path>"}
    "status"    {:spec simple-command-spec
                 :summary "Show import counts for a repository"
                 :usage "status [options] <repo-path>"}
@@ -285,9 +296,8 @@
                 :usage "agent -q <question> [options] <repo-path>"
                 :epilog "Exit codes: 0 = answered, 1 = error, 2 = budget exhausted (no answer found)."}
    "benchmark" {:spec benchmark-command-spec
-                :summary "Evaluate knowledge graph efficacy against a repository"
-                :usage "benchmark [options] <repo-path>"
-                :epilog "By default, runs 22 deterministic questions (objective, reproducible).\nPass --full to include 18 LLM-judged architectural questions.\nUse --fast for cheapest mode (deterministic + query-only, no raw context)."}
+                :summary "Run benchmark suite against a repository"
+                :usage "benchmark [options] <repo-path>"}
    "serve"     {:spec {:flags [{:flag "--db-dir" :key :db-dir :parse :string
                                 :desc "Override storage directory (default: data/datomic/)"
                                 :error-missing :missing-db-dir-value}
@@ -306,12 +316,15 @@
                 :summary "Start MCP server (JSON-RPC over stdio)"
                 :usage "serve [options]"}
    "longbench" {:spec {:subcommands
-                       {"download"   {:summary "Download LongBench v2 dataset"}
-                        "experiment" {:spec longbench-experiment-command-spec
-                                      :summary "Run a config-driven experiment"
-                                      :usage "longbench experiment --config <path>"}}}
-                :summary "LongBench v2 experiment framework"
-                :usage "longbench <download|experiment> [options]"}})
+                       {"download" {:summary "Download LongBench v2 dataset"}
+                        "run"      {:spec longbench-run-command-spec
+                                    :summary "Run LongBench v2 benchmark"
+                                    :usage "longbench run [options]"}
+                        "results"  {:spec longbench-results-command-spec
+                                    :summary "Show results for a run"
+                                    :usage "longbench results [options] [run-id]"}}}
+                :summary "Run LongBench v2 standard benchmark"
+                :usage "longbench <download|run|results> [options]"}})
 
 (def ^:private command-order
   ["import" "analyze" "postprocess" "sync" "watch" "query" "status" "databases" "agent" "serve" "benchmark" "longbench"])
@@ -357,12 +370,17 @@
                  (mapv (fn [[name {:keys [summary]}]]
                          (format "  %-12s %s" name summary))
                        subs)
-                 (mapcat (fn [[sub-name {:keys [spec]}]]
-                           (when (seq (:flags spec))
-                             [""
-                              (str (str/capitalize sub-name) " options:")
-                              (format-flags (:flags spec))]))
-                         subs)))
+                 (let [run-spec (get-in subs ["run" :spec])
+                       res-spec (get-in subs ["results" :spec])]
+                   (concat
+                    (when (seq (:flags run-spec))
+                      [""
+                       "Run options:"
+                       (format-flags (:flags run-spec))])
+                    (when (seq (:flags res-spec))
+                      [""
+                       "Results options:"
+                       (format-flags (:flags res-spec))])))))
       ;; Normal subcommand
       (str/join "\n"
                 (cond-> [(str summary)
@@ -469,26 +487,21 @@
   (if (contains-help? args)
     {:help "benchmark"}
     (let [result (parse-command benchmark-command-spec args)]
-      (cond
-        (:error result) result
-        ;; --fast: deterministic only + skip raw (cheapest mode)
-        (:fast result)  (-> result
-                            (assoc :skip-raw true :skip-judge true :deterministic-only true)
-                            (dissoc :fast :full))
-        ;; --full: all questions, both conditions (most expensive)
-        (:full result)  (dissoc result :full)
-        ;; Default: deterministic only, both conditions
-        :else           (assoc result :deterministic-only true)))))
+      (if (or (:error result) (not (:fast result)))
+        result
+        (-> result
+            (assoc :skip-raw true :skip-judge true)
+            (dissoc :fast))))))
 
-(defn parse-longbench-experiment-args [args]
+(defn parse-longbench-run-args [args]
   (if (contains-help? args)
     {:help "longbench"}
-    (let [result (parse-command longbench-experiment-command-spec args)]
-      (if (:error result)
-        result
-        (if-not (:config result)
-          {:error :missing-config-value}
-          result)))))
+    (parse-command longbench-run-command-spec args)))
+
+(defn parse-longbench-results-args [args]
+  (if (contains-help? args)
+    {:help "longbench"}
+    (parse-command longbench-results-command-spec args)))
 
 (defn parse-longbench-args [args]
   (cond
@@ -501,8 +514,9 @@
     :else
     (let [[sub & rest-args] args]
       (case sub
-        "download"   {:subcommand "longbench" :longbench-command "download"}
-        "experiment" (parse-longbench-experiment-args rest-args)
+        "download" {:subcommand "longbench" :longbench-command "download"}
+        "run"      (parse-longbench-run-args rest-args)
+        "results"  (parse-longbench-results-args rest-args)
         {:error :longbench-unknown-subcommand
          :subcommand "longbench"
          :longbench-command sub}))))
