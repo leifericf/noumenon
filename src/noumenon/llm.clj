@@ -76,7 +76,7 @@
    `messages` is [{:role \"user\"/\"assistant\" :content string} ...].
    Returns {:text string :usage {:input-tokens n :output-tokens m} :model string}.
    Retries up to 3 times on transient errors (429, 5xx, connection failures).
-   Throws ex-info on persistent HTTP errors with response body excerpt."
+   Throws ex-info on persistent HTTP errors. Response body is logged to stderr only."
   [messages {:keys [model temperature max-tokens base-url auth-token]}]
   (let [url      (str base-url "/v1/messages")
         req-body (json/write-str
@@ -114,9 +114,10 @@
               (recur (inc attempt)))
 
           (not= 200 status)
-          (throw (ex-info (str "API error: HTTP " status " — "
-                               (truncate (str body) 200))
-                          {:status status :attempts attempt}))
+          (do (log! (str "API error response (HTTP " status "): "
+                         (truncate (str body) 200)))
+              (throw (ex-info (str "API error: HTTP " status)
+                              {:status status :attempts attempt})))
 
           :else
           (let [dur-ms  (- (System/currentTimeMillis) start-ms)
