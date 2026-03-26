@@ -1,0 +1,6 @@
+{:name "dependency-hotspots"
+ :description "Files ranked by number of dependencies (imports)"
+ :query [:find ?path (count ?dep)
+         :where
+         [?file :file/path ?path]
+         [?file :sem/dependencies ?dep]]}

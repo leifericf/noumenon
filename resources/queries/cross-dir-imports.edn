@@ -1,0 +1,12 @@
+{:name "cross-dir-imports"
+ :description "Import edges between files in different top-level directories"
+ :query [:find ?from-path ?to-path ?from-dir ?to-dir
+         :where
+         [?from :file/imports ?to]
+         [?from :file/path ?from-path]
+         [?to :file/path ?to-path]
+         [?from :file/directory ?fdir]
+         [?to :file/directory ?tdir]
+         [?fdir :dir/path ?from-dir]
+         [?tdir :dir/path ?to-dir]
+         [(!= ?from-dir ?to-dir)]]}

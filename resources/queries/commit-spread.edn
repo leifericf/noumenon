@@ -1,0 +1,8 @@
+{:name "commit-spread"
+ :description "Commits ranked by number of distinct directories touched (shotgun surgery)"
+ :query [:find ?sha ?msg (count-distinct ?dir)
+         :where
+         [?commit :git/sha ?sha]
+         [?commit :commit/message ?msg]
+         [?commit :commit/changed-files ?file]
+         [?file :file/directory ?dir]]}

@@ -68,6 +68,17 @@
     (is (re-find #"code" prompt))
     (is (not (re-find #"  code  " prompt)))))
 
+(deftest build-prompt-no-template-smuggling
+  (testing "context containing $Q$ does not substitute the question placeholder"
+    (let [q {:context "code with $Q$ literal"
+             :question "What is this?"
+             :choice_A "A" :choice_B "B" :choice_C "C" :choice_D "D"}
+          prompt (lb/build-prompt q)]
+      (is (re-find #"code with \$Q\$ literal" prompt)
+          "context $Q$ should remain literal, not be replaced by question")
+      (is (re-find #"What is this\?" prompt)
+          "question should appear in its correct placeholder location"))))
+
 ;; --- extract-answer ---
 
 (deftest extract-answer-with-parens

@@ -25,9 +25,9 @@
 
 ;; --- Tier 0: Pure function tests ---
 
-(deftest load-questions-returns-10
+(deftest load-questions-returns-all
   (let [qs (bench/load-questions)]
-    (is (= 10 (count qs)))
+    (is (= 35 (count qs)))
     (doseq [q qs]
       (is (keyword? (:id q)) (str "question " (:id q) " has :id"))
       (is (string? (:question q)) (str "question " (:id q) " has :question"))
@@ -103,12 +103,25 @@
     (is (str/includes? p "My rubric"))
     (is (str/includes? p "My answer"))))
 
+(deftest judge-prompt-escapes-template-vars-in-answer
+  (let [p (bench/judge-prompt "Q: {{question}} R: {{rubric}} A: {{answer}}"
+                              "My question" "My rubric" "Answer with {{rubric}} injection")]
+    (is (str/includes? p "My question"))
+    (is (str/includes? p "My rubric"))
+    (is (not (str/includes? p "{{rubric}} injection"))
+        "Template vars in answer must be escaped")
+    (is (str/includes? p "{ {rubric}} injection"))))
+
+(deftest answer-prompt-includes-untrusted-data-warning
+  (let [p (bench/answer-prompt "What is Ring?" "some context")]
+    (is (str/includes? p "untrusted"))))
+
 ;; --- Tier 0: Checkpoint infrastructure ---
 
 (deftest generate-run-id-format
   (let [id (bench/generate-run-id)]
     (is (string? id))
-    (is (re-matches #"\d+-[0-9a-f]{4}" id))))
+    (is (re-matches #"\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" id))))
 
 (deftest generate-run-id-unique
   (let [ids (repeatedly 100 bench/generate-run-id)]
@@ -147,6 +160,31 @@
         (is (= 2 (count (:stages loaded))))
         (is (= "answer" (get-in loaded [:stages [:q01 :query :answer] :result])))
         (is (= :correct (get-in loaded [:stages [:q01 :query :judge] :result :score]))))
+      (finally
+        (doseq [f (reverse (file-seq dir))]
+          (.delete f))))))
+
+(deftest checkpoint-integrity-check
+  (let [dir  (io/file (System/getProperty "java.io.tmpdir")
+                      (str "bench-integrity-" (System/currentTimeMillis)))
+        path (str (io/file dir "test.edn"))]
+    (try
+      (bench/checkpoint-write path {:run-id "1" :stages {}})
+      (testing "valid checkpoint reads fine"
+        (is (= "1" (:run-id (bench/checkpoint-read path)))))
+      (testing "tampered checkpoint throws"
+        (spit path (str/replace (slurp path) "\"1\"" "\"tampered\""))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"SHA-256 mismatch"
+                              (bench/checkpoint-read path))))
+      (testing "legacy checkpoint without checksum reads fine"
+        (spit path (pr-str {:run-id "legacy" :stages {}}))
+        (is (= "legacy" (:run-id (bench/checkpoint-read path)))))
+      (testing "checkpoint with invalid judge score rejects"
+        (spit path (pr-str {:run-id "bad" :stages
+                            {[:q01 :query :judge]
+                             {:status :ok :result {:score :evil :reasoning "hacked"}}}}))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid judge score"
+                              (bench/checkpoint-read path))))
       (finally
         (doseq [f (reverse (file-seq dir))]
           (.delete f))))))
@@ -464,15 +502,16 @@
   (is (= :ok (bench/budget-check 12 0.0 {} 0))))
 
 (deftest budget-check-max-questions-within
-  (is (= :ok (bench/budget-check 8 0.0 {:max-questions 3} 0))))
+  ;; 8 stages completed, max-question-stages=12 (3 questions * 4 stages)
+  (is (= :ok (bench/budget-check 8 0.0 {:max-questions 3} 0 12))))
 
 (deftest budget-check-max-questions-reached
   (is (= {:exhausted :max-questions}
-         (bench/budget-check 12 0.0 {:max-questions 3} 0))))
+         (bench/budget-check 12 0.0 {:max-questions 3} 0 12))))
 
 (deftest budget-check-max-questions-exceeded
   (is (= {:exhausted :max-questions}
-         (bench/budget-check 16 0.0 {:max-questions 3} 0))))
+         (bench/budget-check 16 0.0 {:max-questions 3} 0 12))))
 
 (deftest budget-check-stop-after-within
   (is (= :ok (bench/budget-check 0 0.0 {:stop-after-ms 60000}
@@ -487,7 +526,7 @@
   ;; When both limits are exceeded, max-questions is checked first
   (is (= {:exhausted :max-questions}
          (bench/budget-check 12 0.0 {:max-questions 3 :stop-after-ms 1000}
-                             (- (System/currentTimeMillis) 2000)))))
+                             (- (System/currentTimeMillis) 2000) 12))))
 
 (deftest budget-check-max-cost-within
   (is (= :ok (bench/budget-check 0 0.005 {:max-cost-usd 0.01} 0))))
@@ -499,7 +538,7 @@
 (deftest budget-check-max-cost-after-max-questions
   ;; max-questions checked before max-cost
   (is (= {:exhausted :max-questions}
-         (bench/budget-check 12 0.02 {:max-questions 3 :max-cost-usd 0.01} 0))))
+         (bench/budget-check 12 0.02 {:max-questions 3 :max-cost-usd 0.01} 0 12))))
 
 ;; --- Tier 1: Budget integration ---
 

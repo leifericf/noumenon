@@ -1,0 +1,9 @@
+{:name "uncalled-segments"
+ :description "Code segments whose name does not appear in any other segment's call-names"
+ :query [:find ?path ?name ?kind
+         :where
+         [?seg :code/name ?name]
+         [?seg :code/file ?file]
+         [?file :file/path ?path]
+         [(get-else $ ?seg :code/kind :unknown) ?kind]
+         (not [_ :code/call-names ?name])]}

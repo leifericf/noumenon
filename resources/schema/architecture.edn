@@ -25,7 +25,7 @@
  {:db/ident       :code/kind
   :db/valueType   :db.type/keyword
   :db/cardinality :db.cardinality/one
-  :db/doc         "Segment kind — :function, :struct, :enum, :macro, :typedef, :global, :include"}
+  :db/doc         "Segment kind — :function :method :class :interface :trait :protocol :macro :multimethod :record :type :struct :enum :union :typedef :constant :property :module :namespace :global :include"}
 
  {:db/ident       :code/line-start
   :db/valueType   :db.type/long
@@ -37,10 +37,77 @@
   :db/cardinality :db.cardinality/one
   :db/doc         "Ending line number"}
 
+ ;; --- Segment Signature ---
+ {:db/ident       :code/args
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Parameter list — e.g. \"[x y]\" (Clojure), \"(int x, String y)\" (Java)"}
+
+ {:db/ident       :code/returns
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Return type — e.g. \"void\", \"int\", \"Promise<string>\". Omit for languages without explicit return types."}
+
+ {:db/ident       :code/visibility
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Access level — :public, :private, :protected, :internal, :package"}
+
+ {:db/ident       :code/docstring
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Documentation comment text, max 4096 chars"}
+
+ {:db/ident       :code/deprecated?
+  :db/valueType   :db.type/boolean
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Whether this segment is marked as deprecated"}
+
+ ;; --- Segment Quality ---
+ {:db/ident       :code/complexity
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Per-segment complexity — :trivial, :simple, :moderate, :complex"}
+
+ {:db/ident       :code/smells
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Code smell indicators — :deep-nesting, :too-many-params, :long-method, :god-function, :feature-envy, :magic-numbers, :mutation-heavy, :global-state, :duplication, :poor-naming, :dead-code, :complex-conditional"}
+
+ {:db/ident       :code/purpose
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "One-line plain-English description of what this segment does"}
+
+ {:db/ident       :code/safety-concerns
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Security/safety flags — :sql-injection, :xss, :race-condition, :unsafe-cast, :path-traversal, :command-injection, :buffer-overflow, :deserialization, :hardcoded-secret, :insecure-random, :unvalidated-redirect"}
+
+ {:db/ident       :code/error-handling
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Error handling quality — :none, :basic, :robust"}
+
  {:db/ident       :code/calls
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/many
   :db/doc         "Outbound call references to other code segments (use :code/_calls for reverse)"}
+
+ {:db/ident       :code/call-names
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Unresolved function/method names this segment calls — enables dead-code detection and rough call-graph queries"}
+
+ {:db/ident       :code/pure?
+  :db/valueType   :db.type/boolean
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Whether segment is side-effect-free (no I/O, mutation, or global state)"}
+
+ {:db/ident       :code/ai-likelihood
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "AI-authorship likelihood — :likely-ai, :possibly-ai, :likely-human, :unknown"}
 
  ;; --- Architectural Layers ---
  {:db/ident       :arch/layer
@@ -75,7 +142,13 @@
   :db/cardinality :db.cardinality/many
   :db/doc         "Files belonging to this component"}
 
- ;; --- Semantic Annotations (LLM-generated) ---
+ ;; --- Semantic Annotations (LLM-generated, file-level) ---
+
+ {:db/ident       :sem/dependencies
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Import/require/use namespace or module names — LLM first-pass, deterministic extraction supersedes later"}
+
  {:db/ident       :sem/summary
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
@@ -101,6 +174,11 @@
   :db/cardinality :db.cardinality/many
   :db/doc         "Design patterns — :callback, :state-machine, :producer-consumer, :ref-counting"}
 
+ {:db/ident       :sem/category
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Domain role — :backend, :frontend, :infrastructure, :configuration, :data, :testing, :documentation, :tooling, :shared"}
+
  ;; --- Chunks (for long content) ---
  {:db/ident       :chunk/parent
   :db/valueType   :db.type/ref
@@ -115,4 +193,11 @@
  {:db/ident       :chunk/text
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "Text content of this chunk, up to 4096 chars"}]
+  :db/doc         "Text content of this chunk, up to 4096 chars"}
+
+ ;; --- Deterministic import graph (postprocess) ---
+
+ {:db/ident       :file/imports
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Deterministically resolved file-to-file import edges — refs to other :file/path entities"}]

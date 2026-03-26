@@ -1,0 +1,10 @@
+{:name "deprecated-but-active"
+ :description "Deprecated segments in files that still receive commits"
+ :query [:find ?path ?name ?kind (count ?commit)
+         :where
+         [?seg :code/deprecated? true]
+         [?seg :code/name ?name]
+         [?seg :code/file ?file]
+         [?file :file/path ?path]
+         [(get-else $ ?seg :code/kind :unknown) ?kind]
+         [?commit :commit/changed-files ?file]]}

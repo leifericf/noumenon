@@ -1,0 +1,10 @@
+{:name "test-impact"
+ :description "Test files to run after changing a given file (transitive import analysis)"
+ :inputs [:file-path]
+ :uses-rules true
+ :query [:find ?test-path
+         :in $ % ?path
+         :where
+         [?src :file/path ?path]
+         (test-for-file ?test ?src)
+         [?test :file/path ?test-path]]}

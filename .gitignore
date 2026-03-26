@@ -26,8 +26,7 @@ Thumbs.db
 .env.local
 
 # Claude Code
-.claude/*
-!.claude/artifacts/
+.claude/
 
 # Test repos
 test-repos/

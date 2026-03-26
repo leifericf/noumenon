@@ -1,6 +1,12 @@
 (ns noumenon.cli
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [noumenon.llm :as llm]))
+
+(def program-name
+  (if (= "jar" (.getProtocol (io/resource "version.edn")))
+    "noumenon"
+    "clj -M:run"))
 
 ;; --- Coercion / validation registry ---
 
@@ -37,13 +43,8 @@
       {:ok value}
       {:error (:error-invalid spec) :value raw})))
 
-(defn- provider-set
-  "Build a provider set that supports canonical values plus optional aliases."
-  [& values]
-  (set values))
-
 (def ^:private all-valid-providers
-  (provider-set "glm" "claude" "claude-api" "claude-cli"))
+  #{"glm" "claude" "claude-api" "claude-cli"})
 
 ;; --- Shared flag specs ---
 
@@ -61,7 +62,7 @@
     :desc "Override storage directory (default: data/datomic/)"
     :error-missing :missing-db-dir-value}
    {:flag "--verbose" :key :verbose :parse :bool
-    :desc "Verbose output to stderr"}
+    :desc "Log verbose output to stderr"}
    {:flag "-v" :key :verbose :parse :bool}])
 
 (def ^:private concurrency-flags
@@ -82,26 +83,56 @@
 
 (def ^:private resume-flag
   {:flag "--resume" :key :resume :parse :optional-string
-   :desc "Resume from checkpoint (default: latest)"})
+   :desc "Resume from checkpoint (default: latest). Place before <repo-path> to avoid ambiguity."})
 
 (defn- with-provider-valid
   [specs valid-set]
   (mapv #(if (= "--provider" (:flag %)) (assoc % :valid valid-set) %) specs))
 
+;; --- Narrowly scoped flag sets ---
+
+(def ^:private db-dir-flag
+  {:flag "--db-dir" :key :db-dir :parse :string
+   :desc "Override storage directory (default: data/datomic/)"
+   :error-missing :missing-db-dir-value})
+
+(def ^:private analyze-flags
+  [{:flag "--model" :key :model :parse :string
+    :desc "Model alias (e.g. sonnet, haiku, opus)"
+    :error-missing :missing-model-value}
+   {:flag "--provider" :key :provider :parse :string
+    :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
+    :error-invalid :invalid-provider :error-missing :missing-provider-value}
+   db-dir-flag
+   {:flag "--verbose" :key :verbose :parse :bool
+    :desc "Log verbose output to stderr"}
+   {:flag "-v" :key :verbose :parse :bool}])
+
 ;; --- Declarative command specs ---
 
 (def ^:private simple-command-spec
-  {:flags (with-provider-valid common-flags all-valid-providers)
+  {:flags [db-dir-flag]
+   :initial {}
+   :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
+
+(def ^:private analyze-command-spec
+  {:flags (with-provider-valid analyze-flags all-valid-providers)
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
 (def ^:private query-command-spec
-  {:flags (with-provider-valid common-flags all-valid-providers)
+  {:flags [db-dir-flag]
    :initial {:subcommand "query"}
    :positionals {:required 2 :error :query-missing-args :keys [:query-name :repo-path]}})
 
+(def ^:private benchmark-flags
+  "Common flags without --verbose (benchmark does not use it)."
+  (->> common-flags
+       (remove (comp #{:verbose} :key))
+       vec))
+
 (def ^:private benchmark-command-spec
-  {:flags (vec (concat (with-provider-valid common-flags all-valid-providers)
+  {:flags (vec (concat (with-provider-valid benchmark-flags all-valid-providers)
                        concurrency-flags
                        budget-flags
                        [resume-flag
@@ -141,6 +172,7 @@
 
 (def ^:private agent-command-spec
   {:flags [{:flag "-q" :key :question :parse :string
+            :desc "Alias for --question"
             :error-missing :agent-missing-question}
            {:flag "--question" :key :question :parse :string
             :desc "Question to ask about the repository"
@@ -157,15 +189,11 @@
             :desc "Max query iterations (default: 10)"
             :error-invalid :invalid-max-iterations
             :error-missing :missing-max-iterations-value}
-           {:flag "--max-cost" :key :max-cost :parse :pos-double
-            :desc "Stop when session cost exceeds threshold (dollars)"
-            :error-invalid :invalid-max-cost
-            :error-missing :missing-max-cost-value}
            {:flag "--db-dir" :key :db-dir :parse :string
             :desc "Override storage directory (default: data/datomic/)"
             :error-missing :missing-db-dir-value}
            {:flag "--verbose" :key :verbose :parse :bool
-            :desc "Log iterations to stderr"}
+            :desc "Log verbose output to stderr"}
            {:flag "-v" :key :verbose :parse :bool}]
    :initial {:subcommand "agent"}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
@@ -175,10 +203,15 @@
 (def command-registry
   {"import"    {:spec simple-command-spec
                 :summary "Import git history and file structure into Datomic"
-                :usage "import [options] <repo-path>"}
-   "analyze"   {:spec simple-command-spec
-                :summary "Enrich imported files with LLM-driven semantic analysis"
-                :usage "analyze [options] <repo-path>"}
+                :usage "import [options] <repo-path-or-url>"
+                :epilog "Accepts a local path or a Git URL (https://, git@).\nURLs are auto-cloned to data/repos/<name>/."}
+   "analyze"      {:spec analyze-command-spec
+                   :summary "Enrich imported files with LLM-driven semantic analysis"
+                   :usage "analyze [options] <repo-path>"}
+   "postprocess"  {:spec simple-command-spec
+                   :summary "Extract cross-file import graph deterministically"
+                   :usage "postprocess [options] <repo-path>"
+                   :epilog "Parses source code imports and resolves them to repo files.\nFull support: Clojure. Import extraction: Python, JS/TS, C/C++, Go, Rust, Java.\nOther languages are skipped. External tools (python3, node, etc.) required on PATH."}
    "query"     {:spec query-command-spec
                 :summary "Run a named Datalog query against the knowledge graph"
                 :usage "query [options] <query-name> <repo-path>"}
@@ -187,10 +220,26 @@
                 :usage "status [options] <repo-path>"}
    "agent"     {:spec agent-command-spec
                 :summary "Ask a question about a repository using AI-powered querying"
-                :usage "agent -q <question> [options] <repo-path>"}
+                :usage "agent -q <question> [options] <repo-path>"
+                :epilog "Exit codes: 0 = answered, 1 = error, 2 = budget exhausted (no answer found)."}
    "benchmark" {:spec benchmark-command-spec
                 :summary "Run benchmark suite against a repository"
                 :usage "benchmark [options] <repo-path>"}
+   "serve"     {:spec {:flags [{:flag "--db-dir" :key :db-dir :parse :string
+                                :desc "Override storage directory (default: data/datomic/)"
+                                :error-missing :missing-db-dir-value}
+                               {:flag "--provider" :key :provider :parse :string
+                                :desc "LLM provider for ask tool (default: glm)"
+                                :valid all-valid-providers
+                                :error-invalid :invalid-provider
+                                :error-missing :missing-provider-value}
+                               {:flag "--model" :key :model :parse :string
+                                :desc "Model alias for ask tool"
+                                :error-missing :missing-model-value}]
+                       :initial {:subcommand "serve"}
+                       :positionals {:required 0 :error nil :keys []}}
+                :summary "Start MCP server (JSON-RPC over stdio)"
+                :usage "serve [options]"}
    "longbench" {:spec {:subcommands
                        {"download" {:summary "Download LongBench v2 dataset"}
                         "run"      {:spec longbench-run-command-spec
@@ -203,7 +252,7 @@
                 :usage "longbench <download|run|results> [options]"}})
 
 (def ^:private command-order
-  ["import" "analyze" "query" "status" "agent" "benchmark" "longbench"])
+  ["import" "analyze" "postprocess" "query" "status" "agent" "serve" "benchmark" "longbench"])
 
 ;; --- Help text generation ---
 
@@ -219,27 +268,28 @@
 (defn format-global-help []
   (str/join "\n"
             (concat
-             ["Usage: clj -M:run <subcommand> [options]"
+             [(str "Usage: " program-name " <subcommand> [options]")
               ""
               "Subcommands:"]
              (mapv (fn [cmd]
                      (format "  %-12s %s" cmd (:summary (command-registry cmd))))
                    command-order)
              [""
-              "Global options:"
-              (format-flags common-flags)
+              "Universal flags:"
+              (format "  %-24s %s" "-h, --help" "Show help (global or per-subcommand)")
+              (format "  %-24s %s" "--version" "Print version and exit")
               ""
-              "Run `clj -M:run <subcommand> --help` for subcommand-specific options."])))
+              (str "Run `" program-name " <subcommand> --help` for subcommand-specific options.")])))
 
 (defn format-subcommand-help [subcommand]
-  (when-let [{:keys [spec usage summary]} (command-registry subcommand)]
+  (when-let [{:keys [spec usage summary epilog]} (command-registry subcommand)]
     (if-let [subs (:subcommands spec)]
       ;; Nested subcommand (longbench)
       (str/join "\n"
                 (concat
                  [(str summary)
                   ""
-                  (str "Usage: clj -M:run " usage)
+                  (str "Usage: " program-name " " usage)
                   ""
                   "Subcommands:"]
                  (mapv (fn [[name {:keys [summary]}]]
@@ -258,17 +308,18 @@
                        (format-flags (:flags res-spec))])))))
       ;; Normal subcommand
       (str/join "\n"
-                [(str summary)
-                 ""
-                 (str "Usage: clj -M:run " usage)
-                 ""
-                 "Options:"
-                 (format-flags (:flags spec))]))))
+                (cond-> [(str summary)
+                         ""
+                         (str "Usage: " program-name " " usage)
+                         ""
+                         "Options:"
+                         (format-flags (:flags spec))]
+                  epilog (conj "" epilog))))))
 
 ;; --- Core parser ---
 
 (defn- flag-map [flags]
-  (into {} (map (juxt :flag identity)) flags))
+  (zipmap (map :flag flags) flags))
 
 (defn- parse-flags
   "Parse all flags in args. Returns [opts positional] or {:error ...}."
@@ -365,10 +416,14 @@
     (parse-command longbench-results-command-spec args)))
 
 (defn parse-longbench-args [args]
-  (if (or (empty? args) (contains-help? args))
-    (if (contains-help? args)
-      {:help "longbench"}
-      {:error :longbench-no-subcommand :subcommand "longbench"})
+  (cond
+    (contains-help? args)
+    {:help "longbench"}
+
+    (empty? args)
+    {:error :longbench-no-subcommand :subcommand "longbench"}
+
+    :else
     (let [[sub & rest-args] args]
       (case sub
         "download" {:subcommand "longbench" :longbench-command "download"}
@@ -396,12 +451,17 @@
 (defn parse-simple-args
   "Parse args for import/status/analyze/query subcommands."
   [sub args]
-  (if (contains-help? args)
-    {:help sub}
-    (if (= "query" sub)
-      (parse-command query-command-spec args)
-      (let [result (parse-command simple-command-spec args)]
-        (assoc result :subcommand sub)))))
+  (cond
+    (contains-help? args) {:help sub}
+    (and (= "query" sub) (= "list" (first args)))
+    {:subcommand "query" :list-queries true}
+    :else
+    (let [spec (case sub
+                 "query"   query-command-spec
+                 "analyze" analyze-command-spec
+                 simple-command-spec)
+          result (parse-command spec args)]
+      (assoc result :subcommand sub))))
 
 (defn parse-args
   "Top-level CLI arg parser. Returns opts map, {:help ...}, or {:error keyword ...}."
@@ -423,6 +483,11 @@
           "benchmark" (parse-benchmark-args rest-args)
           "longbench" (parse-longbench-args rest-args)
           "agent"     (parse-agent-args rest-args)
-          (if (#{"import" "status" "analyze" "query"} sub)
+          "serve"     (if (contains-help? rest-args)
+                        {:help "serve"}
+                        (let [result (parse-command (get-in command-registry ["serve" :spec]) rest-args)]
+                          (if (:error result) result
+                              (assoc result :subcommand "serve"))))
+          (if (#{"import" "status" "analyze" "postprocess" "query"} sub)
             (parse-simple-args sub rest-args)
             {:error :unknown-subcommand :subcommand sub}))))))

@@ -1,0 +1,5 @@
+{:name "commit-kinds"
+ :description "Distribution of commit types (fix, feat, refactor, etc.)"
+ :query [:find ?kind (count ?commit)
+         :where
+         [?commit :commit/kind ?kind]]}

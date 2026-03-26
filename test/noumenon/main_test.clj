@@ -17,6 +17,19 @@
 (deftest derive-db-name-single-component
   (is (= "ring" (main/derive-db-name "ring"))))
 
+(deftest derive-db-name-sanitizes-special-chars
+  (is (= "my-repo" (main/derive-db-name "/path/to/my-repo")))
+  (is (= "my_repo" (main/derive-db-name "/path/to/my_repo")))
+  (is (= "myrepo" (main/derive-db-name "/path/to/my repo")))
+  (is (= "myrepo" (main/derive-db-name "/path/to/my$repo"))))
+
+(deftest derive-db-name-rejects-dotdot
+  (is (nil? (main/derive-db-name "/path/to/..")))
+  (is (nil? (main/derive-db-name ".."))))
+
+(deftest derive-db-name-rejects-empty-after-sanitize
+  (is (nil? (main/derive-db-name "/path/to/$$$"))))
+
 (deftest resolve-db-dir-default
   (let [result (main/resolve-db-dir {})]
     (is (str/ends-with? result "data/datomic"))
@@ -49,7 +62,8 @@
     (is (= 1 exit))
     (is (str/blank? stdout))
     (is (str/includes? stderr "Unknown subcommand: frobnicate"))
-    (is (str/includes? stderr "Usage"))))
+    (is (str/includes? stderr "--help"))
+    (is (not (str/includes? stderr "Usage")))))
 
 (deftest missing-repo-path
   (let [{:keys [exit stdout stderr]} (run-capturing ["import"])]
@@ -110,12 +124,12 @@
       (is (= 0 (:exit import2)))
       (is (str/includes? (:stdout import2) ":commits-imported 0"))
       (is (str/includes? (:stdout import2) ":files-imported 0")))
-    (testing "status shows counts"
+    (testing "status shows human-readable summary"
       (is (= 0 (:exit status)))
-      (is (str/includes? (:stdout status) ":commits"))
-      (is (str/includes? (:stdout status) ":files"))
-      (is (str/includes? (:stdout status) ":dirs"))
-      (is (str/includes? (:stdout status) ":db-path")))))
+      (is (str/includes? (:stdout status) "commits"))
+      (is (str/includes? (:stdout status) "files"))
+      (is (str/includes? (:stdout status) "directories"))
+      (is (str/includes? (:stdout status) "db:")))))
 
 (deftest import-with-db-dir-flag
   (let [tmp-dir (str (.getAbsolutePath (java.io.File. (System/getProperty "java.io.tmpdir")))
@@ -135,6 +149,11 @@
   (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--frobnicate" "."])]
     (is (= 1 exit))
     (is (str/includes? stderr "Unknown option: --frobnicate"))))
+
+(deftest benchmark-verbose-rejected
+  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--verbose" "."])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Unknown option: --verbose"))))
 
 (deftest benchmark-resume-defaults-to-latest
   ;; --resume without value defaults to "latest"
@@ -367,7 +386,8 @@
 (deftest agent-help
   (let [{:keys [exit stdout]} (run-capturing ["agent" "--help"])]
     (is (= 0 exit))
-    (is (str/includes? stdout "--question"))))
+    (is (str/includes? stdout "--question"))
+    (is (str/includes? stdout "Exit codes"))))
 
 (deftest longbench-help
   (let [{:keys [exit stdout]} (run-capturing ["longbench" "--help"])]

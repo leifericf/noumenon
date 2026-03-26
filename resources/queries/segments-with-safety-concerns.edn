@@ -1,0 +1,8 @@
+{:name "segments-with-safety-concerns"
+ :description "Code segments flagged with security or safety concerns"
+ :query [:find ?path ?name ?concern
+         :where
+         [?seg :code/safety-concerns ?concern]
+         [?seg :code/name ?name]
+         [?seg :code/file ?file]
+         [?file :file/path ?path]]}

@@ -62,4 +62,172 @@
   :question   "What are the main subsystems in Ring and how do they depend on each other?"
   :category   :architectural
   :query-name "component-dependencies"
-  :rubric     "Must identify distinct subsystems and describe dependency relationships between them."}]
+  :rubric     "Must identify distinct subsystems and describe dependency relationships between them."}
+
+ ;; --- New questions exercising enriched graph ---
+
+ ;; Single-hop — deterministic scoring
+ {:id         :q11
+  :question   "Which files have had the most bug-fix commits?"
+  :category   :single-hop
+  :query-name "bug-hotspots"
+  :scoring    :deterministic
+  :rubric     "Must list the top files by fix-commit count."}
+
+ {:id         :q12
+  :question   "Who are the top 3 authors of bug-fix commits?"
+  :category   :single-hop
+  :query-name "fix-authors"
+  :scoring    :deterministic
+  :rubric     "Must name the top 3 fix-commit authors in rank order."}
+
+ {:id         :q13
+  :question   "Which files have the lowest bus factor (fewest distinct authors)?"
+  :category   :single-hop
+  :query-name "bus-factor"
+  :scoring    :deterministic
+  :rubric     "Must identify files with only 1-2 distinct authors."}
+
+ {:id         :q14
+  :question   "Which directories have the highest code churn (lines added and deleted)?"
+  :category   :single-hop
+  :query-name "churn-by-dir"
+  :scoring    :deterministic
+  :rubric     "Must list top directories by total additions+deletions."}
+
+ ;; Multi-hop — LLM-judged
+ {:id         :q15
+  :question   "Which files are both high-churn and high-complexity? What does this suggest?"
+  :category   :multi-hop
+  :query-name "hotspots"
+  :rubric     "Must cross-reference churn data with complexity ratings and provide analysis."}
+
+ {:id         :q16
+  :question   "Are there directories with concentrated technical debt? What patterns do you see?"
+  :category   :multi-hop
+  :query-name "tech-debt-by-dir"
+  :rubric     "Must identify specific directories and explain the smell patterns found."}
+
+ {:id         :q17
+  :question   "Which files change together despite being in different directories? What coupling does this reveal?"
+  :category   :multi-hop
+  :query-name "co-changed-files"
+  :rubric     "Must identify cross-directory co-changed pairs and analyze coupling implications."}
+
+ {:id         :q18
+  :question   "Which authors are most associated with bug-fix commits on high-complexity files?"
+  :category   :multi-hop
+  :query-name "bug-hotspots"
+  :rubric     "Must join author, fix-commit, and complexity data to identify patterns."}
+
+ ;; Architectural — LLM-judged
+ {:id         :q19
+  :question   "Based on commit patterns and code quality, where would you focus a refactoring effort? Why?"
+  :category   :architectural
+  :query-name "hotspots"
+  :rubric     "Must synthesize churn, complexity, smells, and coupling data to make recommendations."}
+
+ {:id         :q20
+  :question   "What can you infer about the project's development health from the ratio of fix to feature commits over time?"
+  :category   :architectural
+  :query-name "bug-hotspots"
+  :rubric     "Must analyze temporal trends in commit kinds and draw conclusions about project health."}
+
+ {:id         :q21
+  :question   "If a key contributor left, which parts of the codebase would be most at risk? Why?"
+  :category   :architectural
+  :query-name "bus-factor"
+  :rubric     "Must identify low-bus-factor areas and assess their criticality to the project."}
+
+ {:id         :q22
+  :question   "Are there areas where high churn correlates with low code quality? What does that suggest about technical debt?"
+  :category   :architectural
+  :query-name "churn-by-dir"
+  :rubric     "Must correlate churn with quality metrics and reason about technical debt accumulation."}
+
+ {:id         :q23
+  :question   "Which code segments appear to be AI-generated? How does their quality compare to human-written code?"
+  :category   :architectural
+  :query-name "ai-authored-segments"
+  :rubric     "Must identify AI-likelihood segments and compare their complexity and smell patterns."}
+
+ {:id         :q24
+  :question   "Are there any functions that appear to be dead code (never called by other segments)?"
+  :category   :multi-hop
+  :query-name "uncalled-segments"
+  :rubric     "Must identify uncalled segments and assess whether they are truly unused."}
+
+ {:id         :q25
+  :question   "Which files have the most external dependencies? What does that suggest about coupling?"
+  :category   :multi-hop
+  :query-name "dependency-hotspots"
+  :rubric     "Must identify high-dependency files and reason about coupling risks."}
+
+ {:id         :q26
+  :question   "Which functions are pure and would be safest to refactor?"
+  :category   :multi-hop
+  :query-name "pure-segments"
+  :rubric     "Must identify pure segments and explain why purity makes refactoring safer."}
+
+ ;; --- Import graph questions (requires postprocess) ---
+
+ ;; Single-hop — deterministic scoring
+ {:id         :q27
+  :question   "Which files are the most-imported in the codebase (highest fan-in)?"
+  :category   :single-hop
+  :query-name "import-hotspots"
+  :scoring    :deterministic
+  :rubric     "Must list the top files by import count (fan-in)."}
+
+ {:id         :q28
+  :question   "Are there any circular import dependencies between files?"
+  :category   :single-hop
+  :query-name "circular-imports"
+  :scoring    :deterministic
+  :rubric     "Must correctly report whether circular imports exist, listing any pairs found."}
+
+ {:id         :q29
+  :question   "Which files are orphaned — neither importing nor imported by any other file?"
+  :category   :single-hop
+  :query-name "orphan-files"
+  :scoring    :deterministic
+  :rubric     "Must list files with no import edges in either direction."}
+
+ {:id         :q30
+  :question   "What files does ring/middleware/params.clj directly import?"
+  :category   :single-hop
+  :query-name "file-imports"
+  :scoring    :deterministic
+  :rubric     "Must list the exact set of directly imported files."}
+
+ ;; Multi-hop — LLM-judged
+ {:id         :q31
+  :question   "Which tests should I run after changing ring/core/protocols.clj?"
+  :category   :multi-hop
+  :query-name "test-impact"
+  :rubric     "Must use transitive import analysis to identify test files that depend on the changed file."}
+
+ {:id         :q32
+  :question   "What is the full transitive impact of changing ring/util.clj? How many files are affected?"
+  :category   :multi-hop
+  :query-name "transitive-impact"
+  :rubric     "Must trace the full import tree and count/list all transitively dependent files."}
+
+ {:id         :q33
+  :question   "Which files change together in commits but have no import relationship? What hidden coupling does this reveal?"
+  :category   :multi-hop
+  :query-name "co-changed-files"
+  :rubric     "Must cross-reference co-change data with import graph to distinguish expected from hidden coupling."}
+
+ ;; Architectural — LLM-judged
+ {:id         :q34
+  :question   "Which architectural layer boundaries are being violated by import edges? What does the import graph reveal about Ring's layering?"
+  :category   :architectural
+  :query-name "boundary-crossings"
+  :rubric     "Must identify specific cross-layer imports and reason about whether they indicate design issues."}
+
+ {:id         :q35
+  :question   "Based on the import graph, which files have the highest blast radius if changed? How does this compare to the co-change hotspots?"
+  :category   :architectural
+  :query-name "import-hotspots"
+  :rubric     "Must combine import fan-in with co-change data to give a comprehensive risk assessment."}]

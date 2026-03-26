@@ -125,7 +125,7 @@
 (deftest import-noumenon-files
   (let [expected (ls-tree-file-count repo-path)
         conn     (test-conn)
-        result   (files/import-files! conn repo-path)
+        result   (files/import-files! conn repo-path repo-path)
         db       (d/db conn)]
     (testing "imports correct number of files"
       (is (= expected (:files-imported result)))
@@ -148,10 +148,10 @@
 
 (deftest import-idempotency
   (let [conn    (test-conn)
-        _       (files/import-files! conn repo-path)
+        _       (files/import-files! conn repo-path repo-path)
         count1  (ffirst (d/q '[:find (count ?e) :where [?e :file/path _] [?e :file/size _]] (d/db conn)))
         dir-c1  (ffirst (d/q '[:find (count ?e) :where [?e :dir/path _]] (d/db conn)))
-        result2 (files/import-files! conn repo-path)
+        result2 (files/import-files! conn repo-path repo-path)
         count2  (ffirst (d/q '[:find (count ?e) :where [?e :file/path _] [?e :file/size _]] (d/db conn)))
         dir-c2  (ffirst (d/q '[:find (count ?e) :where [?e :dir/path _]] (d/db conn)))]
     (testing "second import skips all files"
@@ -170,7 +170,7 @@
       (let [before (d/pull (d/db conn) '[:file/path :file/size] [:file/path "src/noumenon/git.clj"])]
         (is (nil? (:file/size before)))))
     ;; Run file structure import
-    (files/import-files! conn repo-path)
+    (files/import-files! conn repo-path repo-path)
     (testing "stub is enriched with size and other attributes"
       (let [after (d/pull (d/db conn) '[:file/path :file/ext :file/size :file/lang]
                           [:file/path "src/noumenon/git.clj"])]

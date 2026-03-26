@@ -1,0 +1,20 @@
+name: Release
+on:
+  push:
+    tags: [v*]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: DeLaGuardo/setup-clojure@13.0
+        with: { cli: latest }
+      - run: clj -T:build uber
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: target/noumenon-*.jar
+          generate_release_notes: true

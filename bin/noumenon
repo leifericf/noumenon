@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+JAR=$(ls "$SCRIPT_DIR"/../target/noumenon-*.jar 2>/dev/null | head -1)
+
+if [ ! -f "$JAR" ]; then
+  JAR="$SCRIPT_DIR/noumenon.jar"
+fi
+
+if [ ! -f "$JAR" ]; then
+  echo "noumenon: cannot find noumenon JAR" >&2
+  exit 1
+fi
+
+exec java -jar "$JAR" "$@"

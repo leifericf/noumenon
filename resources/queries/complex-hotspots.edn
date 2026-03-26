@@ -1,0 +1,9 @@
+{:name "complex-hotspots"
+ :description "Files that are both high-churn and high-complexity"
+ :query [:find ?path ?complexity (count ?commit)
+         :where
+         [?file :file/path ?path]
+         [?file :sem/complexity ?complexity]
+         (or [?file :sem/complexity :complex]
+             [?file :sem/complexity :very-complex])
+         [?commit :commit/changed-files ?file]]}

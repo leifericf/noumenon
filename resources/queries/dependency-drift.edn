@@ -1,0 +1,6 @@
+{:name "dependency-drift"
+ :description "Files ranked by number of resolved imports (coupling hotspots)"
+ :query [:find ?path (count ?dep)
+         :where
+         [?file :file/path ?path]
+         [?file :file/imports ?dep]]}

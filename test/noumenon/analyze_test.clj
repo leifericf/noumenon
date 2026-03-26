@@ -7,6 +7,13 @@
 
 ;; --- Tier 0: Pure function tests ---
 
+(deftest repo-name-basic
+  (is (= "myrepo" (analyze/repo-name "/home/user/myrepo"))))
+
+(deftest repo-name-trailing-slash
+  (is (= "myrepo" (analyze/repo-name "/home/user/myrepo/")))
+  (is (= "myrepo" (analyze/repo-name "/home/user/myrepo///"))))
+
 (deftest prompt-hash-stable
   (let [t "some template text"
         h1 (analyze/prompt-hash t)
@@ -34,21 +41,58 @@
         result   (analyze/render-prompt template {})]
     (is (string? result) "Does not throw on missing keys")))
 
+(deftest render-prompt-escapes-template-vars-in-content
+  (let [template "Repo: {{repo-name}} Content: {{content}}"
+        result   (analyze/render-prompt template
+                                        {:content   "payload {{repo-name}} injection"
+                                         :repo-name "real-repo"})]
+    (is (str/includes? result "real-repo") "Real repo-name is substituted")
+    (is (not (str/includes? result "payload real-repo"))
+        "Content template vars must not be substituted as template variables")
+    (is (str/includes? result "{ {repo-name}")
+        "Template metacharacters in content are escaped")))
+
+(deftest render-prompt-wraps-content-in-delimiters
+  (let [template "{{content}}"
+        result   (analyze/render-prompt template {:content "hello"})]
+    (is (str/includes? result "<file-content>"))
+    (is (str/includes? result "</file-content>"))
+    (is (str/includes? result "hello"))))
+
 (deftest parse-llm-response-well-formed
   (let [edn-str (pr-str {:summary "A file" :purpose "Does stuff"
                          :tags [:io :parsing] :complexity :simple
-                         :layer :core :confidence 0.9
+                         :layer :core :category :backend :confidence 0.9
                          :segments [{:name "foo" :kind :function
-                                     :line-start 1 :line-end 5}]})
-        result  (analyze/parse-llm-response edn-str)]
+                                     :line-start 1 :line-end 5
+                                     :args "[x y]" :returns "int"
+                                     :visibility :public :docstring "Does foo"
+                                     :deprecated true :complexity :simple
+                                     :smells [:magic-numbers]
+                                     :purpose "Foos the bar"
+                                     :safety-concerns [:sql-injection]
+                                     :error-handling :basic}]})
+        result  (analyze/parse-llm-response edn-str)
+        seg     (-> result :segments first)]
     (is (= "A file" (:summary result)))
     (is (= "Does stuff" (:purpose result)))
     (is (= [:io :parsing] (:tags result)))
     (is (= :simple (:complexity result)))
     (is (= :core (:layer result)))
+    (is (= :backend (:category result)))
     (is (= 0.9 (:confidence result)))
     (is (= 1 (count (:segments result))))
-    (is (= "foo" (-> result :segments first :name)))))
+    (is (= "foo" (:name seg)))
+    (is (= "[x y]" (:args seg)))
+    (is (= "int" (:returns seg)))
+    (is (= :public (:visibility seg)))
+    (is (= "Does foo" (:docstring seg)))
+    (is (true? (:deprecated seg)))
+    (is (= :simple (:complexity seg)))
+    (is (= [:magic-numbers] (:smells seg)))
+    (is (= "Foos the bar" (:purpose seg)))
+    (is (= [:sql-injection] (:safety-concerns seg)))
+    (is (= :basic (:error-handling seg)))))
 
 (deftest parse-llm-response-markdown-fences
   (let [edn-str (str "```edn\n" (pr-str {:summary "Test"}) "\n```")
@@ -92,9 +136,82 @@
     (is (not (contains? result1 :confidence)))
     (is (not (contains? result2 :confidence)))))
 
+(deftest parse-llm-response-category-validated
+  (let [result (analyze/parse-llm-response (pr-str {:summary "X" :category :backend}))]
+    (is (= :backend (:category result))))
+  (let [result (analyze/parse-llm-response (pr-str {:summary "X" :category :bogus}))]
+    (is (not (contains? result :category)))))
+
+(deftest parse-llm-response-segment-signature-fields
+  (let [result (analyze/parse-llm-response
+                (pr-str {:summary "X"
+                         :segments [{:name "f" :args "[x]" :returns "int"
+                                     :visibility :private :docstring "doc"}]}))
+        seg    (-> result :segments first)]
+    (is (= "[x]" (:args seg)))
+    (is (= "int" (:returns seg)))
+    (is (= :private (:visibility seg)))
+    (is (= "doc" (:docstring seg)))))
+
+(deftest parse-llm-response-segment-blank-strings-dropped
+  (let [result (analyze/parse-llm-response
+                (pr-str {:summary "X"
+                         :segments [{:name "f" :args "" :returns "  "
+                                     :docstring "" :purpose ""}]}))
+        seg    (-> result :segments first)]
+    (is (not (contains? seg :args)))
+    (is (not (contains? seg :returns)))
+    (is (not (contains? seg :docstring)))
+    (is (not (contains? seg :purpose)))))
+
+(deftest parse-llm-response-segment-quality-fields
+  (let [result (analyze/parse-llm-response
+                (pr-str {:summary "X"
+                         :segments [{:name "f" :complexity :moderate
+                                     :smells [:deep-nesting :too-many-params]
+                                     :purpose "Does stuff"
+                                     :safety-concerns [:xss :race-condition]
+                                     :error-handling :robust}]}))
+        seg    (-> result :segments first)]
+    (is (= :moderate (:complexity seg)))
+    (is (= [:deep-nesting :too-many-params] (:smells seg)))
+    (is (= "Does stuff" (:purpose seg)))
+    (is (= [:xss :race-condition] (:safety-concerns seg)))
+    (is (= :robust (:error-handling seg)))))
+
+(deftest parse-llm-response-segment-invalid-enums-filtered
+  (let [result (analyze/parse-llm-response
+                (pr-str {:summary "X"
+                         :segments [{:name "f"
+                                     :visibility :bogus
+                                     :complexity :ultra
+                                     :smells [:deep-nesting :fake-smell :too-many-params]
+                                     :safety-concerns [:xss :made-up]
+                                     :error-handling :amazing
+                                     :deprecated false}]}))
+        seg    (-> result :segments first)]
+    (is (not (contains? seg :visibility)))
+    (is (not (contains? seg :complexity)))
+    (is (= [:deep-nesting :too-many-params] (:smells seg)))
+    (is (= [:xss] (:safety-concerns seg)))
+    (is (not (contains? seg :error-handling)))
+    (is (not (contains? seg :deprecated)))))
+
+(deftest parse-llm-response-segment-new-kinds
+  (let [result (analyze/parse-llm-response
+                (pr-str {:summary "X"
+                         :segments [{:name "Foo" :kind :class}
+                                    {:name "Bar" :kind :interface}
+                                    {:name "baz" :kind :method}
+                                    {:name "C" :kind :constant}
+                                    {:name "U" :kind :union}]}))
+        kinds  (mapv :kind (:segments result))]
+    (is (= [:class :interface :method :constant :union] kinds))))
+
 (deftest analysis->tx-data-basic
   (let [analysis {:summary "Test summary" :purpose "Test purpose"
-                  :complexity :simple :layer :core :confidence 0.8}
+                  :complexity :simple :layer :core :category :backend
+                  :confidence 0.8}
         tx-data  (analyze/analysis->tx-data "src/foo.clj" analysis
                                             {:model-version "test-model"
                                              :prompt-hash-val "abc123"
@@ -106,6 +223,7 @@
       (is (= "Test summary" (:sem/summary file-ent)))
       (is (= :simple (:sem/complexity file-ent)))
       (is (= :core (:arch/layer file-ent)))
+      (is (= :backend (:sem/category file-ent)))
       (is (= 0.8 (:prov/confidence file-ent))))
     (let [prov (second tx-data)]
       (is (= :analyze (:tx/op prov)))
@@ -115,8 +233,16 @@
       (is (inst? (:prov/analyzed-at prov))))))
 
 (deftest analysis->tx-data-with-segments
-  (let [analysis {:summary "Test" :segments [{:name "bar" :kind :function
-                                              :line-start 10 :line-end 20}]}
+  (let [analysis {:summary "Test"
+                  :segments [{:name "bar" :kind :function
+                              :line-start 10 :line-end 20
+                              :args "[x y]" :returns "int"
+                              :visibility :public :docstring "Does bar"
+                              :deprecated true :complexity :moderate
+                              :smells [:deep-nesting]
+                              :purpose "Bars the baz"
+                              :safety-concerns [:xss]
+                              :error-handling :basic}]}
         tx-data  (analyze/analysis->tx-data "src/foo.clj" analysis
                                             {:model-version "m" :prompt-hash-val "h"
                                              :analyzer "a"})]
@@ -124,7 +250,17 @@
     (let [seg (nth tx-data 2)]
       (is (= "bar" (:code/name seg)))
       (is (= [:file/path "src/foo.clj"] (:code/file seg)))
-      (is (= :function (:code/kind seg))))))
+      (is (= :function (:code/kind seg)))
+      (is (= "[x y]" (:code/args seg)))
+      (is (= "int" (:code/returns seg)))
+      (is (= :public (:code/visibility seg)))
+      (is (= "Does bar" (:code/docstring seg)))
+      (is (true? (:code/deprecated? seg)))
+      (is (= :moderate (:code/complexity seg)))
+      (is (= [:deep-nesting] (:code/smells seg)))
+      (is (= "Bars the baz" (:code/purpose seg)))
+      (is (= [:xss] (:code/safety-concerns seg)))
+      (is (= :basic (:code/error-handling seg))))))
 
 (deftest analysis->tx-data-nil-returns-nil
   (is (nil? (analyze/analysis->tx-data "src/foo.clj" nil {})))
@@ -203,6 +339,35 @@
       (is (= :util (:arch/layer ent)))
       (is (= 0.75 (:prov/confidence ent)))
       (is (contains? (set (:sem/tags ent)) :io)))))
+
+(deftest tx-data-round-trip-with-rich-segment
+  (let [conn     (make-conn)
+        _        (import-stub-file! conn "src/foo.clj" :clojure)
+        analysis {:summary "A module" :purpose "Does things" :category :backend
+                  :complexity :moderate :layer :util :confidence 0.75
+                  :tags [:io]
+                  :segments [{:name "init" :kind :function
+                              :line-start 1 :line-end 10
+                              :args "[db opts]" :visibility :public
+                              :docstring "Initialize the system"
+                              :complexity :simple :purpose "Sets up DB connection"
+                              :error-handling :robust}]}
+        tx-data  (analyze/analysis->tx-data "src/foo.clj" analysis
+                                            {:model-version "test-v1"
+                                             :prompt-hash-val "hash123"
+                                             :analyzer "test/0.1"})]
+    (d/transact conn {:tx-data tx-data})
+    (let [db   (d/db conn)
+          file (d/pull db '[*] [:file/path "src/foo.clj"])
+          seg  (d/pull db '[*] [:code/file+name [(:db/id file) "init"]])]
+      (is (= :backend (:sem/category file)))
+      (is (= "init" (:code/name seg)))
+      (is (= "[db opts]" (:code/args seg)))
+      (is (= :public (:code/visibility seg)))
+      (is (= "Initialize the system" (:code/docstring seg)))
+      (is (= :simple (:code/complexity seg)))
+      (is (= "Sets up DB connection" (:code/purpose seg)))
+      (is (= :robust (:code/error-handling seg))))))
 
 (deftest analyze-repo-with-mock-llm
   (let [conn       (make-conn)

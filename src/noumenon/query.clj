@@ -43,13 +43,9 @@
               [(get-else $ ?a :db/doc "") ?doc]]
             db)
        (remove (fn [[ident]]
-                 (let [ns (namespace ident)]
-                   (or (= "db" ns)
-                       (= "db.type" ns)
-                       (= "db.cardinality" ns)
-                       (= "db.unique" ns)
-                       (= "fressian" ns)
-                       (.startsWith (name ident) "db")))))
+                 (or (#{"db" "db.type" "db.cardinality" "db.unique" "fressian"}
+                      (namespace ident))
+                     (str/starts-with? (name ident) "db"))))
        (sort-by first)
        (mapv (fn [[ident vt card doc]]
                {:ident       ident
@@ -70,18 +66,30 @@
 
 (defn execute-query
   "Execute a named query against the given database.
-   Returns the raw result set (set of tuples)."
-  [db query-def]
-  (let [{:keys [query uses-rules]} query-def
-        rules (when uses-rules (load-rules))]
-    (if uses-rules
-      (d/q query db rules)
-      (d/q query db))))
+   `params` is an optional map of input values for parameterized queries,
+   keyed by the names declared in the query-def's :inputs vector."
+  ([db query-def] (execute-query db query-def nil))
+  ([db query-def params]
+   (let [{:keys [query uses-rules inputs]} query-def
+         rules     (when uses-rules (load-rules))
+         extra-args (when (seq inputs)
+                      (mapv #(get params %) inputs))
+         args      (cond-> [query db]
+                     uses-rules (conj rules)
+                     (seq extra-args) (into extra-args))]
+     (apply d/q args))))
 
 (defn run-named-query
-  "Load and execute a named query. Returns {:ok results} or {:error message}."
-  [db query-name]
-  (if-let [query-def (load-named-query query-name)]
-    {:ok (execute-query db query-def)}
-    {:error (str "Unknown query: " query-name
-                 ". Available: " (pr-str (list-query-names)))}))
+  "Load and execute a named query. Returns {:ok results} or {:error message}.
+   Validates query-name against the index allowlist before loading.
+   `params` is an optional map for parameterized queries."
+  ([db query-name] (run-named-query db query-name nil))
+  ([db query-name params]
+   (if-not ((set (list-query-names)) query-name)
+     {:error (str "Unknown query: " query-name
+                  ". Available: " (pr-str (list-query-names)))}
+     (if-let [query-def (load-named-query query-name)]
+       (if-let [missing (seq (remove (set (keys params)) (:inputs query-def)))]
+         {:error (str "Missing required inputs: " (pr-str (vec missing)))}
+         {:ok (execute-query db query-def params)})
+       {:error (str "Query '" query-name "' is in the index but its definition file is missing.")}))))

@@ -1,0 +1,8 @@
+{:name "orphan-files"
+ :description "Source files that neither import nor are imported by any other file"
+ :query [:find ?path
+         :where
+         [?file :file/path ?path]
+         [?file :file/lang _]
+         (not [?file :file/imports _])
+         (not [_ :file/imports ?file])]}

@@ -1,0 +1,10 @@
+{:name "boundary-crossings"
+ :description "Import edges that cross architectural layer boundaries"
+ :query [:find ?from-path ?from-layer ?to-path ?to-layer
+         :where
+         [?from :file/imports ?to]
+         [?from :file/path ?from-path]
+         [?to :file/path ?to-path]
+         [?from :arch/layer ?from-layer]
+         [?to :arch/layer ?to-layer]
+         [(!= ?from-layer ?to-layer)]]}

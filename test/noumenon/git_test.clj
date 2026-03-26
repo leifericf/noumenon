@@ -4,13 +4,15 @@
             [clojure.test :refer [deftest is testing]]
             [datomic.client.api :as d]
             [noumenon.db :as db]
-            [noumenon.git :as git]))
+            [noumenon.git :as git]
+            [noumenon.util :as util]))
 
 ;; --- Test helpers ---
 
 (defn- make-record
-  "Build a git log record matching the format produced by git-log.
-   `files` is a seq of file paths (or nil for no changed files)."
+  "Build a git log record matching the format produced by git-log with --numstat.
+   `files` is a seq of file paths (or nil for no changed files).
+   Each file gets a default numstat line of '10\t5\tfilename'."
   [sha parents author-name author-email authored-at
    committer-name committer-email committed-at message files]
   (str "\u0001"
@@ -24,7 +26,7 @@
        committed-at "\u0000"
        message "\n\u0000"
        (when (seq files)
-         (str "\n" (str/join "\n" files) "\n"))))
+         (str "\n" (str/join "\n" (map #(str "10\t5\t" %) files)) "\n"))))
 
 (def ^:private iso-ts "2024-01-15T10:30:00+00:00")
 
@@ -32,13 +34,13 @@
 
 (deftest truncate-test
   (testing "short strings unchanged"
-    (is (= "hello" (git/truncate "hello" 10))))
+    (is (= "hello" (util/truncate "hello" 10))))
   (testing "exact length unchanged"
-    (is (= "hello" (git/truncate "hello" 5))))
+    (is (= "hello" (util/truncate "hello" 5))))
   (testing "long strings truncated"
-    (is (= "hel" (git/truncate "hello" 3))))
+    (is (= "hel" (util/truncate "hello" 3))))
   (testing "nil returns nil"
-    (is (nil? (git/truncate nil 10)))))
+    (is (nil? (util/truncate nil 10)))))
 
 (deftest parse-single-commit
   (let [log     (make-record "abc1234" "" "Leif" "leif@example.com" iso-ts
@@ -93,7 +95,7 @@
         commit   {:sha "abc" :parent-shas [] :author-name "A" :author-email "a@x.com"
                   :authored-at #inst "2024-01-01" :committer-name "A" :committer-email "a@x.com"
                   :committed-at #inst "2024-01-01" :message long-msg :changed-files []}
-        tx-data  (git/commit->tx-data commit)
+        tx-data  (git/commit->tx-data "test-repo" commit)
         entity   (first (filter :git/sha tx-data))]
     (is (= 4096 (count (:commit/message entity))))))
 
@@ -104,7 +106,7 @@
                  :committer-name "Bob" :committer-email "bob@x.com"
                  :committed-at #inst "2024-01-01"
                  :message "test commit" :changed-files ["src/a.clj"]}
-        tx-data (git/commit->tx-data commit)
+        tx-data (git/commit->tx-data "test-repo" commit)
         commit-entity (first (filter :git/sha tx-data))]
     (testing "commit entity"
       (is (= "abc123" (:git/sha commit-entity)))
@@ -140,7 +142,7 @@
                  :committer-name "A" :committer-email "a@x.com"
                  :committed-at #inst "2024-01-01"
                  :message "initial" :changed-files []}
-        tx-data (git/commit->tx-data commit)
+        tx-data (git/commit->tx-data "test-repo" commit)
         entity  (first (filter :git/sha tx-data))]
     (is (nil? (:commit/parents entity)))
     (is (nil? (:commit/changed-files entity)))))
@@ -161,7 +163,7 @@
 (deftest import-noumenon-repo
   (let [expected (repo-commit-count repo-path)
         conn     (test-conn)
-        result   (git/import-commits! conn repo-path)
+        result   (git/import-commits! conn repo-path repo-path)
         db       (d/db conn)]
     (testing "imports correct number of commits"
       (is (= expected (:commits-imported result)))
@@ -181,9 +183,9 @@
 
 (deftest import-idempotency
   (let [conn    (test-conn)
-        _       (git/import-commits! conn repo-path)
+        _       (git/import-commits! conn repo-path repo-path)
         count1  (ffirst (d/q '[:find (count ?e) :where [?e :git/type :commit]] (d/db conn)))
-        result2 (git/import-commits! conn repo-path)
+        result2 (git/import-commits! conn repo-path repo-path)
         count2  (ffirst (d/q '[:find (count ?e) :where [?e :git/type :commit]] (d/db conn)))]
     (testing "second import produces no new commits"
       (is (= 0 (:commits-imported result2))))
@@ -197,8 +199,8 @@
         raw     (git/git-log repo-path)
         all     (git/parse-commits raw)
         first-c (first all)
-        _       (d/transact conn {:tx-data (git/commit->tx-data first-c)})
-        result  (git/import-commits! conn repo-path)
+        _       (d/transact conn {:tx-data (git/commit->tx-data repo-path first-c)})
+        result  (git/import-commits! conn repo-path repo-path)
         total   (ffirst (d/q '[:find (count ?e) :where [?e :git/type :commit]] (d/db conn)))]
     (testing "skipped the already-imported commit"
       (is (= 1 (:commits-skipped result))))
@@ -209,12 +211,32 @@
 
 (deftest person-deduplication
   (let [conn    (test-conn)
-        _       (git/import-commits! conn repo-path)
+        _       (git/import-commits! conn repo-path repo-path)
         db      (d/db conn)
         persons (d/q '[:find ?email :where [?e :person/email ?email]] db)
         commits (ffirst (d/q '[:find (count ?e) :where [?e :git/type :commit]] db))]
     (testing "fewer person entities than commits"
       (is (< (count persons) commits)))))
+
+;; --- URL detection and repo name extraction ---
+
+(deftest git-url?-recognizes-urls
+  (testing "https URLs"
+    (is (git/git-url? "https://github.com/ring-clojure/ring.git"))
+    (is (git/git-url? "https://github.com/foo/bar")))
+  (testing "git@ URLs"
+    (is (git/git-url? "git@github.com:ring-clojure/ring.git")))
+  (testing "local paths are not URLs"
+    (is (not (git/git-url? "/path/to/repo")))
+    (is (not (git/git-url? "../ring")))
+    (is (not (git/git-url? "ring")))
+    (is (not (git/git-url? ".")))))
+
+(deftest url->repo-name-extracts-name
+  (is (= "ring" (git/url->repo-name "https://github.com/ring-clojure/ring.git")))
+  (is (= "ring" (git/url->repo-name "https://github.com/ring-clojure/ring")))
+  (is (= "repo" (git/url->repo-name "git@github.com:user/repo.git")))
+  (is (= "bar"  (git/url->repo-name "https://example.com/foo/bar/"))))
 
 (deftest error-non-git-directory
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"git log failed"

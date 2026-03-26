@@ -1,0 +1,5 @@
+{:name "shared-dependencies"
+ :description "Dependencies shared across the most files"
+ :query [:find ?dep (count ?file)
+         :where
+         [?file :sem/dependencies ?dep]]}

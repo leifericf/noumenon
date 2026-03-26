@@ -1,0 +1,6 @@
+{:name "import-hotspots"
+ :description "Most-imported files — high fan-in indicates high blast radius"
+ :query [:find ?path (count ?importer)
+         :where
+         [?file :file/path ?path]
+         [?importer :file/imports ?file]]}

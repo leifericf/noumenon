@@ -1,7 +1,9 @@
 (ns noumenon.llm
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
-            [org.httpkit.client :as http]))
+            [noumenon.util :refer [log! truncate]]
+            [org.httpkit.client :as http])
+  (:import [java.util.concurrent TimeUnit]))
 
 ;; --- Provider/model defaults ---
 
@@ -25,10 +27,32 @@
 
 (defn provider->kw
   "Convert a provider string/keyword to canonical provider keyword.
-   Defaults to :claude-cli for unknown inputs."
+   Throws on unrecognized provider strings."
   [provider]
-  (let [provider-name (if (keyword? provider) (name provider) provider)]
-    (keyword (or (normalize-provider-name provider-name) "claude-cli"))))
+  (let [provider-name (if (keyword? provider) (name provider) provider)
+        normalized    (normalize-provider-name provider-name)]
+    (when-not normalized
+      (throw (ex-info (str "Unrecognized provider: " provider-name
+                           ". Known providers: " (str/join ", " (sort canonical-providers)))
+                      {:provider provider-name :known (sort canonical-providers)})))
+    (keyword normalized)))
+
+;; --- Pricing ---
+
+(def model-pricing
+  "Per-token pricing in $/1M tokens. Only for direct Anthropic API models.
+   GLM uses quota-based pricing so is not listed here."
+  {"claude-sonnet-4-6-20250514" {:input 3.0  :output 15.0}
+   "claude-haiku-4-5-20251001"  {:input 0.80 :output 4.0}
+   "claude-opus-4-6-20250514"   {:input 15.0 :output 75.0}})
+
+(defn estimate-cost
+  "Estimate USD cost for given model and token counts. Returns 0.0 for unknown models."
+  [model-id input-tokens output-tokens]
+  (if-let [{:keys [input output]} (model-pricing model-id)]
+    (+ (* input-tokens (/ input 1e6))
+       (* output-tokens (/ output 1e6)))
+    0.0))
 
 ;; --- Usage tracking ---
 
@@ -39,55 +63,79 @@
 (defn sum-usage
   "Sum two usage maps."
   [a b]
-  {:input-tokens  (+ (:input-tokens a 0) (:input-tokens b 0))
-   :output-tokens (+ (:output-tokens a 0) (:output-tokens b 0))
-   :cost-usd      (+ (:cost-usd a 0.0) (:cost-usd b 0.0))
-   :duration-ms   (+ (:duration-ms a 0) (:duration-ms b 0))})
+  (merge-with + a b))
 
 ;; --- Direct API invocation ---
+
+(def ^:private retryable-status #{429 500 502 503 504})
+(def ^:dynamic *max-retries* 3)
+(def ^:dynamic *retry-delays-ms* [2000 4000])
 
 (defn invoke-api
   "Invoke Anthropic Messages API directly via http-kit.
    `messages` is [{:role \"user\"/\"assistant\" :content string} ...].
    Returns {:text string :usage {:input-tokens n :output-tokens m} :model string}.
-   Throws ex-info on HTTP errors (429, 500, timeout) with status and resume guidance."
+   Retries up to 3 times on transient errors (429, 5xx, connection failures).
+   Throws ex-info on persistent HTTP errors with response body excerpt."
   [messages {:keys [model temperature max-tokens base-url auth-token]}]
   (let [url      (str base-url "/v1/messages")
-        start-ms (System/currentTimeMillis)
-        body     (json/write-str
+        req-body (json/write-str
                   {:model      model
-                   :max_tokens max-tokens
+                   :max_tokens (or max-tokens 4096)
                    :temperature temperature
                    :messages   messages})
-        {:keys [status body error]}
-        @(http/request {:url     url
-                        :method  :post
-                        :headers {"Content-Type"      "application/json"
-                                  "x-api-key"         auth-token
-                                  "anthropic-version"  "2023-06-01"}
-                        :body    body
-                        :timeout 300000})
-        dur-ms   (- (System/currentTimeMillis) start-ms)]
-    (when error
-      (throw (ex-info (str "API request failed: " (.getMessage ^Exception error)
-                           ". Resume: clj -M:run longbench run --resume")
-                      {:error error})))
-    (when (not= 200 status)
-      (throw (ex-info (str "API error: HTTP " status
-                           ". Resume: clj -M:run longbench run --resume")
-                      {:status status :body body})))
-    (let [parsed (json/read-str body :key-fn keyword)
-          text   (->> (:content parsed)
-                      (filter #(= "text" (:type %)))
-                      first
-                      :text)
-          usage  (:usage parsed)]
-      {:text  text
-       :usage {:input-tokens  (:input_tokens usage 0)
-               :output-tokens (:output_tokens usage 0)
-               :cost-usd      0.0
-               :duration-ms   dur-ms}
-       :model (:model parsed)})))
+        start-ms (System/currentTimeMillis)]
+    (loop [attempt 1]
+      (let [{:keys [status body error]}
+            @(http/request {:url     url
+                            :method  :post
+                            :headers {"Content-Type"      "application/json"
+                                      "x-api-key"         auth-token
+                                      "anthropic-version"  "2023-06-01"}
+                            :body    req-body
+                            :timeout 300000})
+            retryable? (or error (retryable-status status))
+            last-attempt? (>= attempt *max-retries*)]
+        (cond
+          (and error retryable? (not last-attempt?))
+          (do (log! (str "  Retry " attempt "/" *max-retries*
+                         ": " (.getMessage ^Exception error)))
+              (Thread/sleep (get *retry-delays-ms* (dec attempt) 4000))
+              (recur (inc attempt)))
+
+          error
+          (throw (ex-info (str "API request failed: " (.getMessage ^Exception error))
+                          {:error error :attempts attempt}))
+
+          (and (not= 200 status) retryable? (not last-attempt?))
+          (do (log! (str "  Retry " attempt "/" *max-retries*
+                         ": HTTP " status))
+              (Thread/sleep (get *retry-delays-ms* (dec attempt) 4000))
+              (recur (inc attempt)))
+
+          (not= 200 status)
+          (throw (ex-info (str "API error: HTTP " status " — "
+                               (truncate (str body) 200))
+                          {:status status :attempts attempt}))
+
+          :else
+          (let [dur-ms  (- (System/currentTimeMillis) start-ms)
+                parsed  (json/read-str body :key-fn keyword)
+                text    (some #(when (= "text" (:type %)) (:text %))
+                              (:content parsed))
+                usage   (:usage parsed)
+                in      (:input_tokens usage 0)
+                out     (:output_tokens usage 0)]
+            {:text  text
+             :usage {:input-tokens  in
+                     :output-tokens out
+                     :cost-usd      (estimate-cost (:model parsed) in out)
+                     :duration-ms   dur-ms}
+             :model (:model parsed)}))))))
+
+(def ^:private cli-timeout-ms
+  "Timeout in milliseconds for Claude CLI subprocess (5 minutes)."
+  300000)
 
 ;; --- Claude CLI invocation ---
 
@@ -109,7 +157,11 @@
          proc     (.start pb)
          out-f    (future (slurp (.getInputStream proc)))
          err-f    (future (slurp (.getErrorStream proc)))
-         exit     (.waitFor proc)
+         done?    (.waitFor proc cli-timeout-ms TimeUnit/MILLISECONDS)
+         _        (when-not done?
+                    (.destroyForcibly proc)
+                    (throw (ex-info "Claude CLI timed out" {:timeout-ms cli-timeout-ms})))
+         exit     (.exitValue proc)
          out-str  @out-f
          err-str  @err-f
          dur-ms   (- (System/currentTimeMillis) start-ms)]
@@ -119,18 +171,14 @@
      (let [parsed (try (json/read-str out-str :key-fn keyword)
                        (catch Exception _ nil))]
        (if (and (map? parsed) (contains? parsed :result))
-         {:text           (:result parsed)
-          :usage          (merge zero-usage
-                                 (when-let [u (:usage parsed)]
-                                   (cond-> {}
-                                     (:input_tokens u)  (assoc :input-tokens (:input_tokens u))
-                                     (:output_tokens u) (assoc :output-tokens (:output_tokens u))))
-                                 (when-let [c (:total_cost_usd parsed)]
-                                   {:cost-usd c})
-                                 {:duration-ms dur-ms})
-          :resolved-model (:model parsed)}
-         (do (binding [*out* *err*]
-               (println "Warning: Claude CLI returned non-JSON output, using raw text with zero usage"))
+         (let [u (:usage parsed)]
+           {:text           (:result parsed)
+            :usage          {:input-tokens  (:input_tokens u 0)
+                             :output-tokens (:output_tokens u 0)
+                             :cost-usd      (:total_cost_usd parsed 0.0)
+                             :duration-ms   dur-ms}
+            :resolved-model (:model parsed)})
+         (do (log! "Warning: Claude CLI returned non-JSON output, using raw text with zero usage")
              {:text  out-str
               :usage (assoc zero-usage :duration-ms dur-ms)}))))))
 
@@ -152,16 +200,33 @@
 
 ;; --- Model aliases ---
 
+(def model-aliases
+  "Map of short alias to full Anthropic model ID."
+  {"sonnet" "claude-sonnet-4-6-20250514"
+   "haiku"  "claude-haiku-4-5-20251001"
+   "opus"   "claude-opus-4-6-20250514"})
+
+(def known-model-ids
+  "Set of all recognized model IDs (full IDs and aliases)."
+  (into (set (keys model-aliases)) (vals model-aliases)))
+
 (defn model-alias->id
-  "Map model alias to full model ID for Anthropic API."
+  "Map model alias to full model ID for Anthropic API.
+   Throws on unrecognized model strings."
   [alias]
-  (case alias
-    "sonnet"  "claude-sonnet-4-6-20250514"
-    "haiku"   "claude-haiku-4-5-20251001"
-    "opus"    "claude-opus-4-6-20250514"
-    alias))
+  (when-not (known-model-ids alias)
+    (throw (ex-info (str "Unrecognized model: " alias
+                         ". Known models: " (str/join ", " (sort known-model-ids)))
+                    {:model alias :known (sort known-model-ids)})))
+  (get model-aliases alias alias))
 
 ;; --- Provider factory ---
+
+(def ^:private api-provider-config
+  {:glm       {:env-var  "NOUMENON_ZAI_TOKEN"
+               :base-url "https://api.z.ai/api/anthropic"}
+   :claude-api {:env-var  "ANTHROPIC_API_KEY"
+                :base-url "https://api.anthropic.com"}})
 
 (defn make-invoke-fn
   "Create an invoke function for the given provider.
@@ -172,34 +237,20 @@
    Provider :claude-api — direct API to Anthropic, reads ANTHROPIC_API_KEY.
    Provider :claude-cli — flattens messages to single prompt string."
   [provider {:keys [model temperature max-tokens]}]
-  (case (provider->kw provider)
-    :glm
-    (let [token (System/getenv "NOUMENON_ZAI_TOKEN")]
-      (when-not token
-        (throw (ex-info "NOUMENON_ZAI_TOKEN environment variable is not set"
-                        {:provider :glm})))
+  (let [kw (provider->kw provider)]
+    (if-let [{:keys [env-var base-url]} (api-provider-config kw)]
+      (let [token (System/getenv env-var)]
+        (when-not token
+          (throw (ex-info (str env-var " environment variable is not set. Set " env-var " in your environment.")
+                          {:provider kw})))
+        (fn [messages]
+          (invoke-api messages {:model       model
+                                :temperature temperature
+                                :max-tokens  max-tokens
+                                :base-url    base-url
+                                :auth-token  token})))
       (fn [messages]
-        (invoke-api messages {:model       model
-                              :temperature temperature
-                              :max-tokens  max-tokens
-                              :base-url    "https://api.z.ai/api/anthropic"
-                              :auth-token  token})))
-
-    :claude-api
-    (let [api-key (System/getenv "ANTHROPIC_API_KEY")]
-      (when-not api-key
-        (throw (ex-info "ANTHROPIC_API_KEY environment variable is not set. Check .env setup."
-                        {:provider :claude-api})))
-      (fn [messages]
-        (invoke-api messages {:model       model
-                              :temperature temperature
-                              :max-tokens  max-tokens
-                              :base-url    "https://api.anthropic.com"
-                              :auth-token  api-key})))
-
-    :claude-cli
-    (fn [messages]
-      (invoke-cli messages (when model {:model model})))))
+        (invoke-cli messages (when model {:model model}))))))
 
 (defn make-prompt-fn
   "Wrap a messages-based invoke fn into a string-prompt fn.

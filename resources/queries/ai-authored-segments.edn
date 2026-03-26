@@ -1,0 +1,10 @@
+{:name "ai-authored-segments"
+ :description "Code segments rated as likely or possibly AI-generated"
+ :query [:find ?path ?name ?likelihood ?complexity
+         :where
+         [?seg :code/ai-likelihood ?likelihood]
+         (not [(= ?likelihood :likely-human)])
+         [?seg :code/name ?name]
+         [?seg :code/file ?file]
+         [?file :file/path ?path]
+         [(get-else $ ?seg :code/complexity :unknown) ?complexity]]}

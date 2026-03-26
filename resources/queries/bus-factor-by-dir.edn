@@ -1,0 +1,9 @@
+{:name "bus-factor-by-dir"
+ :description "Directories ranked by number of distinct commit authors"
+ :query [:find ?dir-path (count-distinct ?person)
+         :in $ %
+         :where
+         [?file :file/directory ?dir]
+         [?dir :dir/path ?dir-path]
+         (file-author ?file ?person)]
+ :uses-rules true}

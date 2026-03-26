@@ -1,0 +1,377 @@
+(ns noumenon.imports
+  "Deterministic import extraction — parses source code to build a file→file
+   dependency graph without an LLM. Dispatches on :file/lang via multimethods."
+  (:require [clojure.java.shell :as shell]
+            [clojure.string :as str]
+            [clojure.tools.namespace.parse :as ns-parse]
+            [datomic.client.api :as d]
+            [noumenon.analyze :as analyze]
+            [noumenon.util :refer [log!]])
+  (:import [java.io PushbackReader StringReader]))
+
+;; ---------------------------------------------------------------------------
+;; Multimethods — dispatch on :file/lang keyword
+;; ---------------------------------------------------------------------------
+
+(defmulti extract-imports
+  "Extract import/require names from source text. Returns a seq of strings.
+   Each string is an unresolved module/namespace name."
+  (fn [lang _text] lang))
+
+(defmethod extract-imports :default [_ _] [])
+
+(defmulti resolve-import
+  "Resolve an import name to a repo-relative file path.
+   Returns the path string, or nil if unresolvable (external dep)."
+  (fn [lang _import-name _source-path _all-paths] lang))
+
+(defmethod resolve-import :default [_ _ _ _] nil)
+
+;; ---------------------------------------------------------------------------
+;; Tool probing — check which external tools are available
+;; ---------------------------------------------------------------------------
+
+(defn- tool-available?
+  "Check if a command-line tool is on PATH."
+  [cmd]
+  (try
+    (let [{:keys [exit]} (shell/sh "which" cmd)]
+      (zero? exit))
+    (catch Exception _ false)))
+
+(defn probe-tools
+  "Probe for external tools needed by non-Clojure parsers.
+   Returns a map of {:lang {:tool \"name\" :available? bool}}."
+  []
+  {:python     {:tool "python3" :available? (tool-available? "python3")}
+   :javascript {:tool "node"    :available? (tool-available? "node")}
+   :typescript {:tool "node"    :available? (tool-available? "node")}
+   :c          {:tool "clang"   :available? (or (tool-available? "clang")
+                                                (tool-available? "gcc"))}
+   :cpp        {:tool "clang"   :available? (or (tool-available? "clang")
+                                                (tool-available? "gcc"))}
+   :go         {:tool "go"      :available? (tool-available? "go")}})
+
+(defn log-tool-availability!
+  "Log which tools are available and which languages will be skipped."
+  [tools file-counts]
+  (let [available   (->> tools (filter (comp :available? val)) (map key))
+        unavailable (->> tools (remove (comp :available? val)) (map key))]
+    (log! (str "  Postprocess tools — available: Clojure (built-in)"
+               (when (seq available)
+                 (str ", " (str/join ", " (map name available))))
+               (when (seq unavailable)
+                 (str " | skipped: "
+                      (str/join ", "
+                                (map (fn [lang]
+                                       (str (name lang) " ("
+                                            (get file-counts lang 0) " files)"))
+                                     unavailable))))))))
+
+;; ---------------------------------------------------------------------------
+;; Clojure — deep parsing via tools.namespace
+;; ---------------------------------------------------------------------------
+
+(defmethod extract-imports :clojure [_ text]
+  (try
+    (with-open [rdr (PushbackReader. (StringReader. text))]
+      (when-let [ns-decl (ns-parse/read-ns-decl rdr)]
+        (->> (ns-parse/deps-from-ns-decl ns-decl)
+             (mapv str))))
+    (catch Exception _ [])))
+
+(defmethod extract-imports :clojurescript [_ text]
+  (extract-imports :clojure text))
+
+(defn- ns->paths
+  "Convert a namespace symbol string to candidate file paths.
+   foo.bar-baz → [\"foo/bar_baz.clj\" \"foo/bar_baz.cljc\" \"foo/bar_baz.cljs\"]"
+  [ns-str]
+  (let [base (-> ns-str (str/replace "." "/") (str/replace "-" "_"))]
+    [(str base ".clj") (str base ".cljc") (str base ".cljs")]))
+
+(defn- resolve-clj-import
+  "Try to resolve a Clojure namespace to a repo file path."
+  [ns-str all-paths]
+  (let [candidates (ns->paths ns-str)
+        prefixed   (mapcat (fn [c] [(str "src/" c) (str "test/" c) (str "dev/" c) c])
+                           candidates)]
+    (first (filter all-paths prefixed))))
+
+(defmethod resolve-import :clojure [_ import-name _source-path all-paths]
+  (resolve-clj-import import-name all-paths))
+
+(defmethod resolve-import :clojurescript [_ import-name source-path all-paths]
+  (resolve-import :clojure import-name source-path all-paths))
+
+;; ---------------------------------------------------------------------------
+;; Python — python3 ast stdlib via subprocess
+;; ---------------------------------------------------------------------------
+
+(def ^:private python-extract-script
+  "import ast,json,sys
+code=sys.stdin.read()
+try:
+    tree=ast.parse(code)
+except: print('[]'); sys.exit(0)
+imports=[]
+for n in ast.walk(tree):
+    if isinstance(n,ast.Import):
+        imports.extend(a.name for a in n.names)
+    elif isinstance(n,ast.ImportFrom):
+        if n.module and n.level==0: imports.append(n.module)
+print(json.dumps(imports))")
+
+(defmethod extract-imports :python [_ text]
+  (try
+    (let [{:keys [exit out]} (shell/sh "python3" "-c" python-extract-script
+                                       :in text)]
+      (when (zero? exit)
+        (read-string (str/replace out #"'" "\""))))
+    (catch Exception _ [])))
+
+(defn- resolve-python-import [import-name all-paths]
+  (let [base (str/replace import-name "." "/")]
+    (first (filter all-paths [(str base ".py")
+                              (str base "/__init__.py")]))))
+
+(defmethod resolve-import :python [_ import-name _source-path all-paths]
+  (resolve-python-import import-name all-paths))
+
+;; ---------------------------------------------------------------------------
+;; JavaScript / TypeScript — node built-in parser via subprocess
+;; ---------------------------------------------------------------------------
+
+(def ^:private node-extract-script
+  "const fs=require('fs');
+const code=fs.readFileSync('/dev/stdin','utf8');
+const re=/(?:import\\s+.*?from\\s+['\"]([^'\"]+)['\"]|require\\s*\\(\\s*['\"]([^'\"]+)['\"]\\s*\\)|export\\s+.*?from\\s+['\"]([^'\"]+)['\"])/g;
+const imports=[];let m;
+while(m=re.exec(code)){imports.push(m[1]||m[2]||m[3])}
+console.log(JSON.stringify(imports))")
+
+(defmethod extract-imports :javascript [_ text]
+  (try
+    (let [{:keys [exit out]} (shell/sh "node" "-e" node-extract-script :in text)]
+      (when (zero? exit)
+        (read-string out)))
+    (catch Exception _ [])))
+
+(defmethod extract-imports :typescript [_ text]
+  (extract-imports :javascript text))
+
+(defn- resolve-js-import
+  "Resolve a relative JS/TS import to a repo file path."
+  [import-name source-path all-paths]
+  (when (str/starts-with? import-name ".")
+    (let [dir  (str/join "/" (butlast (str/split source-path #"/")))
+          base (str dir "/" (str/replace import-name #"^\.\/" ""))
+          exts [".js" ".ts" ".tsx" ".jsx" "/index.js" "/index.ts"]]
+      (first (filter all-paths (cons base (map #(str base %) exts)))))))
+
+(defmethod resolve-import :javascript [_ import-name source-path all-paths]
+  (resolve-js-import import-name source-path all-paths))
+
+(defmethod resolve-import :typescript [_ import-name source-path all-paths]
+  (resolve-js-import import-name source-path all-paths))
+
+;; ---------------------------------------------------------------------------
+;; C / C++ — clang/gcc -MM compiler dependency output
+;; ---------------------------------------------------------------------------
+
+(defn- find-c-compiler []
+  (cond
+    (tool-available? "clang") "clang"
+    (tool-available? "gcc")   "gcc"
+    :else                     nil))
+
+(defmethod extract-imports :c [_ _text]
+  ;; C extraction happens at resolve time via compiler — return empty here.
+  ;; The resolve-import method handles both extraction and resolution.
+  [])
+
+(defmethod extract-imports :cpp [_ _text]
+  [])
+
+(defn- extract-c-includes-from-compiler
+  "Run clang/gcc -MM on a file and parse the makefile output into dependency paths."
+  [repo-path source-path]
+  (when-let [cc (find-c-compiler)]
+    (try
+      (let [full-path (str repo-path "/" source-path)
+            {:keys [exit out]} (shell/sh cc "-MM" full-path
+                                         :dir (str repo-path))]
+        (when (zero? exit)
+          (->> (str/replace out #"\\\n" " ")
+               (re-seq #"\S+")
+               rest                     ; skip target: prefix
+               (remove #(str/ends-with? % ":"))
+               (map #(str/replace % (str repo-path "/") ""))
+               (remove #(str/starts-with? % "/")))))
+      (catch Exception _ nil))))
+
+;; ---------------------------------------------------------------------------
+;; Go — go list -json
+;; ---------------------------------------------------------------------------
+
+(defmethod extract-imports :go [_ _text]
+  ;; Go extraction happens at the package level via go list — return empty.
+  [])
+
+;; ---------------------------------------------------------------------------
+;; Rust — mod declarations
+;; ---------------------------------------------------------------------------
+
+(defmethod extract-imports :rust [_ text]
+  (->> (re-seq #"(?m)^\s*(?:pub\s+)?mod\s+(\w+)\s*;" text)
+       (mapv second)))
+
+(defn- resolve-rust-mod [mod-name source-path all-paths]
+  (let [dir (str/join "/" (butlast (str/split source-path #"/")))]
+    (first (filter all-paths [(str dir "/" mod-name ".rs")
+                              (str dir "/" mod-name "/mod.rs")]))))
+
+(defmethod resolve-import :rust [_ import-name source-path all-paths]
+  (resolve-rust-mod import-name source-path all-paths))
+
+;; ---------------------------------------------------------------------------
+;; Java — import statements
+;; ---------------------------------------------------------------------------
+
+(defmethod extract-imports :java [_ text]
+  (->> (re-seq #"(?m)^import\s+([\w.]+)\s*;" text)
+       (mapv second)))
+
+(defn- resolve-java-import [import-name all-paths]
+  (let [path (str (str/replace import-name "." "/") ".java")]
+    (when (all-paths path) path)))
+
+(defmethod resolve-import :java [_ import-name _source-path all-paths]
+  (resolve-java-import import-name all-paths))
+
+;; ---------------------------------------------------------------------------
+;; Pure core — postprocess a single file
+;; ---------------------------------------------------------------------------
+
+(defn postprocess-file
+  "Parse imports from source text and resolve to repo file paths.
+   Returns a vec of resolved file-path strings (internal deps only)."
+  [lang content source-path all-paths]
+  (->> (extract-imports lang content)
+       (keep #(resolve-import lang % source-path all-paths))
+       (remove #{source-path})
+       distinct
+       vec))
+
+;; ---------------------------------------------------------------------------
+;; Impure shell — orchestrate postprocessing for a repo
+;; ---------------------------------------------------------------------------
+
+(defn- files-with-lang
+  "Query all file entities that have a :file/lang."
+  [db]
+  (->> (d/q '[:find ?path ?lang
+              :where
+              [?e :file/path ?path]
+              [?e :file/lang ?lang]]
+            db)
+       (mapv (fn [[path lang]] {:file/path path :file/lang lang}))
+       (sort-by :file/path)))
+
+(defn- file->tx-data
+  "Build tx-data for one file's resolved imports."
+  [file-path import-paths]
+  (when (seq import-paths)
+    {:file/path    file-path
+     :file/imports (mapv (fn [p] [:file/path p]) import-paths)}))
+
+(defn- c-files-tx-data
+  "Handle C/C++ files specially — uses compiler for extraction + resolution."
+  [repo-path c-files all-paths]
+  (keep (fn [{:keys [file/path]}]
+          (when-let [deps (extract-c-includes-from-compiler repo-path path)]
+            (let [resolved (->> deps
+                                (filter all-paths)
+                                (remove #{path})
+                                distinct
+                                vec)]
+              (file->tx-data path resolved))))
+        c-files))
+
+(def ^:private batch-size 50)
+
+(defn- flush-batch!
+  "Transact a batch of tx-data maps if non-empty. Returns empty vector."
+  [conn batch]
+  (when (seq batch)
+    (d/transact conn {:tx-data (conj batch {:db/id "datomic.tx"
+                                            :tx/op :postprocess
+                                            :tx/source :deterministic})}))
+  [])
+
+(defn- process-tx-items
+  "Reduce over tx-data items, accumulating counts and flushing in batches.
+   Each item is a tx-data map (from file->tx-data or c-files-tx-data)."
+  [conn init tx-items]
+  (let [{:keys [batch] :as final}
+        (reduce (fn [{:keys [batch] :as acc} tx]
+                  (let [batch' (conj batch tx)
+                        acc'   (-> acc
+                                   (update :files-processed inc)
+                                   (update :imports-resolved + (count (:file/imports tx))))]
+                    (if (>= (count batch') batch-size)
+                      (assoc acc' :batch (flush-batch! conn batch'))
+                      (assoc acc' :batch batch'))))
+                init
+                tx-items)]
+    (assoc final :batch (flush-batch! conn batch))))
+
+(defn postprocess-repo!
+  "Extract cross-file import graph deterministically and transact into Datomic.
+   Returns a summary map."
+  [conn repo-path]
+  (let [db        (d/db conn)
+        all-files (files-with-lang db)
+        all-paths (into #{} (map :file/path) all-files)
+        tools     (probe-tools)
+        counts-by-lang (frequencies (map :file/lang all-files))
+        _         (log-tool-availability! tools counts-by-lang)
+        c-langs   #{:c :cpp}
+        c-files   (filter (comp c-langs :file/lang) all-files)
+        std-files (remove (comp c-langs :file/lang) all-files)
+        needs-tool #{:python :javascript :typescript :go}
+        std-files  (remove (fn [{:keys [file/lang]}]
+                             (and (needs-tool lang)
+                                  (not (get-in tools [lang :available?]))))
+                           std-files)
+        init      {:files-processed 0 :imports-resolved 0
+                   :files-skipped 0 :files-errored 0 :batch []}
+        ;; Build tx-data for standard files, tracking errors via reduce
+        std-result (reduce (fn [acc {:keys [file/path file/lang]}]
+                             (try
+                               (let [content  (analyze/git-show repo-path path)
+                                     resolved (postprocess-file lang content path all-paths)]
+                                 (if-let [tx (file->tx-data path resolved)]
+                                   (let [batch' (conj (:batch acc) tx)]
+                                     (cond-> (-> acc
+                                                 (update :files-processed inc)
+                                                 (update :imports-resolved + (count resolved)))
+                                       (>= (count batch') batch-size)
+                                       (assoc :batch (flush-batch! conn batch'))
+                                       (< (count batch') batch-size)
+                                       (assoc :batch batch')))
+                                   (update acc :files-processed inc)))
+                               (catch Exception _
+                                 (update acc :files-errored inc))))
+                           init
+                           std-files)
+        ;; Process C/C++ files
+        c-tx-items (when (and (seq c-files) (get-in tools [:c :available?]))
+                     (c-files-tx-data repo-path c-files all-paths))
+        final      (process-tx-items conn std-result (or c-tx-items []))
+        {:keys [files-processed imports-resolved files-errored]} final]
+    (log! (str "  Postprocessed " files-processed " files, "
+               imports-resolved " import edges resolved"
+               (when (pos? files-errored)
+                 (str ", " files-errored " errors"))))
+    (dissoc final :batch)))

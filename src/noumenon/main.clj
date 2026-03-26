@@ -1,6 +1,6 @@
 (ns noumenon.main
-  (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
+  (:gen-class)
+  (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
@@ -11,15 +11,22 @@
             [noumenon.git :as git]
             [noumenon.agent :as agent]
             [noumenon.llm :as llm]
+            [noumenon.imports :as imports]
             [noumenon.longbench :as longbench]
-            [noumenon.query :as query]))
+            [noumenon.mcp :as mcp]
+            [noumenon.query :as query]
+            [noumenon.util :as util :refer [log!]]))
 
 ;; --- Helpers ---
 
 (defn derive-db-name
-  "Extract database name from a repo path: last path component, trailing slashes stripped."
+  "Extract database name from a repo path: last path component, sanitized.
+   Only alphanumeric, hyphen, underscore, and dot are kept. Rejects '..' and empty results."
   [repo-path]
-  (-> repo-path str (str/replace #"/+$" "") (str/split #"/") last))
+  (let [raw (-> repo-path str (str/replace #"/+$" "") (str/split #"/") last)
+        sanitized (str/replace raw #"[^a-zA-Z0-9\-_.]" "")]
+    (when (and (seq sanitized) (not= ".." sanitized))
+      sanitized)))
 
 (defn resolve-db-dir
   "Resolve the database storage directory. Defaults to data/datomic/ relative to cwd."
@@ -27,29 +34,11 @@
   (or (:db-dir opts)
       (str (.getAbsolutePath (io/file "data" "datomic")))))
 
-(def ^:private default-provider-by-command
-  {"agent" llm/default-provider
-   "analyze" llm/default-provider
-   "benchmark" llm/default-provider
-   "longbench" llm/default-provider})
-
-(def ^:private default-model-by-command
-  {"agent" llm/default-model-alias
-   "longbench" llm/default-model-alias})
-
-(defn- parse-args [args]
-  (cli/parse-args args))
-
-(defn- read-version []
-  (:version (edn/read-string (slurp (io/resource "version.edn")))))
-
 (defn- print-usage! []
-  (binding [*out* *err*]
-    (println (cli/format-global-help))))
+  (log! (cli/format-global-help)))
 
 (defn- print-error! [msg]
-  (binding [*out* *err*]
-    (println (str "Error: " msg))))
+  (log! (str "Error: " msg)))
 
 ;; --- Subcommands ---
 
@@ -74,13 +63,18 @@
 
 (defn- build-context
   [{:keys [repo-path] :as opts}]
-  {:repo-path repo-path
-   :db-dir    (resolve-db-dir opts)
-   :db-name   (derive-db-name repo-path)})
+  (let [db-name (derive-db-name repo-path)]
+    (when-not db-name
+      (throw (ex-info (str "Cannot derive database name from path: " repo-path)
+                      {:repo-path repo-path})))
+    {:repo-path repo-path
+     :db-dir    (resolve-db-dir opts)
+     :db-name   db-name}))
 
 (defn- missing-db-msg
-  [{:keys [db-name]}]
-  (str "No database found for \"" db-name "\". Run `import` first."))
+  [{:keys [db-name repo-path]}]
+  (str "No database found for \"" db-name "\". Run: "
+       cli/program-name " import " (or repo-path "<repo-path>")))
 
 (defn- with-valid-repo
   [opts run!]
@@ -95,19 +89,37 @@
     (let [conn (db/connect-and-ensure-schema (:db-dir ctx) (:db-name ctx))]
       (run! (assoc ctx :conn conn :db (d/db conn))))))
 
+(defn- resolve-repo-path
+  "If repo-path is a Git URL, clone to data/repos/<name>/ and return local path.
+   If already cloned, reuse existing directory. Otherwise return repo-path as-is."
+  [repo-path]
+  (if-not (git/git-url? repo-path)
+    repo-path
+    (let [name   (git/url->repo-name repo-path)
+          target (str "data/repos/" name)]
+      (if (.isDirectory (io/file target ".git"))
+        (do (log! (str "Using existing clone at " target)) target)
+        (do (log! (str "Cloning " repo-path " into " target " ..."))
+            (git/clone! repo-path target)
+            target)))))
+
 (defn do-import
   "Run the import subcommand. Returns {:exit n :result map-or-nil}."
   [opts]
   (with-valid-repo
-    opts
+    (update opts :repo-path resolve-repo-path)
     (fn [{:keys [repo-path db-dir db-name] :as ctx}]
-      (let [conn    (db/connect-and-ensure-schema db-dir db-name)
-            git-r   (git/import-commits! conn repo-path)
-            files-r (files/import-files! conn repo-path)]
+      (let [conn     (db/connect-and-ensure-schema db-dir db-name)
+            repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
+            git-r    (git/import-commits! conn repo-path repo-uri)
+            files-r  (files/import-files! conn repo-path repo-uri)]
+        (log! (str "Next: run '" cli/program-name " analyze " repo-path
+                   "' to add semantic metadata."))
         {:exit   0
          :result (merge (select-keys git-r [:commits-imported :commits-skipped])
                         (select-keys files-r [:files-imported :files-skipped :dirs-imported])
-                        {:db-path (db-path ctx)})}))))
+                        {:db-path    (db-path ctx)
+                         :next-step  (str cli/program-name " analyze " repo-path)})}))))
 
 (defn do-analyze
   "Run the analyze subcommand. Returns {:exit n :result map-or-nil}."
@@ -120,28 +132,58 @@
           ctx
           (fn [{:keys [conn]}]
             (let [provider-kw (llm/provider->kw
-                               (or provider (default-provider-by-command "analyze")))
+                               (or provider llm/default-provider))
+                  model-id    (llm/model-alias->id
+                               (or model llm/default-model-alias))
                   invoke-llm  (llm/make-prompt-fn
-                               (llm/make-invoke-fn provider-kw {:model model}))]
+                               (llm/make-invoke-fn provider-kw {:model model-id}))]
               {:exit   0
-               :result (analyze/analyze-repo! conn repo-path invoke-llm)})))
+               :result (analyze/analyze-repo! conn repo-path invoke-llm
+                                              {:model-id model-id})})))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
           {:exit 1})))))
 
-(defn do-query
-  "Run the query subcommand. Returns {:exit n :result map-or-nil}."
-  [{:keys [query-name] :as opts}]
+(defn do-postprocess
+  "Run the postprocess subcommand. Returns {:exit n :result map-or-nil}."
+  [opts]
   (with-valid-repo
     opts
     (fn [ctx]
       (with-existing-db
         ctx
-        (fn [{:keys [db]}]
-          (let [{:keys [ok error]} (query/run-named-query db query-name)]
-            (if error
-              (do (print-error! error) {:exit 1})
-              {:exit 0 :result ok})))))))
+        (fn [{:keys [conn repo-path]}]
+          (let [result (imports/postprocess-repo! conn repo-path)]
+            (log! (str "Next: run '" cli/program-name " query file-imports "
+                       repo-path "' to explore the import graph."))
+            {:exit 0 :result result}))))))
+
+(defn- do-query-list
+  "List available named queries with descriptions."
+  []
+  (let [queries (->> (query/list-query-names)
+                     (mapv (fn [qname]
+                             {:name        qname
+                              :description (or (:description (query/load-named-query qname)) "")})))]
+    (doseq [{:keys [name description]} queries]
+      (println (format "  %-28s %s" name description)))
+    {:exit 0 :result queries}))
+
+(defn do-query
+  "Run the query subcommand. Returns {:exit n :result map-or-nil}."
+  [{:keys [query-name list-queries] :as opts}]
+  (if list-queries
+    (do-query-list)
+    (with-valid-repo
+      opts
+      (fn [ctx]
+        (with-existing-db
+          ctx
+          (fn [{:keys [db]}]
+            (let [{:keys [ok error]} (query/run-named-query db query-name)]
+              (if error
+                (do (print-error! error) {:exit 1})
+                {:exit 0 :result ok}))))))))
 
 (defn do-agent
   "Run the agent subcommand. Returns {:exit n :result map-or-nil}."
@@ -154,9 +196,9 @@
           ctx
           (fn [{:keys [db db-name]}]
             (let [provider-kw (llm/provider->kw
-                               (or provider (default-provider-by-command "agent")))
+                               (or provider llm/default-provider))
                   model-id    (llm/model-alias->id
-                               (or model (default-model-by-command "agent")))
+                               (or model llm/default-model-alias))
                   invoke-fn   (llm/make-invoke-fn provider-kw
                                                   {:model       model-id
                                                    :temperature 0.3
@@ -165,14 +207,20 @@
                                          (cond-> {:invoke-fn invoke-fn :repo-name db-name}
                                            max-iterations (assoc :max-iterations max-iterations)))]
               (when verbose
-                (binding [*out* *err*]
+                (let [max-iters (or max-iterations 10)]
                   (doseq [step (:steps result)]
-                    (println (str "agent/step iteration=" (:iteration step)
-                                  (when (:tool-result step)
-                                    (str " tool-result-size=" (count (:tool-result step))))
-                                  (when (:error step) (str " error=" (:error step)))
-                                  (when (:answer step) " answer=yes"))))))
-              {:exit   0
+                    (let [i   (:iteration step)
+                          tag (cond
+                                (:answer step)      "answer"
+                                (:error step)       (str "error: " (:error step))
+                                (:tool-result step) (let [parsed (:parsed step)
+                                                          tool   (some-> parsed :tool name)]
+                                                      (str "tool: " (or tool "unknown")
+                                                           " (" (count (:tool-result step))
+                                                           " chars)"))
+                                :else               "thinking")]
+                      (log! (str "  [" i "/" max-iters "] " tag))))))
+              {:exit   (if (= :budget-exhausted (:status result)) 2 0)
                :result {:answer (:answer result)
                         :status (:status result)
                         :usage  (:usage result)}})))
@@ -189,11 +237,15 @@
       (with-existing-db
         ctx
         (fn [{:keys [db] :as c}]
-          {:exit   0
-           :result {:commits (count (d/q '[:find ?e :where [?e :git/type :commit]] db))
-                    :files   (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
-                    :dirs    (count (d/q '[:find ?e :where [?e :dir/path _]] db))
-                    :db-path (db-path c)}})))))
+          (let [stats {:commits (count (d/q '[:find ?e :where [?e :git/type :commit]] db))
+                       :files   (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
+                       :dirs    (count (d/q '[:find ?e :where [?e :dir/path _]] db))
+                       :db-path (db-path c)}]
+            (println (str (:commits stats) " commits, "
+                          (:files stats) " files, "
+                          (:dirs stats) " directories"
+                          " -- db: " (:db-path stats)))
+            {:exit 0 :result stats}))))))
 
 ;; --- Benchmark ---
 
@@ -213,9 +265,8 @@
                           :min-delay-ms (or (:min-delay opts) 0))
     {:exit 0}
     (catch Exception e
-      (binding [*out* *err*]
-        (println (str "bench/error " (.getMessage e)))
-        (println (str "Resume with: clj -M:run benchmark " repo-path " --resume")))
+      (print-error! (.getMessage e))
+      (log! (str "Resume with: " cli/program-name " benchmark " repo-path " --resume"))
       {:exit 2})))
 
 (defn- do-benchmark-resume
@@ -265,52 +316,49 @@
 
 (defn do-benchmark
   "Run the benchmark subcommand. Returns {:exit n}."
-  [{:keys [repo-path resume max-questions stop-after max-cost model judge-model provider
+  [{:keys [resume max-questions stop-after max-cost model judge-model provider
            concurrency min-delay skip-raw skip-judge canary] :as opts}]
-  (if-let [err (validate-repo-path repo-path)]
-    (do (print-error! err) {:exit 1})
-    (try
-      (let [db-dir         (resolve-db-dir opts)
-            db-name        (derive-db-name repo-path)
-            checkpoint-dir "data/benchmarks/runs"
-            provider       (or provider (default-provider-by-command "benchmark"))
-            provider-kw    (llm/provider->kw provider)
-            answer-llm     (llm/make-prompt-fn
-                            (llm/make-invoke-fn provider-kw {:model model}))
-            judge-llm      (llm/make-prompt-fn
-                            (llm/make-invoke-fn provider-kw {:model (or judge-model model)}))
-            run-opts       {:judge-llm      judge-llm
-                            :model-config   {:model model :judge-model (or judge-model model)
-                                             :provider provider}
-                            :checkpoint-dir checkpoint-dir
-                            :budget         {:max-questions max-questions
-                                             :stop-after-ms (when stop-after (* stop-after 1000))
-                                             :max-cost-usd  max-cost}
-                            :mode           (cond-> {}
-                                              skip-raw   (assoc :skip-raw true)
-                                              skip-judge (assoc :skip-judge true))
-                            :canary         canary
-                            :concurrency    concurrency
-                            :min-delay      min-delay}]
-        (if-not (db-exists? db-dir db-name)
-          (do (print-error! (str "No database found for \"" db-name "\". Run `import` first."))
-              {:exit 1})
-          (let [conn (db/connect-and-ensure-schema db-dir db-name)
-                db   (d/db conn)]
-            (if resume
-              (do-benchmark-resume checkpoint-dir resume db repo-path answer-llm run-opts)
-              (run-benchmark-impl! db repo-path answer-llm run-opts)))))
-      (catch clojure.lang.ExceptionInfo e
-        (print-error! (.getMessage e))
-        {:exit 1}))))
+  (with-valid-repo
+    opts
+    (fn [ctx]
+      (try
+        (with-existing-db
+          ctx
+          (fn [{:keys [db]}]
+            (let [checkpoint-dir "data/benchmarks/runs"
+                  provider       (or provider llm/default-provider)
+                  provider-kw    (llm/provider->kw provider)
+                  answer-llm     (llm/make-prompt-fn
+                                  (llm/make-invoke-fn provider-kw {:model model}))
+                  judge-llm      (llm/make-prompt-fn
+                                  (llm/make-invoke-fn provider-kw {:model (or judge-model model)}))
+                  run-opts       {:judge-llm      judge-llm
+                                  :model-config   {:model model :judge-model (or judge-model model)
+                                                   :provider provider}
+                                  :checkpoint-dir checkpoint-dir
+                                  :budget         {:max-questions max-questions
+                                                   :stop-after-ms (when stop-after (* stop-after 1000))
+                                                   :max-cost-usd  max-cost}
+                                  :mode           (cond-> {}
+                                                    skip-raw   (assoc :skip-raw true)
+                                                    skip-judge (assoc :skip-judge true))
+                                  :canary         canary
+                                  :concurrency    concurrency
+                                  :min-delay      min-delay}]
+              (if resume
+                (do-benchmark-resume checkpoint-dir resume db (:repo-path opts) answer-llm run-opts)
+                (run-benchmark-impl! db (:repo-path opts) answer-llm run-opts)))))
+        (catch clojure.lang.ExceptionInfo e
+          (print-error! (.getMessage e))
+          {:exit 1})))))
 
 ;; --- LongBench ---
 
 (defn- do-longbench-run
   [{:keys [resume max-questions stop-after max-cost model provider concurrency min-delay]}]
   (try
-    (let [provider-kw    (llm/provider->kw (or provider (default-provider-by-command "longbench")))
-          model-id       (llm/model-alias->id (or model (default-model-by-command "longbench")))
+    (let [provider-kw    (llm/provider->kw (or provider llm/default-provider))
+          model-id       (llm/model-alias->id (or model llm/default-model-alias))
           checkpoint-dir "data/longbench/runs"
           invoke-llm     (llm/make-invoke-fn provider-kw
                                              {:model       model-id
@@ -320,8 +368,7 @@
                           :stop-after-ms (when stop-after (* stop-after 1000))
                           :max-cost-usd  max-cost}]
       (when (= :claude-cli provider-kw)
-        (binding [*out* *err*]
-          (println "longbench/param-deviation provider=claude-cli temperature=default max_tokens=default")))
+        (log! "longbench/param-deviation provider=claude-cli temperature=default max_tokens=default"))
       (if resume
         (let [cp-path (bench/find-checkpoint checkpoint-dir
                                              (if (string? resume) resume "latest"))]
@@ -330,13 +377,19 @@
                                 "No checkpoint files found"
                                 (str "Checkpoint not found: " resume)))
                 {:exit 1})
-            (let [cp (bench/checkpoint-read cp-path)]
-              (longbench/run-longbench-resume! invoke-llm cp
-                                               :checkpoint-dir checkpoint-dir
-                                               :budget budget
-                                               :concurrency (or concurrency 4)
-                                               :min-delay-ms (or min-delay 0))
-              {:exit 0})))
+            (let [cp (try (bench/checkpoint-read cp-path)
+                          (catch Exception e
+                            (print-error! (str "Failed to parse checkpoint: "
+                                               (.getMessage e)))
+                            nil))]
+              (if-not cp
+                {:exit 1}
+                (do (longbench/run-longbench-resume! invoke-llm cp
+                                                     :checkpoint-dir checkpoint-dir
+                                                     :budget budget
+                                                     :concurrency (or concurrency 4)
+                                                     :min-delay-ms (or min-delay 0))
+                    {:exit 0})))))
         (do
           (longbench/run-longbench! invoke-llm
                                     :checkpoint-dir checkpoint-dir
@@ -347,15 +400,13 @@
     (catch clojure.lang.ExceptionInfo e
       (let [data (ex-data e)]
         (if (#{429 500 502 503} (:status data))
-          (do (binding [*out* *err*]
-                (println (str "longbench/api-error " (.getMessage e))))
+          (do (print-error! (str "API error: " (.getMessage e)))
               {:exit 2})
           (do (print-error! (.getMessage e))
               {:exit 1}))))
     (catch Exception e
-      (binding [*out* *err*]
-        (println (str "longbench/error " (.getMessage e)))
-        (println "Resume with: clj -M:run longbench run --resume"))
+      (print-error! (.getMessage e))
+      (log! (str "Resume with: " cli/program-name " longbench run --resume"))
       {:exit 2})))
 
 (defn- do-longbench-results
@@ -375,27 +426,33 @@
                  (mapv (fn [r] {:prediction (:pred r) :answer (:answer r)
                                 :difficulty (:difficulty r) :length (:length r)})
                        results))
-            fmt (fn [v] (if v (format "%5.1f" (double v)) "  n/a"))]
+            fmt (fn [v] (if v (format "%5.1f%%" (double v)) "  n/a "))]
         (println (str "Run: " rid))
         (println (str "Questions: " (:total agg)))
         (println)
-        (println "  Overall  Easy   Hard   Short  Med    Long")
-        (println (str "  " (fmt (:overall agg))
-                      "  " (fmt (:easy agg))
-                      "  " (fmt (:hard agg))
-                      "  " (fmt (:short agg))
-                      "  " (fmt (:medium agg))
-                      "  " (fmt (:long agg))))
+        (println "Accuracy (%) by difficulty and length:")
+        (println (format "  %6s  %6s  %6s  %6s  %6s  %6s"
+                         "Score" "Easy" "Hard" "Short" "Medium" "Long"))
+        (println (format "  %6s  %6s  %6s  %6s  %6s  %6s"
+                         "------" "------" "------" "------" "------" "------"))
+        (println (format "  %s  %s  %s  %s  %s  %s"
+                         (fmt (:overall agg)) (fmt (:easy agg)) (fmt (:hard agg))
+                         (fmt (:short agg)) (fmt (:medium agg)) (fmt (:long agg))))
         (when detail
-          (println)
-          (println "  ID                 Pred  Truth  Correct?")
-          (println "  ---                ----  -----  --------")
-          (doseq [r results]
-            (println (format "  %-20s %-5s %-5s  %s"
-                             (:_id r)
-                             (or (:pred r) "nil")
-                             (:answer r)
-                             (if (:judge r) "yes" "no")))))
+          (let [id-width (max 2 (apply max (map (comp count str :_id) results)))
+                id-fmt   (str "%-" id-width "s")]
+            (println)
+            (println (format (str "  " id-fmt "  %-5s %-5s  %s")
+                             "ID" "Pred" "Truth" "Correct?"))
+            (println (format (str "  " id-fmt "  %-5s %-5s  %s")
+                             (apply str (repeat id-width "-"))
+                             "----" "-----" "--------"))
+            (doseq [r results]
+              (println (format (str "  " id-fmt "  %-5s %-5s  %s")
+                               (:_id r)
+                               (or (:pred r) "nil")
+                               (:answer r)
+                               (if (:judge r) "yes" "no"))))))
         {:exit 0}))))
 
 (defn do-longbench
@@ -403,7 +460,9 @@
   [{:keys [longbench-command] :as opts}]
   (case longbench-command
     "download" (try
+                 (log! "Downloading LongBench dataset...")
                  (longbench/download-dataset!)
+                 (log! "Download complete.")
                  {:exit 0}
                  (catch Exception e
                    (print-error! (.getMessage e))
@@ -417,19 +476,12 @@
 
 ;; --- Error dispatch ---
 
-(defn- allowed-provider-help
-  [{:keys [subcommand]}]
-  (case subcommand
-    "benchmark" "'glm', 'claude', 'claude-api', or 'claude-cli'"
-    "longbench" "'glm', 'claude', 'claude-api', or 'claude-cli'"
-    "agent" "'glm', 'claude', 'claude-api', or 'claude-cli'"
-    "'glm', 'claude', 'claude-api', or 'claude-cli'"))
-
 (def ^:private error-messages
   {:no-args                      nil
-   :unknown-subcommand           #(str "Unknown subcommand: " (:subcommand %))
+   :unknown-subcommand           #(str "Unknown subcommand: " (:subcommand %)
+                                       ". Run '" cli/program-name " --help' for available subcommands.")
    :no-repo-path                 "Missing <repo-path> argument."
-   :query-missing-args           "Usage: query <query-name> <repo-path>"
+   :query-missing-args           "Missing <query-name> and <repo-path> arguments."
    :missing-db-dir-value         "Missing value for --db-dir."
    :unknown-flag                 #(str "Unknown option: " (:flag %))
    :invalid-max-questions        #(str "Invalid --max-questions value: " (:value %))
@@ -440,33 +492,37 @@
    :missing-judge-model-value    "Missing value for --judge-model."
    :missing-provider-value       "Missing value for --provider."
    :invalid-provider             #(str "Invalid --provider value: " (:value %)
-                                       ". Must be " (allowed-provider-help %) ".")
+                                       ". Must be 'glm', 'claude', 'claude-api', or 'claude-cli'.")
    :invalid-max-cost             #(str "Invalid --max-cost value: " (:value %))
    :missing-max-cost-value       "Missing value for --max-cost."
    :invalid-concurrency          #(str "Invalid --concurrency value: " (:value %) ". Must be 1-20.")
    :missing-concurrency-value    "Missing value for --concurrency."
    :invalid-min-delay            #(str "Invalid --min-delay value: " (:value %) ". Must be >= 0.")
    :missing-min-delay-value      "Missing value for --min-delay."
-   :longbench-no-subcommand      "Missing longbench subcommand. Usage: longbench <download|run|results>"
+   :longbench-no-subcommand      "Missing longbench subcommand. Expected: download, run, or results."
    :longbench-unknown-subcommand #(str "Unknown longbench subcommand: " (:longbench-command %)
-                                       ". Usage: longbench <download|run|results>")
-   :agent-missing-args           "Usage: agent -q <question> [options] <repo-path>"
+                                       ". Expected: download, run, or results.")
+   :agent-missing-args           "Missing required arguments for agent command."
    :agent-missing-question        "Missing -q <question> argument."
    :invalid-max-iterations       #(str "Invalid --max-iterations value: " (:value %))
    :missing-max-iterations-value "Missing value for --max-iterations."})
 
-(def ^:private errors-with-usage
-  #{:no-args :unknown-subcommand :no-repo-path :missing-db-dir-value :unknown-flag})
+(def ^:private errors-with-global-usage
+  #{:no-args})
+
+(def ^:private errors-with-subcommand-usage
+  #{:no-repo-path :missing-db-dir-value :unknown-flag
+    :agent-missing-question :agent-missing-args :query-missing-args})
 
 ;; --- Entry point ---
 
 (defn run
   "Main dispatch. Returns {:exit n :result map-or-nil}."
   [args]
-  (let [parsed (parse-args args)]
+  (let [parsed (cli/parse-args args)]
     (cond
       (:version parsed)
-      (do (println (read-version)) {:exit 0})
+      (do (println (util/read-version)) {:exit 0})
 
       (:help parsed)
       (let [h (:help parsed)]
@@ -479,21 +535,31 @@
       (do (when-let [msg-or-fn (error-messages (:error parsed))]
             (let [msg (if (fn? msg-or-fn) (msg-or-fn parsed) msg-or-fn)]
               (print-error! msg)))
-          (when (errors-with-usage (:error parsed))
+          (cond
+            (errors-with-global-usage (:error parsed))
+            (print-usage!)
+            (and (errors-with-subcommand-usage (:error parsed))
+                 (:subcommand parsed)
+                 (cli/format-subcommand-help (:subcommand parsed)))
+            (do (log!)
+                (log! (cli/format-subcommand-help (:subcommand parsed))))
+            (errors-with-subcommand-usage (:error parsed))
             (print-usage!))
           {:exit 1})
 
       :else
       (let [result (case (:subcommand parsed)
                      "import"    (do-import parsed)
-                     "analyze"   (do-analyze parsed)
-                     "query"     (do-query parsed)
+                     "analyze"      (do-analyze parsed)
+                     "postprocess" (do-postprocess parsed)
+                     "query"       (do-query parsed)
                      "agent"     (do-agent parsed)
                      "status"    (do-status parsed)
                      "benchmark" (do-benchmark parsed)
-                     "longbench" (do-longbench parsed))]
+                     "longbench" (do-longbench parsed)
+                     "serve"     (do (mcp/serve! parsed) {:exit 0}))]
         (when (and (:result result)
-                   (not (#{"benchmark" "longbench"} (:subcommand parsed))))
+                   (not (#{"benchmark" "longbench" "serve" "status"} (:subcommand parsed))))
           (prn (:result result)))
         result))))
 

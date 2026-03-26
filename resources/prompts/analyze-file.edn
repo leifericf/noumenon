@@ -16,17 +16,166 @@ Respond with ONLY a raw EDN map (no markdown fences, no explanation) with these 
  :complexity  :trivial | :simple | :moderate | :complex | :very-complex
  :patterns    [:state-machine :producer-consumer :builder :factory :decorator :adapter :pipeline :ring-handler :middleware-chain]
  :layer       :core | :subsystem | :driver | :api | :util
+ :category    :backend | :frontend | :infrastructure | :configuration | :data | :testing | :documentation | :tooling | :shared
  :confidence  0.0-1.0
- :segments    [{:name \"function-or-def-name\"
-                :kind :function | :macro | :protocol | :multimethod | :record | :type | :struct | :enum | :typedef | :global | :include | :namespace
+ :dependencies [\"namespace.or.module.name\" \"another.dep\"]
+ :segments    [{:name       \"function-or-def-name\"
+                :kind       :function | :method | :class | :interface | :trait | :protocol | :macro | :multimethod | :record | :type | :struct | :enum | :union | :typedef | :constant | :property | :module | :namespace | :global | :include
                 :line-start 1
-                :line-end 10}]}
+                :line-end   10
+                :args       \"[x y]  OR  (int x, String y)\"
+                :returns    \"return type if language has them\"
+                :visibility :public | :private | :protected | :internal | :package
+                :docstring  \"doc comment text if present\"
+                :deprecated true
+                :complexity :trivial | :simple | :moderate | :complex
+                :smells     [:deep-nesting :too-many-params :long-method :god-function :feature-envy :magic-numbers :mutation-heavy :global-state :duplication :poor-naming :dead-code :complex-conditional]
+                :purpose    \"one-line description of what this segment does\"
+                :safety-concerns [:sql-injection :xss :race-condition :unsafe-cast :path-traversal :command-injection :buffer-overflow :deserialization :hardcoded-secret :insecure-random :unvalidated-redirect]
+                :error-handling  :none | :basic | :robust
+                :call-names [\"fn-name\" \"other-fn\"]
+                :pure       true
+                :ai-likelihood :likely-human | :possibly-ai | :likely-ai | :unknown}]}
 
-Rules:
-- Include only tags and patterns that actually apply. Omit keys with empty collections.
+General rules:
+- Include only tags, patterns, smells, and safety-concerns that actually apply. Omit keys with empty collections.
 - :segments should list the major definitions, not every helper. Cap at 20 segments.
-- :complexity reflects cyclomatic/cognitive complexity, not file length.
-- :confidence is your self-assessed confidence that the analysis is accurate (0.0-1.0).
-- Keep :summary and :purpose each under 500 characters."
+- Keep :summary and :purpose each under 500 characters.
 
- :version "0.2.0"}
+File-level field guidelines:
+
+:summary — one paragraph plain-English overview of what this file does. Focus on behavior and responsibilities, not implementation details. Under 500 chars.
+:purpose — why this file exists and its role in the project. What would break or be missing without it? Under 500 chars.
+
+:tags — semantic concerns present in this file. Only include tags that actually apply:
+  :io — reads/writes files, streams, or devices.
+  :parsing — transforms text/binary into structured data.
+  :concurrency — threads, locks, channels, async coordination.
+  :configuration — reads/manages config, env vars, feature flags.
+  :testing — test definitions, fixtures, mocks, assertions.
+  :networking — HTTP, sockets, RPC, protocol handling.
+  :validation — input checking, schema validation, constraint enforcement.
+  :logging — log output, audit trails, structured logging.
+  :security — auth, crypto, access control, secrets management.
+  :routing — URL dispatch, request routing, path matching.
+  :middleware — request/response pipeline, interceptors, decorators.
+  :state-management — stateful stores, caches, atoms, refs, session management.
+
+:complexity — overall cognitive complexity of this file:
+  :trivial — boilerplate, constants, re-exports. No logic.
+  :simple — straightforward linear code, minimal branching.
+  :moderate — some branching and state, but understandable.
+  :complex — significant branching, multiple interacting concerns.
+  :very-complex — deeply nested logic, complex state machines, hard to follow.
+
+:patterns — design patterns used in this file. Only include if clearly present:
+  :state-machine — explicit state transitions based on events/input.
+  :producer-consumer — one component generates work, another processes it.
+  :builder — step-by-step construction of complex objects.
+  :factory — creates instances based on parameters without exposing creation logic.
+  :decorator — wraps functionality to add behavior transparently.
+  :adapter — converts one interface to another.
+  :pipeline — data flows through a chain of transformation stages.
+  :ring-handler — Clojure Ring-style request->response handler.
+  :middleware-chain — composable wrappers around a core handler.
+
+:layer — architectural layer this file belongs to:
+  :core — fundamental domain logic, algorithms, data structures.
+  :subsystem — cohesive internal module (e.g., scheduler, cache, parser).
+  :driver — adapter to external systems (DB, filesystem, network, APIs).
+  :api — external-facing interface (HTTP endpoints, CLI, public API surface).
+  :util — general-purpose helpers with no domain knowledge.
+
+:category — domain role of this file:
+  :backend — server-side logic, API handlers, business rules, data processing.
+  :frontend — UI components, rendering, DOM manipulation, client-side logic.
+  :infrastructure — CI/CD, Docker, deploy scripts, cloud/platform config.
+  :configuration — app config files, env setup, feature flags, settings.
+  :data — schemas, migrations, seeds, ORM/DB models, data definitions.
+  :testing — tests, test helpers, fixtures, mocks.
+  :documentation — doc generators, examples, API docs.
+  :tooling — build scripts, linters, code generators, dev utilities.
+  :shared — cross-cutting libraries used across multiple layers or domains.
+
+:confidence — your self-assessed confidence that this analysis is accurate (0.0-1.0). Lower if the file is obfuscated, generated, or in an unfamiliar domain.
+
+:dependencies — list of namespace/module/package names this file imports, requires, or uses. Include only direct dependencies. Use the canonical import name (e.g. \"clojure.string\", \"react\", \"os\", \"datomic.client.api\"). Omit if none.
+
+Segment field guidelines:
+
+:kind definitions:
+  :function — standalone function (defn, def, fn, func). :method — member of a class/struct/impl.
+  :class — class definition. :interface — Java/C#/Go/TS interface. :trait — Rust/Scala/PHP trait. :protocol — Clojure protocol.
+  :macro — compile-time code generation. :multimethod — Clojure multimethod.
+  :record — Clojure record or similar value type. :type — type alias or newtype. :struct — C/Go/Rust struct.
+  :enum — enumeration. :union — C/C++ union, Rust enum with data, TS discriminated union.
+  :typedef — C typedef, Go type alias. :constant — const, final static, #define, def of a fixed value.
+  :property — getter/setter/computed property. :module — Python/Ruby/Elixir module (not namespace).
+  :namespace — namespace/package declaration. :global — mutable global/static state. :include — import/require/include statement.
+
+:args — parameter list in source syntax. Clojure: [x y]. Java: (int x, String y). Omit for kinds with no params.
+:returns — return type if the language uses explicit return types. Omit for Clojure, Python without annotations, etc.
+
+:visibility — access level. Map language conventions to these values:
+  :public — accessible everywhere (Java public, Go Capitalized, Rust pub, Python no prefix).
+  :private — accessible only within defining scope (Java private, Go lowercase, Clojure ^:private, Python _prefix).
+  :protected — accessible in subclasses (Java/C++/C# protected).
+  :internal — accessible within module/crate/assembly (C# internal, Rust pub(crate), Kotlin internal).
+  :package — accessible within package only (Java default access).
+
+:docstring — the doc comment text (Javadoc, Python docstring, Clojure docstring, /// comments, JSDoc). Omit if none.
+:deprecated — true only if explicitly marked (@Deprecated, #[deprecated], ^:deprecated, @obsolete). Omit if not deprecated.
+
+:complexity — per-segment cognitive complexity:
+  :trivial — simple delegation, constant, or 1-2 line accessor.
+  :simple — straightforward logic, one code path, no branching.
+  :moderate — some branching or iteration, manageable.
+  :complex — multiple nested branches, complex state transitions, hard to reason about.
+
+:smells — only include if actually present:
+  :deep-nesting — 3+ levels of nested control flow.
+  :too-many-params — more than 4-5 parameters.
+  :long-method — function body exceeds ~30-40 lines.
+  :god-function — does too many unrelated things.
+  :feature-envy — mostly operates on another object's data.
+  :magic-numbers — unexplained numeric literals.
+  :mutation-heavy — excessive mutable state manipulation.
+  :global-state — reads/writes mutable global or static state.
+  :duplication — contains copy-pasted or near-duplicate logic.
+  :poor-naming — unclear, misleading, or inconsistent names.
+  :dead-code — unreachable branches, unused parameters.
+  :complex-conditional — long or deeply nested boolean expressions.
+
+:purpose — one-line plain-English description of what this segment does (under 200 chars).
+
+:safety-concerns — only include if you see a concrete issue in the code:
+  :sql-injection — unsanitized input in SQL queries.
+  :xss — unescaped user content in HTML output.
+  :race-condition — shared mutable state without synchronization.
+  :unsafe-cast — unchecked type cast that could fail at runtime.
+  :path-traversal — unsanitized file path from user input.
+  :command-injection — unsanitized input in shell commands.
+  :buffer-overflow — out-of-bounds memory access (C/C++).
+  :deserialization — deserializing untrusted data (pickle, Java serialization).
+  :hardcoded-secret — credentials, API keys, or tokens in source.
+  :insecure-random — using non-cryptographic random for security purposes.
+  :unvalidated-redirect — redirect URL from user input without validation.
+
+:error-handling — how well errors/exceptions are handled:
+  :none — no error handling; exceptions propagate uncaught.
+  :basic — some try/catch or error checks, but incomplete (e.g., swallows exceptions, broad catches).
+  :robust — comprehensive handling with specific error types, proper logging/recovery.
+  Omit for segments where error handling is not applicable.
+
+:call-names — list of function/method names this segment calls. Use unqualified names (e.g. \"map\", \"println\", \"fetch-data\"). Include only significant calls, not every standard library function. Omit if none or if the segment makes no notable calls.
+
+:pure — true if the segment is side-effect-free: no I/O (file, network, database), no mutation of external state, no global state access. Pure functions depend only on their arguments and return a value. Omit if not pure or if unsure.
+
+:ai-likelihood — assess whether this segment was likely written by an AI coding assistant:
+  :likely-ai — strong AI signals: overly uniform formatting, boilerplate comments (\\\"Here is a function that...\\\"), excessive documentation relative to complexity, lack of idiomatic shortcuts, templated structure.
+  :possibly-ai — some AI signals but inconclusive.
+  :likely-human — idiomatic, terse, uses language-specific conventions, has organic variable naming and structure.
+  :unknown — cannot determine (e.g., generated code, very short, or ambiguous).
+  Omit if :likely-human (the default assumption)."
+
+ :version "0.4.0"}

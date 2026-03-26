@@ -1,0 +1,8 @@
+{:name "segments-by-complexity"
+ :description "Code segments grouped by complexity rating"
+ :query [:find ?path ?name ?complexity
+         :where
+         [?seg :code/complexity ?complexity]
+         [?seg :code/name ?name]
+         [?seg :code/file ?file]
+         [?file :file/path ?path]]}

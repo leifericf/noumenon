@@ -1,0 +1,9 @@
+{:name "author-spread"
+ :description "Authors ranked by number of distinct files and directories touched"
+ :query [:find ?name ?email (count-distinct ?file) (count-distinct ?dir)
+         :where
+         [?commit :commit/author ?person]
+         [?commit :commit/changed-files ?file]
+         [?file :file/directory ?dir]
+         [?person :person/name ?name]
+         [?person :person/email ?email]]}

@@ -1,0 +1,11 @@
+{:name "churn-by-dir"
+ :description "Directories ranked by total lines added and deleted"
+ :query [:find ?dir-path (sum ?adds) (sum ?dels)
+         :in $ %
+         :where
+         [?commit :commit/changed-files ?file]
+         [?commit :commit/additions ?adds]
+         [?commit :commit/deletions ?dels]
+         [?file :file/directory ?dir]
+         [?dir :dir/path ?dir-path]]
+ :uses-rules true}

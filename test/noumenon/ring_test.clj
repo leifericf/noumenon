@@ -78,8 +78,7 @@
     (testing "status succeeds"
       (is (= 0 (:exit result))))
     (testing "commit count matches git"
-      (let [status-edn (read-string (:stdout result))]
-        (is (= expected-commits (:commits status-edn)))))))
+      (is (= expected-commits (:commits (:result result)))))))
 
 (deftest ring-status-file-count
   ;; Use Datomic directly for file count since git ls-tree line counting is tricky via shell/sh
@@ -89,10 +88,9 @@
                          (->> (str/split-lines out)
                               (remove str/blank?)
                               count))
-        result         (run-capturing ["status" "--db-dir" db-dir ring-dir])
-        status-edn     (read-string (:stdout result))]
+        result         (run-capturing ["status" "--db-dir" db-dir ring-dir])]
     (testing "file count matches git ls-tree"
-      (is (= expected-files (:files status-edn))))))
+      (is (= expected-files (:files (:result result)))))))
 
 (deftest ring-spot-check-known-file
   (run-capturing ["import" "--db-dir" db-dir ring-dir])

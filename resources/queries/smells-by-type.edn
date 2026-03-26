@@ -1,0 +1,5 @@
+{:name "smells-by-type"
+ :description "Code smell types ranked by occurrence count"
+ :query [:find ?smell (count ?seg)
+         :where
+         [?seg :code/smells ?smell]]}

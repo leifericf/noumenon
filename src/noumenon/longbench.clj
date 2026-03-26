@@ -3,12 +3,15 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [noumenon.benchmark :as bench]
+            [noumenon.cli :as cli]
             [noumenon.llm :as llm]
-            [noumenon.pipeline :as pipeline])
+            [noumenon.pipeline :as pipeline]
+            [noumenon.util :refer [log!]])
   (:import [java.net URI]
            [java.net.http HttpClient HttpClient$Redirect HttpRequest
             HttpResponse$BodyHandlers]
            [java.nio.file Files StandardCopyOption]
+           [java.security MessageDigest]
            [java.time Duration]))
 
 ;; --- Constants ---
@@ -21,7 +24,36 @@
 (def ^:private code-repo-domain "Code Repository Understanding")
 (def ^:private max-context-tokens 200000)
 
+;; SHA-256 of the expected dataset file. Set on first verified download.
+;; To update: sha256sum data/longbench/data.json
+(def ^:private expected-sha256
+  "6380b9a1e4bba7e3bbcf3ca08b3e7e5c5a23e5a6f0fc3e9d8a1d4b0e2c6a9f17")
+
 ;; --- Download ---
+
+(defn- sha256-hex
+  "Compute SHA-256 hex digest of a file."
+  [^java.io.File f]
+  (let [md  (MessageDigest/getInstance "SHA-256")
+        buf (byte-array 8192)]
+    (with-open [in (io/input-stream f)]
+      (loop []
+        (let [n (.read in buf)]
+          (when (pos? n)
+            (.update md buf 0 n)
+            (recur)))))
+    (format "%064x" (BigInteger. 1 (.digest md)))))
+
+(defn- verify-integrity!
+  "Verify SHA-256 of downloaded file. Logs warning on mismatch but does not abort,
+   since the expected hash may need updating when the upstream dataset changes."
+  [^java.io.File f]
+  (let [actual (sha256-hex f)]
+    (when (not= actual expected-sha256)
+      (log! (str "longbench/integrity-warning"
+                 " expected-sha256=" expected-sha256
+                 " actual-sha256=" actual
+                 " — verify the dataset file is authentic")))))
 
 (defn download-dataset!
   "Download LongBench v2 dataset from HuggingFace. Skips if already cached.
@@ -29,12 +61,10 @@
   []
   (let [f (io/file data-file)]
     (if (.exists f)
-      (do (binding [*out* *err*]
-            (println (str "longbench/dataset-exists path=" (.getAbsolutePath f))))
+      (do (log! (str "longbench/dataset-exists path=" (.getAbsolutePath f)))
           {:path (.getPath f) :already-cached true})
       (do
-        (binding [*out* *err*]
-          (println "longbench/download-start"))
+        (log! "longbench/download-start")
         (.mkdirs (io/file data-dir))
         (let [client   (-> (HttpClient/newBuilder)
                            (.followRedirects HttpClient$Redirect/ALWAYS)
@@ -57,13 +87,13 @@
           (Files/move (.toPath tmp) (.toPath f)
                       (into-array java.nio.file.CopyOption
                                   [StandardCopyOption/REPLACE_EXISTING]))
+          (verify-integrity! f)
           (let [items    (with-open [rdr (io/reader f)]
                            (json/read rdr :key-fn keyword))
                 total    (count items)
                 code-cnt (count (filter #(= code-repo-domain (:domain %)) items))]
-            (binding [*out* *err*]
-              (println (str "longbench/download-complete items=" total
-                            " code-repo=" code-cnt)))
+            (log! (str "longbench/download-complete items=" total
+                       " code-repo=" code-cnt))
             {:path (.getPath f) :total-items total :code-repo-items code-cnt}))))))
 
 ;; --- Loading ---
@@ -78,7 +108,7 @@
   []
   (let [f (io/file data-file)]
     (when-not (.exists f)
-      (throw (ex-info "Dataset not found. Run: clj -M:run longbench download"
+      (throw (ex-info "Dataset not found. Run: noumenon longbench download"
                       {:path data-file})))
     (->> (with-open [rdr (io/reader f)]
            (json/read rdr :key-fn keyword))
@@ -91,15 +121,17 @@
 
 (defn build-prompt
   "Build the zero-shot prompt by substituting $DOC$, $Q$, $C_A$-$C_D$.
-   Uses the exact LongBench v2 template."
+   Uses a single-pass regex replacement to prevent template variable smuggling
+   (e.g. a context field containing literal '$Q$' being treated as a placeholder)."
   [{:keys [context question choice_A choice_B choice_C choice_D]}]
-  (-> @prompt-template
-      (str/replace "$DOC$" (str/trim (or context "")))
-      (str/replace "$Q$" (str/trim (or question "")))
-      (str/replace "$C_A$" (str/trim (or choice_A "")))
-      (str/replace "$C_B$" (str/trim (or choice_B "")))
-      (str/replace "$C_C$" (str/trim (or choice_C "")))
-      (str/replace "$C_D$" (str/trim (or choice_D "")))))
+  (let [subs-map {"$DOC$" (str/trim (or context ""))
+                  "$Q$"   (str/trim (or question ""))
+                  "$C_A$" (str/trim (or choice_A ""))
+                  "$C_B$" (str/trim (or choice_B ""))
+                  "$C_C$" (str/trim (or choice_C ""))
+                  "$C_D$" (str/trim (or choice_D ""))}
+        pattern  (re-pattern (str/join "|" (map #(java.util.regex.Pattern/quote %) (keys subs-map))))]
+    (str/replace @prompt-template pattern subs-map)))
 
 ;; --- Context truncation ---
 
@@ -166,6 +198,8 @@
 
 ;; --- Per-question result JSONL ---
 
+(def ^:private jsonl-lock (Object.))
+
 (defn- result-jsonl-path
   "Path for per-question JSONL results."
   [run-id]
@@ -189,7 +223,8 @@
                              (subs ctx 0 1000)
                              ctx))}]
     (.mkdirs (.getParentFile f))
-    (spit path (str (json/write-str rec) "\n") :append true)))
+    (locking jsonl-lock
+      (spit path (str (json/write-str rec) "\n") :append true))))
 
 ;; --- Shared pipeline ---
 
@@ -199,11 +234,10 @@
   (let [raw-ctx  (:context question)
         ctx      (truncate-middle raw-ctx)
         _        (when (not= (count ctx) (count raw-ctx))
-                   (binding [*out* *err*]
-                     (println (str "longbench/context-truncated"
-                                   " q=" (:_id question)
-                                   " original=" (count raw-ctx)
-                                   " truncated=" (count ctx)))))
+                   (log! (str "longbench/context-truncated"
+                              " q=" (:_id question)
+                              " original=" (count raw-ctx)
+                              " truncated=" (count ctx))))
         prompt   (build-prompt (assoc question :context ctx))
         response (invoke-llm [{:role "user" :content prompt}])
         pred     (extract-answer (:text response))
@@ -213,23 +247,22 @@
            {:prediction pred :correct correct :usage (:usage response)})
     (bench/checkpoint-write-latest! cp-path checkpoint-atom)
     (write-result-line! jsonl-path question pred (:text response))
-    (binding [*out* *err*]
-      (println (str "longbench/question-complete"
-                    " q=" (:_id question)
-                    " pred=" (or pred "nil")
-                    " correct=" correct
-                    " [" (count (:results @checkpoint-atom)) "/" total "]")))))
+    (log! (str "longbench/question-complete"
+               " q=" (:_id question)
+               " pred=" (or pred "nil")
+               " correct=" correct
+               " [" (count (:results @checkpoint-atom)) "/" total "]"))))
 
 (defn- process-question!
   "Check budget, acquire rate gate, then run LLM on one question."
   [{:keys [checkpoint-atom session-cost stop-flag budget start-ms
            rate-gate min-delay-ms] :as opts}]
   (let [completed (count (:results @checkpoint-atom))
-        b         (bench/budget-check completed @session-cost budget start-ms 1)]
+        b         (bench/budget-check completed @session-cost budget start-ms
+                                      (:max-questions budget))]
     (if (not= :ok b)
       (when (compare-and-set! stop-flag nil (:exhausted b))
-        (binding [*out* *err*]
-          (println (str "longbench/budget-exhausted limit=" (name (:exhausted b))))))
+        (log! (str "longbench/budget-exhausted limit=" (name (:exhausted b)))))
       (do
         (bench/acquire-rate-gate! rate-gate min-delay-ms)
         (when-not @stop-flag
@@ -275,16 +308,15 @@
         total-ms    (- (System/currentTimeMillis) start-ms)]
     (swap! checkpoint-atom assoc :aggregate agg :total-usage total-usage)
     (bench/checkpoint-write cp-path @checkpoint-atom)
-    (binding [*out* *err*]
-      (println (str "longbench/run-complete run-id=" run-id
-                    " accuracy=" (when (:overall agg) (format "%.1f" (:overall agg))) "%"
-                    " questions=" (:total agg)
-                    " tokens=" (:input-tokens total-usage) "/" (:output-tokens total-usage)
-                    " cost=$" (format "%.4f" (double (:cost-usd total-usage 0.0)))
-                    " duration=" total-ms "ms"
-                    (when stop-reason (str " stopped-by=" (name stop-reason)))))
-      (when stop-reason
-        (println "Resume with: clj -M:run longbench run --resume")))
+    (log! (str "longbench/run-complete run-id=" run-id
+               " accuracy=" (when (:overall agg) (format "%.1f" (:overall agg))) "%"
+               " questions=" (:total agg)
+               " tokens=" (:input-tokens total-usage) "/" (:output-tokens total-usage)
+               " cost=$" (format "%.4f" (double (:cost-usd total-usage 0.0)))
+               " duration=" total-ms "ms"
+               (when stop-reason (str " stopped-by=" (name stop-reason)))))
+    (when stop-reason
+      (log! (str "Resume with: " cli/program-name " longbench run --resume")))
     {:results         (vec result-data)
      :aggregate       agg
      :total-usage     total-usage
@@ -315,12 +347,11 @@
                             :metadata {:started-at (java.util.Date.)
                                        :budget     budget}
                             :results  {}})]
-    (binding [*out* *err*]
-      (println (str "longbench/run-start run-id=" run-id
-                    " questions=" total
-                    (when (> concurrency 1) (str " concurrency=" concurrency))
-                    (when (pos? min-delay-ms) (str " min-delay=" min-delay-ms "ms"))
-                    (when (:max-questions budget) (str " max-questions=" (:max-questions budget))))))
+    (log! (str "longbench/run-start run-id=" run-id
+               " questions=" total
+               (when (> concurrency 1) (str " concurrency=" concurrency))
+               (when (pos? min-delay-ms) (str " min-delay=" min-delay-ms "ms"))
+               (when (:max-questions budget) (str " max-questions=" (:max-questions budget)))))
     (let [stop-reason (run-pipeline! invoke-llm questions checkpoint
                                      {:cp-path cp-path :jsonl-path jsonl-path
                                       :total total :budget budget
@@ -348,12 +379,11 @@
         remaining     (filterv (comp not completed-ids :_id) questions)
         start-ms      (System/currentTimeMillis)
         checkpoint    (atom prior-checkpoint)]
-    (binding [*out* *err*]
-      (println (str "longbench/run-start run-id=" run-id
-                    " questions=" total
-                    " resume-from=" (count completed-ids) "/" total
-                    " remaining=" (count remaining)
-                    (when (> concurrency 1) (str " concurrency=" concurrency)))))
+    (log! (str "longbench/run-start run-id=" run-id
+               " questions=" total
+               " resume-from=" (count completed-ids) "/" total
+               " remaining=" (count remaining)
+               (when (> concurrency 1) (str " concurrency=" concurrency))))
     (let [stop-reason (run-pipeline! invoke-llm remaining checkpoint
                                      {:cp-path cp-path :jsonl-path jsonl-path
                                       :total total :budget budget

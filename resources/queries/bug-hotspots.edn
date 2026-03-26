@@ -1,0 +1,8 @@
+{:name "bug-hotspots"
+ :description "Files ranked by number of fix commits"
+ :query [:find ?path (count ?commit)
+         :in $ %
+         :where
+         (file-kind-commit ?file :fix ?commit)
+         [?file :file/path ?path]]
+ :uses-rules true}

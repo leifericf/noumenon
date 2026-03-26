@@ -19,4 +19,40 @@
  [(co-changed ?f1 ?f2 ?commit)
   [?commit :commit/changed-files ?f1]
   [?commit :commit/changed-files ?f2]
-  [(!= ?f1 ?f2)]]]
+  [(!= ?f1 ?f2)]]
+
+ ;; Person who authored commits that changed a file
+ [(file-author ?file ?person)
+  [?commit :commit/changed-files ?file]
+  [?commit :commit/author ?person]]
+
+ ;; File in directory tree — direct
+ [(file-in-dir-tree ?file ?dir)
+  [?file :file/directory ?dir]]
+ ;; File in directory tree — recursive via dir-ancestor
+ [(file-in-dir-tree ?file ?dir)
+  [?file :file/directory ?child]
+  (dir-ancestor ?child ?dir)]
+
+ ;; Segment in directory tree — recursive
+ [(segment-in-dir-tree ?seg ?dir)
+  [?seg :code/file ?file]
+  (file-in-dir-tree ?file ?dir)]
+
+ ;; Commits of a given kind that touched a file
+ [(file-kind-commit ?file ?kind ?commit)
+  [?commit :commit/changed-files ?file]
+  [?commit :commit/kind ?kind]]
+
+ ;; Transitive import — follows :file/imports recursively
+ [(transitive-import ?a ?b)
+  [?a :file/imports ?b]]
+ [(transitive-import ?a ?b)
+  [?a :file/imports ?mid]
+  (transitive-import ?mid ?b)]
+
+ ;; Test file for source file — test that transitively imports source
+ [(test-for-file ?test ?src)
+  [?test :file/path ?tpath]
+  [(clojure.string/includes? ?tpath "test")]
+  (transitive-import ?test ?src)]]

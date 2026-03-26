@@ -1,65 +1,115 @@
 # Noumenon
 
-A Datomic-backed knowledge graph for codebase understanding.
+Noumenon is a Datomic-backed knowledge graph for codebase understanding.
 
-Noumenon imports a Git repository into Datomic, enriches files with LLM-generated semantic metadata, and makes the result queryable through Datalog. The goal is to help both humans and AI agents reason about large codebases without loading raw source into context windows.
+Instead of treating a repository as an opaque pile of files, Noumenon turns it into a living graph of relationships: commits, authors, files, code segments, architecture, and dependencies. It combines deterministic facts with semantic analysis so humans and agents can ask focused questions and get grounded answers fast. For AI agents, this enables surgical retrieval: fetch the exact entities and edges needed for a task instead of stuffing raw files into context windows, which can reduce token spend and avoid prompt bloat.
 
-## Why this exists
+## Why Noumenon
 
-Long-context prompting alone is not enough for reliable repository understanding at scale. Noumenon treats source code as structured data:
+Long-context prompting alone breaks down as repositories grow. Noumenon takes a different path: model the codebase as structured data you can query, audit, and reason over.
 
-- Deterministic facts from Git and file structure (commits, authors, files, directories)
-- Semantic annotations from LLM analysis (summaries, complexity, tags, architecture layer)
-- Query-first workflows through Datomic + Datalog
+That structure gives agents a precise retrieval strategy: query first, pull only relevant facts, then reason. The result is designed to improve signal per token and lower context-window waste.
 
-This lets you ask targeted questions like:
+It blends three complementary layers:
 
-- Which files are most complex?
-- What files co-change most often?
-- Which contributors touched a subsystem the most?
+- Deterministic facts from Git + filesystem structure
+- Semantic annotations from model analysis
+- Query-first exploration via Datomic + Datalog
 
-## Current status
+That unlocks questions like:
 
-This project is actively developed and currently CLI-first.
+- Which files are complexity hotspots?
+- What files tend to co-change?
+- Who are the primary contributors in a subsystem?
+- What is the likely impact radius of a change?
 
-- JVM Clojure CLI entrypoint (`clj -M:run`)
-- Datomic Local for storage
-- One database per imported repository
-- Named query support from EDN resources
-- Benchmark tooling for custom benchmark and LongBench v2 code-repo tasks
+And more complex questions such as:
+
+- Which `:file/path` entities have both high `:commit/changed-files` frequency and `:sem/complexity` = `:very-complex`?
+- For a target `:file/path`, what transitive `:file/imports` edges and reverse importers (`:file/_imports`) define its blast radius?
+- Which `:code/file+name` segments are marked `:code/deprecated? true` but live in files with recent `:commit/committed-at` activity?
+- Where do `:file/imports` edges cross `:arch/layer` boundaries, and which `:arch/component` pairs are most coupled?
+- Which files combine `:code/safety-concerns`, low bus factor (few distinct `:commit/author`), and high fix-heavy history (`:commit/kind :fix`)?
+
+## What you get
+
+- A CLI-first workflow built for real repositories (`clj -M:run ...`)
+- A Datomic knowledge graph per imported repo name, with stable identities
+- Named EDN queries in `resources/queries/` for repeatable analysis
+- Deterministic import graph extraction (`postprocess`) for impact tracing
+- AI-powered `agent` mode that reasons by querying, not guessing
+- Benchmark flows (`benchmark`, `longbench`) to measure quality and cost
 
 ## Requirements
 
 - JDK 21+
 - Clojure CLI (`clj`)
 - Git
-- Provider credentials depending on workflow:
-  - `NOUMENON_ZAI_TOKEN` for GLM (HTTP API path)
-  - `ANTHROPIC_API_KEY` for Claude API (HTTP API path)
-  - Claude CLI installed for CLI provider path
+- Provider setup (depends on chosen provider)
+
+### Provider setup
+
+Noumenon supports three provider modes:
+
+| Provider | Mode | What you need |
+|---|---|---|
+| `glm` (default) | HTTP API | `NOUMENON_ZAI_TOKEN` |
+| `claude-api` | HTTP API | `ANTHROPIC_API_KEY` |
+| `claude-cli` (alias: `claude`) | Local CLI | `claude` installed and authenticated |
+
+Use `.env.example` as a template for local environment setup.
 
 ## Installation
 
-Clone the repository:
+### Option 1: Run from source (recommended)
 
 ```bash
-git clone <your-fork-or-this-repo-url>
+git clone https://github.com/leifericf/noumenon.git
 cd noumenon
+clj -M:run --help
 ```
 
-No additional build step is required.
+### Option 2: Standalone JAR
 
-## Quick start
+Download the latest JAR from [GitHub Releases](https://github.com/leifericf/noumenon/releases):
 
-Use the repo itself or another local Git repo as input.
+```bash
+java -jar noumenon-0.1.0.jar --help
+```
+
+Build from source if needed:
+
+```bash
+clj -T:build uber
+java -jar target/noumenon-0.1.0.jar --version
+```
+
+### Option 3: Use as a Clojure dependency
+
+```clojure
+{:aliases
+ {:noumenon
+  {:extra-deps {io.github.leifericf/noumenon {:git/tag "v0.1.0" :git/sha "d97bdac"}}
+   :main-opts ["-m" "noumenon.main"]}}}
+```
+
+Then run:
+
+```bash
+clj -M:noumenon --help
+```
+
+## Quick Start
+
+Use a local Git repo path or a Git URL.
 
 ### 1) Import deterministic facts
 
 ```bash
 clj -M:run import /path/to/repo
+# or:
+clj -M:run import https://github.com/ring-clojure/ring.git
 ```
-
-This imports commit history plus file/directory structure into Datomic.
 
 ### 2) Run semantic analysis
 
@@ -67,101 +117,212 @@ This imports commit history plus file/directory structure into Datomic.
 clj -M:run analyze /path/to/repo --provider glm --model sonnet
 ```
 
-This analyzes unanalyzed files and stores semantic metadata with provenance.
+During `analyze`, Noumenon prints token and cost telemetry to stderr:
 
-### 3) Check status
+- Pre-run estimate (input/output tokens, estimated cost, ETA)
+- Per-file usage (`tokens=input/output`)
+- Final aggregate usage (total input/output tokens, total cost, elapsed time)
+
+Notes:
+
+- Cost estimation is model-aware for priced Anthropic model IDs.
+- For providers/models without pricing metadata (for example `glm`), token counts are still tracked but USD cost may be `0.0`.
+
+### 3) (Optional) Build deterministic import graph
+
+```bash
+clj -M:run postprocess /path/to/repo
+```
+
+### 4) Inspect status and queries
 
 ```bash
 clj -M:run status /path/to/repo
-```
-
-### 4) Run a named query
-
-```bash
+clj -M:run query list
 clj -M:run query files-by-complexity /path/to/repo
 ```
 
-## CLI reference
-
-Run `clj -M:run --help` for full usage, or `clj -M:run <subcommand> --help` for subcommand-specific options.
+### 5) Ask the graph a natural-language question
 
 ```bash
-clj -M:run <subcommand> [options] <repo-path>
+clj -M:run agent -q "Which files are the biggest risk hotspots?" /path/to/repo
 ```
 
-Subcommands:
+## Pipeline Overview
 
-| Command | Purpose |
-|---------|---------|
-| `import` | Import git history and file structure |
-| `analyze` | Enrich imported files with LLM-driven semantic analysis |
-| `query` | Run a named Datalog query |
-| `status` | Show repository counts in the graph |
-| `agent` | Ask a question via iterative query + LLM workflow |
-| `benchmark` | Run custom benchmark suite |
-| `longbench` | Download/run/report LongBench v2 code-repo benchmark |
+```mermaid
+flowchart LR
+  A[Import\nGit history + file structure] --> B[Analyze\nLLM semantic annotations]
+  B --> C[Postprocess\nDeterministic import graph]
 
-### Common options
+  C --> D[Query\nNamed Datalog queries]
+  C --> E[Agent\nIterative query + LLM reasoning]
+  C --> F[Serve\nMCP tools for external agents]
 
-- `--model <alias>` - Model alias (e.g. sonnet, haiku, opus)
-- `--provider <name>` - Provider: `glm` (default), `claude-api`, `claude-cli` (alias: `claude`)
-- `--max-cost <dollars>` - Stop when session cost exceeds threshold
-- `--db-dir <dir>` - Override Datomic storage directory (default `data/datomic/`)
-- `--verbose` / `-v` - Verbose output to stderr
-- `--help` / `-h` - Show help (global or per-subcommand)
-- `--version` - Print version
+  D --> G[Decisions\nRisk, ownership, hotspots, impact]
+  E --> G
+  F --> G
 
-### Provider modes
+  C --> H[Benchmark / LongBench\nEvaluation workflows]
+```
 
-Noumenon supports both CLI and HTTP provider paths. The default provider for all commands is `glm`.
+`postprocess` is optional but recommended when you want deterministic dependency and test-impact analysis.
 
-- `glm` - HTTP API via Z.ai Anthropic-compatible endpoint
-- `claude-api` - HTTP API via Anthropic Messages API
-- `claude-cli` - local Claude CLI invocation (alias: `claude`)
+## CLI Overview
 
-## Named queries
+```bash
+clj -M:run <subcommand> [options]
+```
 
-Named queries are stored under `resources/queries/`.
+Run `clj -M:run --help` for global help, or `clj -M:run <subcommand> --help` for details.
 
-Current query files include:
+`import` accepts either `<repo-path>` or a Git URL (auto-cloned to `data/repos/<name>/`).
 
-- `files-by-complexity`
-- `files-by-layer`
+| Subcommand | Purpose |
+|---|---|
+| `import` | Import Git history and file structure into Datomic |
+| `analyze` | Enrich files with LLM-generated semantic metadata |
+| `postprocess` | Extract deterministic cross-file import graph |
+| `query` | Run a named query (`query list` to enumerate) |
+| `status` | Show imported entity counts for a repo |
+| `agent` | Ask repository questions via iterative query + LLM flow |
+| `serve` | Start MCP server (JSON-RPC over stdio) |
+| `benchmark` | Run project benchmark flow |
+| `longbench` | Run LongBench v2 workflow (`download`, `run`, `results`) |
+
+Common flags:
+
+- `--provider <name>`: `glm`, `claude-api`, `claude-cli` (`claude` alias)
+- `--model <alias>`: e.g. `sonnet`, `haiku`, `opus`
+- `--db-dir <dir>`: override Datomic storage directory
+- `--max-cost <usd>`: stop when session cost exceeds threshold
+- `--verbose` / `-v`: verbose stderr logs
+
+## Named Queries
+
+Named queries live in `resources/queries/` (EDN). Use:
+
+```bash
+clj -M:run query list
+```
+
+Common examples:
+
+- `hotspots`
+- `bug-hotspots`
 - `top-contributors`
 - `co-changed-files`
+- `files-by-complexity`
+- `files-by-layer`
 - `component-dependencies`
+- `dependency-hotspots`
+- `pure-segments`
+- `file-history` (parameterized)
 
-Each query is EDN and can optionally use shared rules from `resources/queries/rules.edn`.
+## Data Model
 
-## Development workflow
+Noumenon combines four sources:
 
-Useful commands:
+1. Git history (deterministic)
+2. File structure (deterministic)
+3. Semantic analysis (LLM)
+4. Import graph extraction (`postprocess`, deterministic)
+
+### Entity Types
+
+| Entity | Identity | Key attributes |
+|---|---|---|
+| `repo` | `:repo/uri` | `:repo/commits` |
+| `commit` | `:git/sha` (`:git/type :commit`) | `:commit/message`, `:commit/kind`, `:commit/authored-at`, `:commit/committed-at`, `:commit/additions`, `:commit/deletions` |
+| `person` | `:person/email` | `:person/name` |
+| `file` | `:file/path` | `:file/ext`, `:file/lang`, `:file/lines`, `:file/size`, `:file/imports`, `:sem/*` |
+| `directory` | `:dir/path` | `:dir/parent`, `:dir/repo` |
+| `code segment` | `:code/file+name` (tuple of `:code/file` + `:code/name`) | `:code/kind`, `:code/line-start`, `:code/line-end`, `:code/args`, `:code/returns`, `:code/visibility`, `:code/complexity`, `:code/smells`, `:code/call-names`, `:code/pure?`, `:code/ai-likelihood` |
+| `tx metadata` | tx entity | `:tx/op`, `:tx/source`, `:tx/analyzer`, `:tx/model` |
+| `provenance` | mixed (entity + tx metadata) | `:prov/confidence` on analyzed entities; `:prov/model-version`, `:prov/prompt-hash`, `:prov/analyzed-at` on analysis transactions |
+| `component` (schema-defined) | `:component/name` | `:component/depends-on`, `:component/files` |
+
+### Relationship Graph
+
+```mermaid
+flowchart LR
+  Repo[repo] -->|:repo/commits| Commit[commit]
+  Commit -->|:commit/author| Author[person]
+  Commit -->|:commit/committer| Committer[person]
+  Commit -->|:commit/parents| Parent[commit]
+  Commit -->|:commit/changed-files| File[file]
+
+  File -->|:file/directory| Dir[directory]
+  Dir -->|:dir/parent| ParentDir[directory]
+  Dir -->|:dir/repo| Repo
+
+  File -->|:file/imports| ImportedFile[file]
+  File -.->|:sem/dependencies| DependencyName[(module name)]
+
+  File -->|:code/_file| Code[code segment]
+  Code -.->|:code/call-names| CalledName[(symbol name)]
+```
+
+`chunk` entities (`:chunk/parent`, `:chunk/index`, `:chunk/text`) are used for long text values that exceed Datomic string limits.
+
+Component relationships (`:arch/component`, `:component/files`, `:component/depends-on`) and resolved segment call edges (`:code/calls`) are schema-supported and queryable when present, but are not populated by the default `import -> analyze -> postprocess` pipeline today.
+
+## Language Support
+
+Import + LLM analysis works with any language. `postprocess` adds deterministic import extraction with tiered support:
+
+| Tier | Languages | Method | External tool |
+|---|---|---|---|
+| Full | Clojure | `tools.namespace` parsing + test mapping | none |
+| Import extraction | Python | `ast` parser | `python3` |
+| Import extraction | JavaScript / TypeScript | Regex-based import extraction via Node runtime | `node` |
+| Import extraction | C / C++ | compiler dependency output | `clang` or `gcc` |
+| Import extraction | Go | toolchain metadata | `go` |
+| Import extraction | Rust | `mod` detection | none (regex) |
+| Import extraction | Java | `import` detection | none (regex) |
+| Analysis only | many others | LLM-only semantics | n/a |
+
+## MCP Server
+
+Run Noumenon as an MCP server so agents can call it as a tool:
 
 ```bash
-# Run test suite
-clj -M:test
-
-# Lint
-clj -M:lint
-
-# Format check
-clj -M:fmt check
-
-# Auto-fix formatting
-clj -M:fmt fix
-
-# Start nREPL (port 7888)
-clj -M:nrepl
+clj -M:run serve
+# or java -jar noumenon-0.1.0.jar serve
 ```
+
+### Claude Desktop config
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "noumenon": {
+      "command": "java",
+      "args": ["-jar", "/path/to/noumenon-0.1.0.jar", "serve"]
+    }
+  }
+}
+```
+
+### Exposed MCP tools
+
+- `noumenon_import`
+- `noumenon_status`
+- `noumenon_query`
+- `noumenon_list_queries`
+- `noumenon_schema`
+- `noumenon_ask`
 
 ## Benchmarks
 
-Two benchmark paths exist:
+Noumenon includes two benchmark paths:
 
-- `benchmark` - project-specific benchmark flow
-- `longbench` - LongBench v2 code repository understanding workflow
+- `benchmark` for project-specific evaluation
+- `longbench` for LongBench v2 code-repository tasks
 
-LongBench example:
+LongBench flow:
 
 ```bash
 clj -M:run longbench download
@@ -169,68 +330,57 @@ clj -M:run longbench run --provider glm --model sonnet
 clj -M:run longbench results
 ```
 
-## Agent examples (Ring)
+## Cost Planning (Rough)
 
-Concrete examples using the local Ring checkout at `test-repos/ring`.
+These are planning estimates, not guarantees. Actual usage depends on file sizes, retries, model choice, provider billing, and whether you run partial workflows.
 
-### 1) Highest complexity files
+### Analysis estimate examples
 
-```bash
-set -a && source .env && set +a && \
-clj -M:run agent -q "Which files have the highest complexity?" \
-  test-repos/ring --provider glm --max-iterations 20
-```
+`analyze` uses a built-in planning heuristic of roughly `~1250` input + `~217` output tokens per file.
 
-Output (excerpt):
+| Example repo size | Approx source files | Estimated input tokens | Estimated output tokens | Sonnet API rough cost* |
+|---|---:|---:|---:|---:|
+| Small library (Ring-scale) | 30 | 37,500 | 6,510 | ~$0.21 |
+| Medium repo | 500 | 625,000 | 108,500 | ~$3.50 |
+| Large service/monorepo slice | 3,000 | 3,750,000 | 651,000 | ~$21.02 |
+| Very large repo | 10,000 | 12,500,000 | 2,170,000 | ~$70.05 |
 
-```edn
-{:answer "...I cannot determine semantic complexity because :sem/complexity has not been populated...\n\nTop 10 Files by Line Count:\n1. ring-jetty-adapter/test/ring/adapter/test/jetty.clj — 1,027 lines\n2. CHANGELOG.md — 630 lines\n3. ring-core/src/ring/util/response.clj — 345 lines\n..."
- :status :answered
- :usage {:input-tokens 6835, :output-tokens 839, :iterations 13}}
-```
+### Benchmark estimate examples
 
-### 2) Top contributors
+Project benchmark currently has `35` questions. Canonical mode runs query+raw answer and judge stages (`4` stages/question, `140` stages total).
 
-```bash
-set -a && source .env && set +a && \
-clj -M:run agent -q "Who are the top contributors in Ring and what did they touch most?" \
-  test-repos/ring --provider glm --max-iterations 20
-```
+`benchmark` uses a planning heuristic of roughly `~5000` input + `~800` output tokens per stage.
 
-Output (excerpt):
+| Benchmark mode | Approx stages | Estimated input tokens | Estimated output tokens | Sonnet API rough cost* |
+|---|---:|---:|---:|---:|
+| Full canonical (`benchmark`) | 140 | 700,000 | 112,000 | ~$3.78 |
+| Fast mode (`--fast`, skip raw + non-deterministic judge) | varies by deterministic questions | substantially lower | substantially lower | lower than canonical |
+| LongBench (`longbench run`) | depends on selected question count | scales linearly with questions | scales linearly with questions | model/provider dependent |
 
-```edn
-{:answer "Top Contributors in Ring\n\n1. James Reeves — 50 commits\n2. Eero Helenius — 4 commits\n...\nSummary: James Reeves is the clear primary author and maintainer..."
- :status :answered
- :usage {:input-tokens 5770, :output-tokens 724, :iterations 7}}
-```
+\* Cost examples use Anthropic Sonnet pricing assumptions (`$3/M` input tokens, `$15/M` output tokens). Providers without public per-token pricing metadata (for example `glm`) still report token usage, but USD estimates may be `0.0`.
 
-### 3) Available named queries
+## Development
 
 ```bash
-set -a && source .env && set +a && \
-clj -M:run agent -q "What named queries are available in this repository?" \
-  test-repos/ring --provider glm --max-iterations 20
+clj -M:lint
+clj -M:fmt check
+clj -M:test
+clj -T:build uber
+clj -M:nrepl
 ```
 
-Output (excerpt):
-
-```edn
-{:answer "...example queries include: co-changed-files, component-dependencies, files-by-complexity, files-by-layer, top-contributors..."
- :status :answered
- :usage {:input-tokens 106, :output-tokens 436, :iterations 1}}
-```
-
-Note: agent output quality depends on what has already been imported/analyzed into the Datomic database.
-
-## Project structure
+## Project Layout
 
 - `src/noumenon/` - application namespaces
-- `resources/schema/` - Datomic schema EDN
-- `resources/queries/` - named Datalog queries + reusable rules
+- `resources/schema/` - Datomic schema (EDN)
+- `resources/queries/` - named Datalog queries and rules
 - `resources/prompts/` - prompt templates
-- `data/` - local runtime artifacts (Datomic and benchmark runs)
-- `vision.md` - longer-form project vision and rationale
+- `test/` - test suite
+- `data/` - local runtime artifacts (ignored)
+
+## Status
+
+This project is under active development and currently optimized for CLI workflows.
 
 ## License
 

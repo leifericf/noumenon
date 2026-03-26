@@ -1,7 +1,8 @@
 (ns noumenon.files
   (:require [clojure.java.shell :as shell]
             [clojure.string :as str]
-            [datomic.client.api :as d]))
+            [datomic.client.api :as d]
+            [noumenon.util :refer [log!]]))
 
 ;; --- Extension → language mapping ---
 
@@ -188,44 +189,57 @@
             db)
        (into #{} (map first))))
 
+(defn- imported-dir-paths
+  "Return the set of directory paths already imported."
+  [db]
+  (->> (d/q '[:find ?path :where [?e :dir/path ?path]] db)
+       (into #{} (map first))))
+
 (defn- build-import-plan
   "Build deterministic import plan maps from parsed ls-tree and existing set."
-  [all-files existing]
-  (let [to-import  (remove #(existing (:path %)) all-files)
+  [all-files existing-files existing-dirs]
+  (let [to-import  (remove #(existing-files (:path %)) all-files)
         file-paths (mapv :path all-files)
-        dirs       (paths->dirs file-paths)]
+        all-dirs   (paths->dirs file-paths)
+        dirs       (remove existing-dirs all-dirs)]
     {:all-files all-files
      :to-import to-import
      :dirs dirs
      :skipped (- (count all-files) (count to-import))}))
 
 (defn- plan->tx-data
-  [{:keys [to-import dirs]} line-counts]
+  [{:keys [to-import dirs]} line-counts repo-uri]
   (let [dir-tx  (mapv dir->tx-data dirs)
-        file-tx (mapv #(file->tx-data % line-counts) to-import)]
-    (into (into dir-tx file-tx)
-          [{:db/id "datomic.tx" :tx/op :import :tx/source :deterministic}])))
+        file-tx (mapv #(file->tx-data % line-counts) to-import)
+        repo-tx (when (and repo-uri (some #(= "." %) dirs))
+                  [{:db/id "repo" :repo/uri repo-uri}
+                   {:db/id (str "dir-" ".") :dir/repo "repo"}])]
+    (-> (into dir-tx file-tx)
+        (into repo-tx)
+        (conj {:db/id "datomic.tx" :tx/op :import :tx/source :deterministic}))))
 
 (defn import-files!
   "Import file and directory structure from repo-path into Datomic via conn.
+   `repo-uri` is used to set :dir/repo on the root directory.
    Returns a summary map with :files-imported, :dirs-imported, :files-skipped, :elapsed-ms."
-  [conn repo-path]
+  [conn repo-path repo-uri]
   (let [start-ms    (System/currentTimeMillis)
         raw         (git-ls-tree repo-path)
         all-files   (parse-ls-tree raw)
         line-counts (git-line-counts repo-path)
-        existing    (imported-file-paths (d/db conn))
+        db          (d/db conn)
+        existing    (imported-file-paths db)
+        existing-ds (imported-dir-paths db)
         {:keys [to-import dirs skipped] :as plan}
-        (build-import-plan all-files existing)
-        tx-data     (plan->tx-data plan line-counts)]
+        (build-import-plan all-files existing existing-ds)
+        tx-data     (plan->tx-data plan line-counts repo-uri)]
     (when (seq tx-data)
       (d/transact conn {:tx-data tx-data}))
     (let [elapsed (- (System/currentTimeMillis) start-ms)]
-      (binding [*out* *err*]
-        (println (str "Imported " (count to-import) " files, "
-                      (count dirs) " dirs, "
-                      "skipped " skipped " already present. "
-                      "(" elapsed " ms)")))
+      (log! (str "Imported " (count to-import) " files, "
+                 (count dirs) " dirs, "
+                 "skipped " skipped " already present. "
+                 "(" elapsed " ms)"))
       {:files-imported (count to-import)
        :dirs-imported  (count dirs)
        :files-skipped  skipped

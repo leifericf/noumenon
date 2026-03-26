@@ -32,45 +32,125 @@
           (is (= 500 (get-in result [:usage :input-tokens])))
           (is (= 20 (get-in result [:usage :output-tokens]))))))))
 
+(deftest invoke-api-defaults-max-tokens
+  (testing "max_tokens defaults to 4096 when not specified"
+    (let [response-body (json/write-str
+                         {:content [{:type "text" :text "ok"}]
+                          :usage {:input_tokens 10 :output_tokens 5}
+                          :model "m"})
+          captured-body (atom nil)
+          mock-request  (fn [opts]
+                          (reset! captured-body (json/read-str (:body opts) :key-fn keyword))
+                          (delay {:status 200 :body response-body :error nil}))]
+      (with-redefs [org.httpkit.client/request mock-request]
+        (llm/invoke-api [{:role "user" :content "test"}]
+                        {:model "m" :temperature 0.1
+                         :base-url "https://x" :auth-token "t"})
+        (is (= 4096 (:max_tokens @captured-body)))))))
+
 (deftest invoke-api-429-throws
-  (testing "HTTP 429 throws ex-info with resume guidance"
+  (testing "HTTP 429 throws ex-info with status code"
     (let [mock-request (fn [_opts]
                          (delay {:status 429 :body "rate limited" :error nil}))]
       (with-redefs [org.httpkit.client/request mock-request]
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo
-             #"API error: HTTP 429.*Resume"
+             #"API error: HTTP 429"
              (llm/invoke-api [{:role "user" :content "test"}]
                              {:model "m" :temperature 0.1
                               :max-tokens 128 :base-url "https://x"
                               :auth-token "t"})))))))
 
 (deftest invoke-api-500-throws
-  (testing "HTTP 500 throws ex-info with resume guidance"
-    (let [mock-request (fn [_opts]
-                         (delay {:status 500 :body "server error" :error nil}))]
-      (with-redefs [org.httpkit.client/request mock-request]
-        (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo
-             #"API error: HTTP 500.*Resume"
-             (llm/invoke-api [{:role "user" :content "test"}]
-                             {:model "m" :temperature 0.1
-                              :max-tokens 128 :base-url "https://x"
-                              :auth-token "t"})))))))
+  (testing "HTTP 500 throws ex-info with status code after retries exhausted"
+    (binding [llm/*max-retries* 1]
+      (let [mock-request (fn [_opts]
+                           (delay {:status 500 :body "server error" :error nil}))]
+        (with-redefs [org.httpkit.client/request mock-request]
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo
+               #"API error: HTTP 500"
+               (llm/invoke-api [{:role "user" :content "test"}]
+                               {:model "m" :temperature 0.1
+                                :max-tokens 128 :base-url "https://x"
+                                :auth-token "t"}))))))))
+
+(deftest invoke-api-error-omits-body-from-ex-data
+  (testing "error ex-data contains status but not response body"
+    (binding [llm/*max-retries* 1]
+      (let [mock-request (fn [_opts]
+                           (delay {:status 500 :body "sensitive error details" :error nil}))]
+        (with-redefs [org.httpkit.client/request mock-request]
+          (try
+            (llm/invoke-api [{:role "user" :content "test"}]
+                            {:model "m" :temperature 0.1
+                             :max-tokens 128 :base-url "https://x"
+                             :auth-token "t"})
+            (catch clojure.lang.ExceptionInfo e
+              (is (= 500 (:status (ex-data e))))
+              (is (nil? (:body (ex-data e)))))))))))
 
 (deftest invoke-api-connection-error-throws
-  (testing "connection error throws ex-info with resume guidance"
-    (let [mock-request (fn [_opts]
-                         (delay {:status nil :body nil
-                                 :error (Exception. "connection refused")}))]
-      (with-redefs [org.httpkit.client/request mock-request]
-        (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo
-             #"API request failed.*Resume"
-             (llm/invoke-api [{:role "user" :content "test"}]
-                             {:model "m" :temperature 0.1
-                              :max-tokens 128 :base-url "https://x"
-                              :auth-token "t"})))))))
+  (testing "connection error throws ex-info after retries exhausted"
+    (binding [llm/*max-retries* 1]
+      (let [mock-request (fn [_opts]
+                           (delay {:status nil :body nil
+                                   :error (Exception. "connection refused")}))]
+        (with-redefs [org.httpkit.client/request mock-request]
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo
+               #"API request failed: connection refused"
+               (llm/invoke-api [{:role "user" :content "test"}]
+                               {:model "m" :temperature 0.1
+                                :max-tokens 128 :base-url "https://x"
+                                :auth-token "t"}))))))))
+
+;; --- Provider resolution ---
+
+(deftest provider->kw-known-providers
+  (testing "known provider strings resolve to keywords"
+    (is (= :glm (llm/provider->kw "glm")))
+    (is (= :claude-api (llm/provider->kw "claude-api")))
+    (is (= :claude-cli (llm/provider->kw "claude-cli")))
+    (is (= :claude-cli (llm/provider->kw "claude")))))
+
+(deftest provider->kw-keywords-work
+  (testing "keyword inputs resolve correctly"
+    (is (= :glm (llm/provider->kw :glm)))))
+
+(deftest provider->kw-rejects-unknown
+  (testing "unrecognized provider throws"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"Unrecognized provider"
+         (llm/provider->kw "openai")))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"Unrecognized provider"
+         (llm/provider->kw "badprovider")))))
+
+;; --- Model aliases ---
+
+(deftest model-alias->id-known-aliases
+  (testing "known aliases resolve to full model IDs"
+    (is (= "claude-sonnet-4-6-20250514" (llm/model-alias->id "sonnet")))
+    (is (= "claude-haiku-4-5-20251001" (llm/model-alias->id "haiku")))
+    (is (= "claude-opus-4-6-20250514" (llm/model-alias->id "opus")))))
+
+(deftest model-alias->id-full-ids-pass-through
+  (testing "full model IDs pass through unchanged"
+    (is (= "claude-sonnet-4-6-20250514" (llm/model-alias->id "claude-sonnet-4-6-20250514")))))
+
+(deftest model-alias->id-rejects-unknown
+  (testing "unrecognized model strings throw"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"Unrecognized model"
+         (llm/model-alias->id "gpt-4")))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"Unrecognized model"
+         (llm/model-alias->id "")))))
 
 ;; --- Provider factory ---
 

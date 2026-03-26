@@ -1,0 +1,6 @@
+{:name "hotspots"
+ :description "Files ranked by number of commits (churn)"
+ :query [:find ?path (count ?commit)
+         :where
+         [?commit :commit/changed-files ?file]
+         [?file :file/path ?path]]}

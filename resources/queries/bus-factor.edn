@@ -1,0 +1,8 @@
+{:name "bus-factor"
+ :description "Files with count of distinct authors (low count = high bus-factor risk)"
+ :query [:find ?path (count-distinct ?person)
+         :in $ %
+         :where
+         (file-author ?file ?person)
+         [?file :file/path ?path]]
+ :uses-rules true}

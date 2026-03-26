@@ -1,0 +1,9 @@
+{:name "deprecated-segments"
+ :description "Code segments marked as deprecated"
+ :query [:find ?path ?name ?kind
+         :where
+         [?seg :code/deprecated? true]
+         [?seg :code/name ?name]
+         [?seg :code/file ?file]
+         [?file :file/path ?path]
+         [(get-else $ ?seg :code/kind :unknown) ?kind]]}

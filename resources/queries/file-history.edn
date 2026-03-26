@@ -1,0 +1,14 @@
+{:name "file-history"
+ :description "Commits that touched a given file, with author and date"
+ :inputs [:file-path]
+ :query [:find ?sha ?msg ?name ?date ?kind
+         :in $ ?path
+         :where
+         [?file :file/path ?path]
+         [?commit :commit/changed-files ?file]
+         [?commit :git/sha ?sha]
+         [?commit :commit/message ?msg]
+         [?commit :commit/author ?person]
+         [?person :person/name ?name]
+         [?commit :commit/authored-at ?date]
+         [(get-else $ ?commit :commit/kind :other) ?kind]]}

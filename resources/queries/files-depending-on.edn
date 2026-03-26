@@ -1,0 +1,8 @@
+{:name "files-depending-on"
+ :description "Files that depend on a given namespace or module"
+ :inputs [:dependency]
+ :query [:find ?path
+         :in $ ?dep
+         :where
+         [?file :file/path ?path]
+         [?file :sem/dependencies ?dep]]}

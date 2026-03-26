@@ -1,0 +1,8 @@
+{:name "fix-authors"
+ :description "People ranked by number of fix commits authored"
+ :query [:find ?name ?email (count ?commit)
+         :where
+         [?commit :commit/kind :fix]
+         [?commit :commit/author ?person]
+         [?person :person/name ?name]
+         [?person :person/email ?email]]}

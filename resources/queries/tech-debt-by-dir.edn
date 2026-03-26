@@ -1,0 +1,10 @@
+{:name "tech-debt-by-dir"
+ :description "Directories ranked by count of code smells across segments"
+ :query [:find ?dir-path (count ?smell)
+         :in $ %
+         :where
+         [?seg :code/smells ?smell]
+         [?seg :code/file ?file]
+         [?file :file/directory ?dir]
+         [?dir :dir/path ?dir-path]]
+ :uses-rules true}

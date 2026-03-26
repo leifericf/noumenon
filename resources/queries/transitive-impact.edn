@@ -1,0 +1,10 @@
+{:name "transitive-impact"
+ :description "All files transitively imported by a given file"
+ :inputs [:file-path]
+ :uses-rules true
+ :query [:find ?dep-path
+         :in $ % ?path
+         :where
+         [?src :file/path ?path]
+         (transitive-import ?src ?dep)
+         [?dep :file/path ?dep-path]]}

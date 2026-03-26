@@ -61,7 +61,22 @@
  {:db/ident       :commit/changed-files
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/many
-  :db/doc         "Files changed in this commit, derived from git log --name-only"}
+  :db/doc         "Files changed in this commit, derived from git log --numstat"}
+
+ {:db/ident       :commit/kind
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Commit classification — :fix, :feat, :refactor, :chore, :docs, :test, :style, :perf, :revert, :merge, :other"}
+
+ {:db/ident       :commit/additions
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Total lines added across all files in this commit"}
+
+ {:db/ident       :commit/deletions
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Total lines deleted across all files in this commit"}
 
  ;; --- Persons ---
  {:db/ident       :person/email
@@ -118,6 +133,11 @@
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/one
   :db/doc         "Parent directory"}
+
+ {:db/ident       :dir/repo
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Repository this directory belongs to (set on root dir only)"}
 
  ;; --- Trees ---
  {:db/ident       :tree/nodes

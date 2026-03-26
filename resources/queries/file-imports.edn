@@ -1,0 +1,9 @@
+{:name "file-imports"
+ :description "Direct imports for a given file"
+ :inputs [:file-path]
+ :query [:find ?import-path
+         :in $ ?path
+         :where
+         [?file :file/path ?path]
+         [?file :file/imports ?imp]
+         [?imp :file/path ?import-path]]}

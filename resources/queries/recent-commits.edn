@@ -1,0 +1,12 @@
+{:name "recent-commits"
+ :description "All commits with author, kind, and diff stats"
+ :query [:find ?sha ?msg ?name ?kind ?date ?adds ?dels
+         :where
+         [?commit :git/sha ?sha]
+         [?commit :commit/message ?msg]
+         [?commit :commit/author ?person]
+         [?person :person/name ?name]
+         [?commit :commit/authored-at ?date]
+         [(get-else $ ?commit :commit/kind :other) ?kind]
+         [(get-else $ ?commit :commit/additions 0) ?adds]
+         [(get-else $ ?commit :commit/deletions 0) ?dels]]}

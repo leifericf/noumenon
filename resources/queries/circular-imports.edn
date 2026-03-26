@@ -1,0 +1,10 @@
+{:name "circular-imports"
+ :description "File pairs that directly import each other (import cycles)"
+ :query [:find ?path-a ?path-b
+         :where
+         [?a :file/imports ?b]
+         [?b :file/imports ?a]
+         [?a :file/path ?path-a]
+         [?b :file/path ?path-b]
+         [(!= ?a ?b)]
+         [(< ?path-a ?path-b)]]}

@@ -3,7 +3,60 @@
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
+            [noumenon.llm :as llm]
             [noumenon.query :as query]))
+
+;; --- Query validation ---
+
+(def ^:private allowed-predicates
+  "Allowlist of safe predicates/functions permitted in Datalog predicate/function clauses."
+  #{'< '> '<= '>= '= '!= 'not= 'ground 'get-else 'get-some 'missing?
+    'tuple 'untuple 'count 'min 'max 'sum 'avg 'median 'distinct 'rand 'sample
+    '+ '- '* '/ 'inc 'dec 'mod 'rem 'quot 'abs
+    'str 'subs 'name 'namespace 'keyword 'symbol
+    'even? 'odd? 'pos? 'neg? 'zero? 'nil? 'some? 'int? 'string? 'keyword?
+    'not 'and 'or 'identity
+    'clojure.string/starts-with? 'clojure.string/ends-with? 'clojure.string/includes?
+    'clojure.string/lower-case 'clojure.string/upper-case 'clojure.string/trim})
+
+(def ^:private banned-symbols
+  "Symbols that must never appear anywhere in a Datalog query (fallback layer)."
+  #{'eval 'read-string 'load-string 'intern 'resolve 'ns-resolve
+    'alter-var-root 'slurp 'spit 'sh 'clojure.java.shell/sh
+    'binding 'Thread 'System 'Runtime 'ProcessBuilder})
+
+(defn- java-class-reference?
+  "True if sym looks like a Java class (contains a dot but is not on the allowlist)."
+  [sym]
+  (and (symbol? sym)
+       (not (allowed-predicates sym))
+       (str/includes? (str sym) ".")))
+
+(defn- predicate-clause?
+  "True if form is a Datalog predicate/function clause: a vector wrapping a single list."
+  [form]
+  (and (vector? form) (= 1 (count form)) (list? (first form))))
+
+(defn- extract-predicate-syms
+  "Extract predicate/function call symbols from all clauses in a query form."
+  [query-form]
+  (->> (tree-seq coll? seq query-form)
+       (filter predicate-clause?)
+       (map (comp first first))
+       (filter symbol?)))
+
+(defn validate-query
+  "Walk a Datalog query form and reject unsafe symbols. Uses an allowlist for
+   predicate/function clauses and a deny-list + Java class check as fallback.
+   Returns nil if safe, or an error string if unsafe."
+  [query-form]
+  (or (->> (tree-seq coll? seq query-form)
+           (filter symbol?)
+           (some #(when (or (banned-symbols %) (java-class-reference? %))
+                    (str "Blocked symbol in query: " %))))
+      (->> (extract-predicate-syms query-form)
+           (some #(when-not (allowed-predicates %)
+                    (str "Predicate not on allowlist: " %))))))
 
 ;; --- Prompt assembly ---
 
@@ -21,11 +74,16 @@
                    (when uses-rules "\n;; (uses rules — pass % as second input)"))))
        (str/join "\n\n")))
 
+(defn- sanitize-repo-name
+  "Strip template metacharacters from repo-name to prevent prompt injection."
+  [repo-name]
+  (str/replace repo-name #"[{}]" ""))
+
 (defn build-system-prompt
   "Render the agent system prompt with live schema, rules, and examples."
   [db repo-name]
   (-> @prompt-template
-      (str/replace "{{repo-name}}" repo-name)
+      (str/replace "{{repo-name}}" (sanitize-repo-name repo-name))
       (str/replace "{{schema}}" (query/schema-summary db))
       (str/replace "{{rules}}" (pr-str (query/load-rules)))
       (str/replace "{{examples}}" (format-examples))))
@@ -53,22 +111,24 @@
 (defn- dispatch-query
   "Execute a Datalog query against db. Returns result text with optional truncation note."
   [db parsed-args]
-  (try
-    (let [q      (:query parsed-args)
-          limit  (or (:limit parsed-args) default-row-limit)
-          rules  (query/load-rules)
-          ;; Try with rules first; if the query doesn't use :in, it won't need them
-          result (try
-                   (d/q q db rules)
-                   (catch Exception _
-                     (d/q q db)))
-          total  (count result)
-          capped (take limit result)]
-      (str (pr-str (vec capped))
-           (when (> total limit)
-             (str "\n;; Showing " limit " of " total " results. Refine your query or specify :limit."))))
-    (catch Exception e
-      (str "Query error: " (.getMessage e)))))
+  (let [q (:query parsed-args)]
+    (if-let [err (validate-query q)]
+      (str "Query rejected: " err)
+      (try
+        (let [limit  (or (:limit parsed-args) default-row-limit)
+              rules  (query/load-rules)
+              ;; Try with rules first; if the query doesn't use :in, it won't need them
+              result (try
+                       (d/q q db rules)
+                       (catch Exception _
+                         (d/q q db)))
+              total  (count result)
+              capped (take limit result)]
+          (str (pr-str (vec capped))
+               (when (> total limit)
+                 (str "\n;; Showing " limit " of " total " results. Refine your query or specify :limit."))))
+        (catch Exception e
+          (str "Query error: " (.getMessage e)))))))
 
 (defn- dispatch-schema [db]
   (query/schema-summary db))
@@ -116,10 +176,12 @@
             :steps  steps
             :usage  (assoc total-usage :iterations iterations)
             :status :budget-exhausted}}
-    (let [full-messages (into [{:role "user" :content system-prompt}] messages)
+    (let [full-messages (update-in (vec messages) [0 :content]
+                                   #(str system-prompt "\n\n" %))
           response      (invoke-fn full-messages)
           usage         (merge-with + total-usage
-                                    (select-keys (:usage response) [:input-tokens :output-tokens]))
+                                    (select-keys (:usage response)
+                                                 [:input-tokens :output-tokens :cost-usd :duration-ms]))
           parsed        (parse-response (:text response))
           step          {:iteration (inc iterations)
                          :raw-text (:text response)
@@ -152,7 +214,7 @@
         initial      {:messages [{:role "user" :content question}]
                       :steps []
                       :iterations 0
-                      :total-usage {:input-tokens 0 :output-tokens 0}
+                      :total-usage llm/zero-usage
                       :max-iterations max-iterations}]
     (loop [state initial]
       (let [nxt (next-state context state)]

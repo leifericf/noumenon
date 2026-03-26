@@ -1,0 +1,9 @@
+{:name "file-importers"
+ :description "Files that directly import a given file (reverse lookup)"
+ :inputs [:file-path]
+ :query [:find ?importer-path
+         :in $ ?path
+         :where
+         [?target :file/path ?path]
+         [?importer :file/imports ?target]
+         [?importer :file/path ?importer-path]]}

@@ -1,0 +1,12 @@
+{:name "authors-by-file"
+ :description "Files with their authors and commit counts"
+ :query [:find ?path ?name ?email (count ?commit)
+         :in $ %
+         :where
+         (file-author ?file ?person)
+         [?file :file/path ?path]
+         [?person :person/name ?name]
+         [?person :person/email ?email]
+         [?commit :commit/changed-files ?file]
+         [?commit :commit/author ?person]]
+ :uses-rules true}
