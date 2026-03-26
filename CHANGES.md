@@ -18,20 +18,20 @@ AI-assisted codebase understanding.
 - **Import graph extraction** — Deterministic cross-file import/dependency
   extraction for Clojure, Elixir, Erlang, Python, JavaScript/TypeScript, Rust,
   and Java.
-- **Incremental sync** — `sync` and `watch` commands detect HEAD changes and
-  incrementally update the knowledge graph (import + postprocess, optionally
+- **Incremental update** — `update` and `watch` commands detect HEAD changes and
+  incrementally update the knowledge graph (import + enrich, optionally
   re-analyze).
 - **Named Datalog queries** — EDN-defined reusable queries with parameterization
   and a built-in rule library.
 - **Agentic query layer** — `ask` command for natural-language questions answered
   via iterative Datalog querying with LLM-driven refinement.
 - **MCP server** — `serve` command exposes all capabilities as MCP tools for
-  external AI agents. Auto-syncs stale databases before queries.
+  external AI agents. Auto-updates stale databases before queries.
 - **Benchmark framework** — Evaluate knowledge graph efficacy with deterministic
   scoring and optional LLM-judged evaluation. Supports checkpointing, resume,
   and budget guardrails.
 - **Concurrent processing** — Configurable parallelism for analysis (`--concurrency`,
-  default 3) and postprocessing (`--concurrency`, default 8).
+  default 3) and enrichment (`--concurrency`, default 8).
 - **Database management** — `list-databases` command with entity counts, pipeline
   stage tracking, and cost reporting. `--delete` flag for cleanup.
 - **Unified CLI and MCP interface** — Consistent naming and behavior across CLI
@@ -39,7 +39,7 @@ AI-assisted codebase understanding.
 
 ### CLI Commands
 
-`import`, `analyze`, `postprocess`, `sync`, `watch`, `query`, `ask`,
+`digest`, `import`, `analyze`, `enrich`, `update`, `watch`, `query`, `ask`,
 `show-schema`, `status`, `list-databases`, `serve`, `benchmark`
 
 ### Supported Languages

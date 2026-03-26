@@ -36,7 +36,7 @@ And more complex questions such as:
 - A CLI-first workflow built for real repositories (`clj -M:run ...`)
 - A Datomic knowledge graph per imported repo name, with stable identities
 - Named EDN queries in `resources/queries/` for repeatable analysis
-- Deterministic import graph extraction (`postprocess`) for impact tracing
+- Deterministic import graph extraction (`enrich`) for impact tracing
 - AI-powered `ask` mode that reasons by querying, not guessing
 - A/B benchmark framework to measure knowledge graph efficacy and cost
 
@@ -131,22 +131,22 @@ Notes:
 ### 3) (Optional) Build deterministic import graph
 
 ```bash
-clj -M:run postprocess /path/to/repo
+clj -M:run enrich /path/to/repo
 ```
 
 ### Keep the graph in sync
 
-As the codebase changes, sync the knowledge graph with the latest git state:
+As the codebase changes, update the knowledge graph with the latest git state:
 
 ```bash
-clj -M:run sync /path/to/repo                   # fast: import + postprocess only
-clj -M:run sync /path/to/repo --analyze          # also re-analyze changed files (LLM)
+clj -M:run update /path/to/repo                  # fast: import + enrich only
+clj -M:run update /path/to/repo --analyze          # also re-analyze changed files (LLM)
 clj -M:run watch /path/to/repo --interval 30     # auto-sync every 30s on new commits
 ```
 
-`sync` works as a first-time setup too — if no database exists, it runs the full import pipeline. On subsequent runs it detects changes via git HEAD SHA and incrementally updates only what changed.
+`update` works as a first-time setup too — if no database exists, it runs the full import pipeline. On subsequent runs it detects changes via git HEAD SHA and incrementally updates only what changed.
 
-The MCP server also auto-syncs before queries when HEAD changes (disable with `--no-auto-sync`).
+The MCP server also auto-syncs before queries when HEAD changes (disable with `--no-auto-update`).
 
 ### 4) Inspect status, databases, and queries
 
@@ -184,7 +184,7 @@ flowchart LR
   C --> H[Benchmark\nEvaluation workflows]
 ```
 
-`postprocess` is optional but recommended when you want deterministic dependency and test-impact analysis. `sync` can replace the manual `import` + `postprocess` workflow and handles incremental updates.
+`enrich` is optional but recommended when you want deterministic dependency and test-impact analysis. `update` can replace the manual `import` + `enrich` workflow and handles incremental updates.
 
 ## Command Reference
 
@@ -204,8 +204,8 @@ The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir
 |---|---|---|---|
 | Import | `import <path>` | `noumenon_import` | Import git history and file structure |
 | Analyze | `analyze <path>` | `noumenon_analyze` | Enrich files with LLM semantic metadata |
-| Postprocess | `postprocess <path>` | `noumenon_postprocess` | Extract cross-file import graph (no LLM) |
-| Sync | `sync <path>` | `noumenon_sync` | Sync knowledge graph with latest git state |
+| Enrich | `enrich <path>` | `noumenon_enrich` | Extract cross-file import graph (no LLM) |
+| Update | `update <path>` | `noumenon_update` | Sync knowledge graph with latest git state |
 | Ask | `ask -q <question> <path>` | `noumenon_ask` | Ask a question using iterative Datalog querying |
 | Query | `query <name> <path>` | `noumenon_query` | Run a named Datalog query |
 | List queries | `query list` | `noumenon_list_queries` | List available named queries |
@@ -230,11 +230,11 @@ The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir
 - `--db-dir` — storage directory (default: `data/datomic/`)
 - `-v` / `--verbose` — verbose stderr logs
 
-**`postprocess`** `<repo-path>`
+**`enrich`** `<repo-path>`
 - `--concurrency` — parallel workers, 1-20 (default: 8)
 - `--db-dir` — storage directory (default: `data/datomic/`)
 
-**`sync`** `<repo-path>`
+**`update`** `<repo-path>`
 - `--analyze` — also run LLM analysis on changed files
 - `--model` — model alias (default: provider default)
 - `--provider` — `glm` (default), `claude-api`, `claude-cli`
@@ -274,7 +274,7 @@ The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir
 **`serve`**
 - `--provider` — default LLM provider (default: `glm`)
 - `--model` — default model alias
-- `--no-auto-sync` — disable automatic sync before queries
+- `--no-auto-update` — disable automatic sync before queries
 - `--db-dir` — storage directory (default: `data/datomic/`)
 
 **`benchmark`** `<repo-path>`
@@ -327,7 +327,7 @@ Noumenon combines four sources:
 1. Git history (deterministic)
 2. File structure (deterministic)
 3. Semantic analysis (LLM)
-4. Import graph extraction (`postprocess`, deterministic)
+4. Import graph extraction (`enrich`, deterministic)
 
 ### Entity Types
 
@@ -366,11 +366,11 @@ flowchart LR
 
 `chunk` entities (`:chunk/parent`, `:chunk/index`, `:chunk/text`) are used for long text values that exceed Datomic string limits.
 
-Component relationships (`:arch/component`, `:component/files`, `:component/depends-on`) and resolved segment call edges (`:code/calls`) are schema-supported and queryable when present, but are not populated by the default `import -> analyze -> postprocess` pipeline today.
+Component relationships (`:arch/component`, `:component/files`, `:component/depends-on`) and resolved segment call edges (`:code/calls`) are schema-supported and queryable when present, but are not populated by the default `import -> enrich -> analyze` pipeline today.
 
 ## Language Support
 
-Import + LLM analysis works with any language. `postprocess` adds deterministic import extraction with tiered support:
+Import + LLM analysis works with any language. `enrich` adds deterministic import extraction with tiered support:
 
 | Tier | Languages | Method | External tool |
 |---|---|---|---|
@@ -441,8 +441,8 @@ You do not need extra skills, custom sub-agents, or special `CLAUDE.md` wiring j
 |---|---|---|---|
 | `noumenon_import` | `repo_path` | | Import git history and files |
 | `noumenon_analyze` | `repo_path` | `provider`, `model`, `concurrency` (default: 3), `max_files` | Run LLM semantic analysis |
-| `noumenon_postprocess` | `repo_path` | `concurrency` (default: 8) | Extract import graph (no LLM) |
-| `noumenon_sync` | `repo_path` | `analyze` (default: false) | Sync with latest git state |
+| `noumenon_enrich` | `repo_path` | `concurrency` (default: 8) | Extract import graph (no LLM) |
+| `noumenon_update` | `repo_path` | `analyze` (default: false) | Update with latest git state |
 | `noumenon_ask` | `repo_path`, `question` | `provider`, `model`, `max_iterations` (default: 10) | Ask a question via iterative querying |
 | `noumenon_query` | `repo_path`, `query_name` | `params` | Run a named Datalog query |
 | `noumenon_list_queries` | | | List available named queries |
@@ -549,7 +549,7 @@ clj -M:run import data/repos/project
 
 ```bash
 cd data/repos/project && git p4 sync && git p4 rebase && cd -
-clj -M:run sync data/repos/project
+clj -M:run update data/repos/project
 ```
 
 `git p4 sync` fetches new changelists from the Perforce server and `git p4 rebase` applies them as Git commits. Then `noumenon sync` detects the new HEAD and incrementally updates the knowledge graph.

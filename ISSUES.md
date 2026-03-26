@@ -20,11 +20,11 @@ Commit: `fix(imports): resolve imports in mono-repos and prefixed layouts`.
 **Fix:** Added `--max-files N` to CLI and MCP `noumenon_analyze`.
 Commit: `feat(analyze): add --max-files flag to limit analysis scope`.
 
-## Fixed: `list-databases` missing postprocess stage when 0 edges
+## Fixed: `list-databases` missing enrich stage when 0 edges
 
-**Fix:** Postprocess now always records a marker transaction with `:tx/op
-:postprocess`, even when no import edges are found.
-Commit: `fix(imports): record postprocess tx even when 0 edges resolved`.
+**Fix:** Enrich now always records a marker transaction with `:tx/op
+:enrich`, even when no import edges are found.
+Commit: `fix(imports): record postprocess tx even when 0 edges resolved` (renamed to enrich).
 
 ---
 
