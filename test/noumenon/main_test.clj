@@ -64,7 +64,7 @@
     (is (str/blank? stdout))
     (is (str/includes? stderr "Unknown subcommand: frobnicate"))
     (is (str/includes? stderr "--help"))
-    (is (not (str/includes? stderr "Usage")))))
+    (is (str/includes? stderr "Usage"))))
 
 (deftest missing-repo-path
   (let [{:keys [exit stdout stderr]} (run-capturing ["import"])]

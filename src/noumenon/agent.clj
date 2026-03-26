@@ -188,7 +188,7 @@
         {:role "user" :content (str "Tool result:\n" result)}))
 
 (defn- next-state
-  [{:keys [db invoke-fn system-prompt]}
+  [{:keys [db invoke-fn]}
    {:keys [messages steps iterations total-usage max-iterations]}]
   (if (>= iterations max-iterations)
     {:done {:answer (or (some :answer steps)

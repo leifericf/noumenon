@@ -182,7 +182,7 @@
               :metadata {:repo-path "test" :commit-sha "abc"}
               :stages   {[:q01 :full :answer] {:status :ok :result "answer" :completed-at (java.util.Date.)}
                          [:q01 :full :judge]  {:status :ok :result {:score :correct :reasoning "good"}
-                                                :completed-at (java.util.Date.)}}
+                                               :completed-at (java.util.Date.)}}
               :aggregate nil}]
     (try
       (bench/checkpoint-write path cp)
@@ -307,7 +307,7 @@
         results (vec (bench/stages->results qs stages))]
     (is (= 0 (count results)))))
 
-(deftest stages->results-nil-judge-defaults-to-wrong
+(deftest stages->results-nil-judge-uses-wrong-when-judge-present
   (let [qs     [{:id :q01 :category :single-hop :query-name "test"}]
         stages {[:q01 :full :answer] {:status :ok :result "qa"}
                 [:q01 :full :judge]  {:status :ok :result nil}
@@ -315,8 +315,19 @@
                 [:q01 :raw :judge]    {:status :ok :result nil}}
         results (vec (bench/stages->results qs stages))]
     (is (= 1 (count results)))
+    ;; When judge stage exists but result is nil, score defaults to :wrong
     (is (= :wrong (:full-score (first results))))
     (is (= :wrong (:raw-score (first results))))))
+
+(deftest stages->results-nil-score-when-no-judge
+  (let [qs     [{:id :q01 :category :single-hop :query-name "test"}]
+        stages {[:q01 :full :answer] {:status :ok :result "qa"}
+                [:q01 :raw :answer]   {:status :ok :result "ra"}}
+        results (vec (bench/stages->results qs stages
+                                            {:layers [:full :raw] :skip-judge true}))]
+    ;; When no judge stage exists, score is nil (not :wrong)
+    (is (nil? (:full-score (first results))))
+    (is (nil? (:raw-score (first results))))))
 
 ;; --- Tier 1: Integration tests with mock LLM + temp dirs ---
 
@@ -667,11 +678,11 @@
 
 (deftest aggregate-usage-sums-stages
   (let [stages {[:q01 :full :answer] {:status :ok :result "a"
-                                       :usage {:input-tokens 100 :output-tokens 50
-                                               :cost-usd 0.01 :duration-ms 500}}
+                                      :usage {:input-tokens 100 :output-tokens 50
+                                              :cost-usd 0.01 :duration-ms 500}}
                 [:q01 :full :judge]  {:status :ok :result {:score :correct}
-                                       :usage {:input-tokens 200 :output-tokens 30
-                                               :cost-usd 0.02 :duration-ms 300}}}
+                                      :usage {:input-tokens 200 :output-tokens 30
+                                              :cost-usd 0.02 :duration-ms 300}}}
         agg (bench/aggregate-usage stages)]
     (is (= 300 (:input-tokens agg)))
     (is (= 80 (:output-tokens agg)))
@@ -688,8 +699,8 @@
 (deftest aggregate-usage-missing-usage-graceful
   (let [stages {[:q01 :full :answer] {:status :ok :result "a"}
                 [:q01 :full :judge]  {:status :ok :result {:score :correct}
-                                       :usage {:input-tokens 50 :output-tokens 20
-                                               :cost-usd 0.005 :duration-ms 200}}}
+                                      :usage {:input-tokens 50 :output-tokens 20
+                                              :cost-usd 0.005 :duration-ms 200}}}
         agg (bench/aggregate-usage stages)]
     (is (= 50 (:input-tokens agg)))
     (is (= 20 (:output-tokens agg)))))
@@ -1205,7 +1216,7 @@
           (testing "non-deterministic question not scored"
             (let [q07 (first (filter #(= :q07 (:id %)) (:results result)))]
               (is (some? q07) "q07 should appear with answer-only stages")
-              (is (= :wrong (:full-score q07)) "No judge → defaults to :wrong")))
+              (is (nil? (:full-score q07)) "No judge → score is nil (not :wrong)")))
           (testing "aggregate is non-canonical"
             (is (false? (get-in result [:aggregate :canonical]))))
           (testing "checkpoint metadata has mode"

@@ -934,14 +934,16 @@
                  exp-keys (if mode (mode-stage-keys q mode) (stage-keys q layers))]
            :when (every? #(contains? stages %) exp-keys)]
        (reduce (fn [result layer]
-                 (let [judge  (get-in stages [[qid layer :judge] :result])
+                 (let [judge-key [qid layer :judge]
+                       judge  (get-in stages [judge-key :result])
                        answer (get-in stages [[qid layer :answer] :result])]
                    (cond-> result
                      answer (assoc (keyword (str (name layer) "-answer")) answer)
-                     judge  (assoc (keyword (str (name layer) "-score"))
-                                   (or (:score judge) :wrong)
-                                   (keyword (str (name layer) "-reasoning"))
-                                   (:reasoning judge)))))
+                     (contains? stages judge-key)
+                     (assoc (keyword (str (name layer) "-score"))
+                            (or (:score judge) :wrong)
+                            (keyword (str (name layer) "-reasoning"))
+                            (:reasoning judge)))))
                {:id         (:id q)
                 :category   (:category q)
                 :scoring    (:scoring q)
