@@ -1,8 +1,9 @@
 {:paths ["src" "resources"]
 
  :deps
- {com.datomic/local      {:mvn/version "1.0.291"}
-  org.clojure/data.json  {:mvn/version "2.5.0"}}
+ {com.datomic/local        {:mvn/version "1.0.291"}
+  org.clojure/core.async   {:mvn/version "1.9.865"}
+  org.clojure/data.json    {:mvn/version "2.5.0"}}
 
  :aliases
  {:dev

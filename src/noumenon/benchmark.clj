@@ -1,5 +1,6 @@
 (ns noumenon.benchmark
-  (:require [clojure.edn :as edn]
+  (:require [clojure.core.async :as async]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
@@ -152,10 +153,12 @@
       (str/trim out))))
 
 (defn checkpoint-write
-  "Atomically write checkpoint EDN to path (write temp + atomic rename)."
+  "Atomically write checkpoint EDN to path (write temp + atomic rename).
+   Uses thread-specific temp file name to avoid collisions under concurrency."
   [path checkpoint]
   (let [f   (io/file path)
-        tmp (io/file (str path ".tmp"))]
+        tid (.getId (Thread/currentThread))
+        tmp (io/file (str path ".tmp-" tid))]
     (.mkdirs (.getParentFile f))
     (spit tmp (pr-str checkpoint))
     (Files/move (.toPath tmp) (.toPath f)
@@ -163,6 +166,15 @@
                             [StandardCopyOption/ATOMIC_MOVE
                              StandardCopyOption/REPLACE_EXISTING]))
     path))
+
+(def ^:private checkpoint-lock (Object.))
+
+(defn checkpoint-write-latest!
+  "Thread-safe checkpoint write: serializes writes via locking and always writes
+   the latest atom state. Use this from concurrent threads."
+  [path checkpoint-atom]
+  (locking checkpoint-lock
+    (checkpoint-write path @checkpoint-atom)))
 
 (defn checkpoint-read
   "Read and parse checkpoint EDN from path."
@@ -297,6 +309,78 @@
      :raw-score       (or (:score r-judge) :wrong)
      :raw-reasoning   (:reasoning r-judge)}))
 
+;; --- Rate limiting ---
+
+(defn- acquire-rate-gate!
+  "Block until min-delay-ms has elapsed since the last LLM request.
+   Thread-safe via locking on the atom."
+  [last-request-atom min-delay-ms]
+  (when (pos? min-delay-ms)
+    (locking last-request-atom
+      (let [now     (System/currentTimeMillis)
+            elapsed (- now @last-request-atom)
+            wait    (- min-delay-ms elapsed)]
+        (when (pos? wait)
+          (Thread/sleep wait))
+        (reset! last-request-atom (System/currentTimeMillis))))))
+
+;; --- Pair execution ---
+
+(defn- run-pair!
+  "Run answer+judge for one question/condition pair. Checks stop-flag and budget
+   before each stage. Acquires rate gate before each LLM call. Updates checkpoint
+   atomically. On error, stores exception and sets stop-flag."
+  [{:keys [qid condition question rubric-map db raw-ctx
+           checkpoint cp-path invoke-llm judge-llm
+           session-cost budget start-ms stop-flag error-atom
+           rate-gate min-delay-ms run-id total]}]
+  (try
+    (doseq [stage-type [:answer :judge]]
+      (let [stage-key [qid condition stage-type]]
+        (cond
+          (contains? (:stages @checkpoint) stage-key)
+          (binding [*out* *err*]
+            (println (str "bench/stage-skip run-id=" run-id
+                          " q=" (name qid)
+                          " condition=" (name condition)
+                          " stage=" (name stage-type)
+                          " reason=already-complete")))
+
+          @stop-flag nil
+
+          :else
+          (let [b (budget-check (count (:stages @checkpoint)) @session-cost budget start-ms)]
+            (if (not= :ok b)
+              (when (compare-and-set! stop-flag nil (:exhausted b))
+                (binding [*out* *err*]
+                  (println (str "bench/budget-exhausted run-id=" run-id
+                                " limit=" (name (:exhausted b))
+                                " stages=" (count (:stages @checkpoint)) "/" total))))
+              (do
+                (acquire-rate-gate! rate-gate min-delay-ms)
+                (when-not @stop-flag
+                  (let [stage-start (System/currentTimeMillis)
+                        result      (run-stage stage-key question rubric-map db raw-ctx
+                                               (:stages @checkpoint) invoke-llm judge-llm)
+                        dur-ms      (- (System/currentTimeMillis) stage-start)]
+                    (swap! session-cost + (get-in result [:usage :cost-usd] 0.0))
+                    (let [new-cp    (swap! checkpoint assoc-in [:stages stage-key] result)
+                          completed (count (:stages new-cp))]
+                      (checkpoint-write-latest! cp-path checkpoint)
+                      (binding [*out* *err*]
+                        (println (str "bench/stage-complete run-id=" run-id
+                                      " q=" (name qid)
+                                      " condition=" (name condition)
+                                      " stage=" (name stage-type)
+                                      " duration=" dur-ms "ms"
+                                      (when-let [su (:usage result)]
+                                        (str " tokens=" (:input-tokens su)
+                                             "/" (:output-tokens su)))
+                                      " [" completed "/" total "]"))))))))))))
+    (catch Exception e
+      (when (compare-and-set! error-atom nil e)
+        (compare-and-set! stop-flag nil :error)))))
+
 ;; --- Runner ---
 
 (defn run-benchmark!
@@ -306,25 +390,33 @@
    `:judge-llm` — optional separate LLM for judge stages (defaults to invoke-llm).
    `:model-config` — map of {:model :judge-model :provider} stored in checkpoint metadata.
    `:resume-checkpoint` — loaded checkpoint map to resume from.
-   `:budget` — {:max-questions n :stop-after-ms ms :max-cost-usd d}."
+   `:budget` — {:max-questions n :stop-after-ms ms :max-cost-usd d}.
+   `:concurrency` — number of parallel pair workers (default 4, range 1-20).
+   `:min-delay-ms` — minimum delay between LLM requests in ms (default 0)."
   [db repo-path invoke-llm & {:keys [checkpoint-dir resume-checkpoint budget
-                                     judge-llm model-config]
+                                     judge-llm model-config concurrency min-delay-ms]
                               :or   {checkpoint-dir "data/benchmarks/runs"
-                                     budget         {}}}]
+                                     budget         {}
+                                     concurrency    4
+                                     min-delay-ms   0}}]
   (let [questions       (load-questions)
         rubric-map      (load-rubric)
         judge-llm       (or judge-llm invoke-llm)
         model-config    (or model-config {:provider "claude"})
+        concurrency     (max 1 (min 20 concurrency))
+        min-delay-ms    (max 0 min-delay-ms)
         r-hash          (question-set-hash (:judge-template rubric-map))
         ap-hash         (question-set-hash (answer-prompt "{{q}}" "{{ctx}}"))
         resuming?       (some? resume-checkpoint)
         run-id          (if resuming? (:run-id resume-checkpoint) (generate-run-id))
         all-stages      (all-stage-keys questions)
         total           (count all-stages)
-        questions-by-id (into {} (map (juxt :id identity)) questions)
         cp-path         (str (io/file checkpoint-dir (str run-id ".edn")))
         start-ms        (System/currentTimeMillis)
         session-cost    (atom 0.0)
+        stop-flag       (atom nil)
+        error-atom      (atom nil)
+        rate-gate       (atom 0)
         initial-stages  (if resuming? (:stages resume-checkpoint) {})
         has-remaining?  (some #(not (contains? initial-stages %)) all-stages)
         raw-ctx         (when has-remaining? (raw-context repo-path))
@@ -343,59 +435,46 @@
                                              :started-at         (java.util.Date.)
                                              :budget             budget}
                                  :stages    {}
-                                 :aggregate nil}))]
+                                 :aggregate nil}))
+        ;; Build pairs: each pair is [qid condition] processed as answer+judge
+        pairs           (for [q questions, cond [:query :raw]]
+                          [(:id q) cond q])]
     (binding [*out* *err*]
       (println (str "bench/run-start run-id=" run-id
                     " questions=" (count questions)
                     " stages=" total
                     (when resuming?
                       (str " resume-from=" (count initial-stages) "/" total))
+                    (when (> concurrency 1)
+                      (str " concurrency=" concurrency))
+                    (when (pos? min-delay-ms)
+                      (str " min-delay=" min-delay-ms "ms"))
                     (when (:max-questions budget)
                       (str " max-questions=" (:max-questions budget)))
                     (when (:stop-after-ms budget)
                       (str " stop-after=" (:stop-after-ms budget) "ms")))))
-    (let [stop-reason
-          (loop [remaining all-stages]
-            (if (empty? remaining)
-              nil
-              (let [stage-key (first remaining)
-                    [qid condition stage-type] stage-key]
-                (if (contains? (:stages @checkpoint) stage-key)
-                  (do (binding [*out* *err*]
-                        (println (str "bench/stage-skip run-id=" run-id
-                                      " q=" (name qid)
-                                      " condition=" (name condition)
-                                      " stage=" (name stage-type)
-                                      " reason=already-complete")))
-                      (recur (rest remaining)))
-                  (let [b (budget-check (count (:stages @checkpoint)) @session-cost budget start-ms)]
-                    (if (not= :ok b)
-                      (do (binding [*out* *err*]
-                            (println (str "bench/budget-exhausted run-id=" run-id
-                                          " limit=" (name (:exhausted b))
-                                          " stages=" (count (:stages @checkpoint)) "/" total)))
-                          (:exhausted b))
-                      (let [question    (questions-by-id qid)
-                            stage-start (System/currentTimeMillis)
-                            result      (run-stage stage-key question rubric-map db raw-ctx
-                                                   (:stages @checkpoint) invoke-llm judge-llm)
-                            dur-ms      (- (System/currentTimeMillis) stage-start)
-                            _           (swap! session-cost + (get-in result [:usage :cost-usd] 0.0))
-                            new-cp      (swap! checkpoint assoc-in [:stages stage-key] result)
-                            completed   (count (:stages new-cp))]
-                        (checkpoint-write cp-path new-cp)
-                        (let [su (:usage result)]
-                          (binding [*out* *err*]
-                            (println (str "bench/stage-complete run-id=" run-id
-                                          " q=" (name qid)
-                                          " condition=" (name condition)
-                                          " stage=" (name stage-type)
-                                          " duration=" dur-ms "ms"
-                                          (when su
-                                            (str " tokens=" (:input-tokens su)
-                                                 "/" (:output-tokens su)))
-                                          " [" completed "/" total "]"))))
-                        (recur (rest remaining)))))))))
+    ;; Process pairs via pipeline-blocking
+    (let [in-ch  (async/to-chan! (vec pairs))
+          out-ch (async/chan (count pairs))
+          shared {:rubric-map rubric-map :db db :raw-ctx raw-ctx
+                  :checkpoint checkpoint :cp-path cp-path
+                  :invoke-llm invoke-llm :judge-llm judge-llm
+                  :session-cost session-cost :budget budget :start-ms start-ms
+                  :stop-flag stop-flag :error-atom error-atom
+                  :rate-gate rate-gate :min-delay-ms min-delay-ms
+                  :run-id run-id :total total}]
+      (async/pipeline-blocking
+       concurrency out-ch
+       (map (fn [[qid condition question]]
+              (run-pair! (assoc shared :qid qid :condition condition :question question))
+              :done))
+       in-ch)
+      ;; Drain output channel
+      (loop [] (when (async/<!! out-ch) (recur))))
+    ;; Re-throw stored error after pipeline drains
+    (when-let [e @error-atom]
+      (throw e))
+    (let [stop-reason @stop-flag
           results     (vec (stages->results questions (:stages @checkpoint)))
           agg         (aggregate-scores results)
           total-usage (aggregate-usage (:stages @checkpoint))

@@ -233,3 +233,59 @@
   (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--max-cost" "abc" "."])]
     (is (= 1 exit))
     (is (str/includes? stderr "Invalid --max-cost"))))
+
+;; --- Tier 0: Concurrency CLI flags ---
+
+(deftest benchmark-concurrency-flag-parsed
+  (let [tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-conc-" (random-uuid))
+        {:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude"
+                                              "--concurrency" "4"
+                                              "--db-dir" tmp-dir repo-path])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "No database found"))))
+
+(deftest benchmark-concurrency-invalid-zero
+  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--concurrency" "0" "."])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Invalid --concurrency"))))
+
+(deftest benchmark-concurrency-invalid-too-high
+  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--concurrency" "21" "."])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Invalid --concurrency"))))
+
+(deftest benchmark-concurrency-invalid-non-numeric
+  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--concurrency" "abc" "."])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Invalid --concurrency"))))
+
+(deftest benchmark-missing-concurrency-value
+  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--concurrency"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Missing value for --concurrency"))))
+
+(deftest benchmark-min-delay-flag-parsed
+  (let [tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-delay-" (random-uuid))
+        {:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude"
+                                              "--min-delay" "200"
+                                              "--db-dir" tmp-dir repo-path])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "No database found"))))
+
+(deftest benchmark-min-delay-zero-valid
+  (let [tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-delay0-" (random-uuid))
+        {:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude"
+                                              "--min-delay" "0"
+                                              "--db-dir" tmp-dir repo-path])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "No database found"))))
+
+(deftest benchmark-invalid-min-delay
+  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--min-delay" "abc" "."])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Invalid --min-delay"))))
+
+(deftest benchmark-missing-min-delay-value
+  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--min-delay"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Missing value for --min-delay"))))

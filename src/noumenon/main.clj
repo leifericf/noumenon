@@ -81,6 +81,22 @@
           {:error :invalid-provider :value v})
         {:error :missing-provider-value})
 
+      (= "--concurrency" (first remaining))
+      (if-let [v (second remaining)]
+        (let [n (try (Integer/parseInt v) (catch Exception _ nil))]
+          (if (and n (<= 1 n 20))
+            (recur (drop 2 remaining) (assoc opts :concurrency n) positional)
+            {:error :invalid-concurrency :value v}))
+        {:error :missing-concurrency-value})
+
+      (= "--min-delay" (first remaining))
+      (if-let [v (second remaining)]
+        (let [n (try (Integer/parseInt v) (catch Exception _ nil))]
+          (if (and n (>= n 0))
+            (recur (drop 2 remaining) (assoc opts :min-delay n) positional)
+            {:error :invalid-min-delay :value v}))
+        {:error :missing-min-delay-value})
+
       (= "--db-dir" (first remaining))
       (if (second remaining)
         (recur (drop 2 remaining) (assoc opts :db-dir (second remaining)) positional)
@@ -163,7 +179,9 @@
              "  --max-questions <n>   Stop after n questions"
              "  --stop-after <secs>   Stop after n seconds"
              "  --max-cost <dollars>  Stop when session cost exceeds threshold"
-             "  --judge-model <alias> Model alias for judge stages"]))
+             "  --judge-model <alias> Model alias for judge stages"
+             "  --concurrency <n>    Parallel pair workers, 1-20 (default: 4)"
+             "  --min-delay <ms>     Min delay between LLM requests (default: 0)"]))
 
 (defn- provider-env
   "Build env var map for the given provider. Throws if GLM token is missing."
@@ -289,7 +307,8 @@
 (defn do-benchmark
   "Run the benchmark subcommand. Returns {:exit n}.
    Nothing to stdout; progress/results to stderr. Exit 0 on success/budget, 1 on permanent error, 2 on transient error."
-  [{:keys [repo-path resume max-questions stop-after max-cost model judge-model provider] :as opts}]
+  [{:keys [repo-path resume max-questions stop-after max-cost model judge-model provider
+           concurrency min-delay] :as opts}]
   (if-let [err (validate-repo-path repo-path)]
     (do (print-error! err) {:exit 1})
     (try
@@ -353,7 +372,9 @@
                                                   :model-config model-config
                                                   :checkpoint-dir checkpoint-dir
                                                   :resume-checkpoint cp
-                                                  :budget budget)
+                                                  :budget budget
+                                                  :concurrency (or concurrency 4)
+                                                  :min-delay-ms (or min-delay 0))
                             {:exit 0}
                             (catch Exception e
                               (binding [*out* *err*]
@@ -367,7 +388,9 @@
                                       :judge-llm judge-llm
                                       :model-config model-config
                                       :checkpoint-dir checkpoint-dir
-                                      :budget budget)
+                                      :budget budget
+                                      :concurrency (or concurrency 4)
+                                      :min-delay-ms (or min-delay 0))
                 {:exit 0}
                 (catch Exception e
                   (binding [*out* *err*]
@@ -454,6 +477,24 @@
 
       :missing-max-cost-value
       (do (print-error! "Missing value for --max-cost.")
+          {:exit 1})
+
+      :invalid-concurrency
+      (do (print-error! (str "Invalid --concurrency value: " (:value parsed)
+                             ". Must be 1-20."))
+          {:exit 1})
+
+      :missing-concurrency-value
+      (do (print-error! "Missing value for --concurrency.")
+          {:exit 1})
+
+      :invalid-min-delay
+      (do (print-error! (str "Invalid --min-delay value: " (:value parsed)
+                             ". Must be >= 0."))
+          {:exit 1})
+
+      :missing-min-delay-value
+      (do (print-error! "Missing value for --min-delay.")
           {:exit 1})
 
       ;; no error — dispatch subcommand

@@ -145,6 +145,36 @@
         (doseq [f (reverse (file-seq dir))]
           (.delete f))))))
 
+(deftest concurrent-checkpoint-writes-no-lost-stages
+  (let [dir  (io/file (System/getProperty "java.io.tmpdir")
+                      (str "bench-concurrent-" (System/currentTimeMillis)))
+        path (str (io/file dir "test.edn"))
+        n    20
+        cp   (atom {:run-id "concurrent-test" :stages {}})
+        _    (.mkdirs dir)]
+    (try
+      ;; N futures each add a unique stage and write checkpoint
+      (let [futures (mapv (fn [i]
+                            (future
+                              (let [stage-key [(keyword (str "q" i)) :query :answer]]
+                                (swap! cp assoc-in [:stages stage-key]
+                                       {:status :ok :result (str "answer-" i)})
+                                (bench/checkpoint-write-latest! path cp))))
+                          (range n))]
+        ;; Wait for all to complete
+        (run! deref futures))
+      ;; Verify all stages present in final file
+      (let [loaded (bench/checkpoint-read path)]
+        (is (= n (count (:stages loaded)))
+            (str "Expected " n " stages, got " (count (:stages loaded))))
+        (doseq [i (range n)]
+          (let [stage-key [(keyword (str "q" i)) :query :answer]]
+            (is (contains? (:stages loaded) stage-key)
+                (str "Missing stage " stage-key)))))
+      (finally
+        (doseq [f (reverse (file-seq dir))]
+          (.delete f))))))
+
 (deftest stage-keys-for-question
   (let [q    {:id :q01 :question "?" :category :single-hop :query-name "test" :rubric "r"}
         keys (bench/stage-keys q)]
@@ -230,7 +260,7 @@
                   bench/query-context  (fn [_db _qn] "mock query context")
                   bench/raw-context    (fn [_rp] "mock raw context")
                   bench/repo-head-sha  (fn [_rp] "abc123")]
-      (let [result (bench/run-benchmark! nil "." mock-llm :checkpoint-dir dir)]
+      (let [result (bench/run-benchmark! nil "." mock-llm :checkpoint-dir dir :concurrency 1)]
         (testing "returns expected keys"
           (is (string? (:run-id result)))
           (is (string? (:checkpoint-path result)))
@@ -266,7 +296,7 @@
           failing-llm (throwing-mock-llm calls 5)]
       (try
         (is (thrown? clojure.lang.ExceptionInfo
-                     (bench/run-benchmark! nil "." failing-llm :checkpoint-dir dir)))
+                     (bench/run-benchmark! nil "." failing-llm :checkpoint-dir dir :concurrency 1)))
         ;; Find the checkpoint file
         (let [cp-files (->> (io/file dir) .listFiles seq (filter #(str/ends-with? (.getName %) ".edn")))]
           (is (= 1 (count cp-files)) "One checkpoint file exists")
@@ -362,7 +392,7 @@
           failing-llm  (throwing-mock-llm fail-calls 5)]
       (try
         ;; Run until failure
-        (try (bench/run-benchmark! nil "." failing-llm :checkpoint-dir dir)
+        (try (bench/run-benchmark! nil "." failing-llm :checkpoint-dir dir :concurrency 1)
              (catch Exception _))
         ;; Load checkpoint
         (let [cp-path (bench/find-checkpoint dir "latest")
@@ -371,7 +401,8 @@
               ;; Resume with counting mock
               result  (bench/run-benchmark! nil "." counting-llm
                                             :checkpoint-dir dir
-                                            :resume-checkpoint cp)]
+                                            :resume-checkpoint cp
+                                            :concurrency 1)]
           ;; Should only make 3 more calls (q2: query-judge, raw-answer, raw-judge)
           (is (= 3 @calls) "Resume should only execute remaining stages")
           (is (= 2 (count (:results result))))
@@ -407,7 +438,8 @@
       (try
         (let [result (bench/run-benchmark! nil "." counting-llm
                                            :checkpoint-dir dir
-                                           :resume-checkpoint cp)]
+                                           :resume-checkpoint cp
+                                           :concurrency 1)]
           (is (= 0 @calls) "No LLM calls when all stages complete")
           (is (= 1 (count (:results result))))
           (is (= :correct (:query-score (first (:results result)))))
@@ -494,7 +526,8 @@
                                                               "Mock answer")
                                                       :usage mock-usage})
                                            :checkpoint-dir dir
-                                           :budget {:max-questions 2})]
+                                           :budget {:max-questions 2}
+                                           :concurrency 1)]
           (is (= :max-questions (:stop-reason result)))
           (is (= 8 @calls) "2 questions × 4 stages = 8 LLM calls")
           (is (= 2 (count (:results result))))
@@ -527,14 +560,16 @@
         ;; First run: budget stops at 1 question
         (let [r1 (bench/run-benchmark! nil "." mock-fn
                                        :checkpoint-dir dir
-                                       :budget {:max-questions 1})]
+                                       :budget {:max-questions 1}
+                                       :concurrency 1)]
           (is (= :max-questions (:stop-reason r1)))
           (is (= 1 (count (:results r1))))
           ;; Resume without budget limit
           (let [cp (bench/checkpoint-read (:checkpoint-path r1))
                 r2 (bench/run-benchmark! nil "." mock-fn
                                          :checkpoint-dir dir
-                                         :resume-checkpoint cp)]
+                                         :resume-checkpoint cp
+                                         :concurrency 1)]
             (is (nil? (:stop-reason r2)))
             (is (= 3 (count (:results r2))) "All 3 questions completed")))
         (finally
@@ -583,7 +618,7 @@
     (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
                             (str "bench-usage-" (System/currentTimeMillis))))]
       (try
-        (let [result (bench/run-benchmark! nil "." mock-llm :checkpoint-dir dir)
+        (let [result (bench/run-benchmark! nil "." mock-llm :checkpoint-dir dir :concurrency 1)
               cp     (bench/checkpoint-read (:checkpoint-path result))]
           (testing "total-usage in checkpoint"
             (is (some? (:total-usage cp)))
@@ -613,7 +648,8 @@
       (try
         (let [result (bench/run-benchmark! nil "." mock-llm
                                            :checkpoint-dir dir
-                                           :model-config mc)
+                                           :model-config mc
+                                           :concurrency 1)
               cp     (bench/checkpoint-read (:checkpoint-path result))]
           (is (= mc (get-in cp [:metadata :model-config]))))
         (finally
@@ -649,7 +685,8 @@
       (try
         (bench/run-benchmark! nil "." answer-fn
                               :judge-llm judge-fn
-                              :checkpoint-dir dir)
+                              :checkpoint-dir dir
+                              :concurrency 1)
         (is (= 2 @answer-calls) "2 answer stages (query + raw)")
         (is (= 2 @judge-calls) "2 judge stages (query + raw)")
         (finally
@@ -667,7 +704,7 @@
     (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
                             (str "bench-hash-" (System/currentTimeMillis))))]
       (try
-        (let [result (bench/run-benchmark! nil "." mock-llm :checkpoint-dir dir)
+        (let [result (bench/run-benchmark! nil "." mock-llm :checkpoint-dir dir :concurrency 1)
               cp     (bench/checkpoint-read (:checkpoint-path result))]
           (is (string? (get-in cp [:metadata :rubric-hash])))
           (is (string? (get-in cp [:metadata :answer-prompt-hash])))
@@ -718,10 +755,175 @@
       (try
         (let [result (bench/run-benchmark! nil "." expensive-llm
                                            :checkpoint-dir dir
-                                           :budget {:max-cost-usd 0.003})]
+                                           :budget {:max-cost-usd 0.003}
+                                           :concurrency 1)]
           (is (= :max-cost (:stop-reason result)))
           (is (= 4 (count (:stages (bench/checkpoint-read (:checkpoint-path result))))))
           (is (= 1 (count (:results result)))))
         (finally
           (doseq [f (reverse (file-seq (io/file dir)))]
+            (.delete f)))))))
+
+;; --- Tier 1: Concurrent execution ---
+
+(deftest concurrent-run-completes-all-stages
+  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
+                                              :query-name "test" :rubric "r1"}
+                                             {:id :t02 :question "Q2?" :category :test
+                                              :query-name "test" :rubric "r2"}])
+                bench/query-context  (fn [_db _qn] "mock query context")
+                bench/raw-context    (fn [_rp] "mock raw context")
+                bench/repo-head-sha  (fn [_rp] "abc123")]
+    (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
+                            (str "bench-conc-" (System/currentTimeMillis))))]
+      (try
+        (let [result (bench/run-benchmark! nil "." mock-llm
+                                           :checkpoint-dir dir
+                                           :concurrency 2)]
+          (testing "all stages completed"
+            (let [cp (bench/checkpoint-read (:checkpoint-path result))]
+              (is (= 8 (count (:stages cp))) "2 questions × 4 stages")))
+          (testing "correct aggregate scores"
+            (is (= 2 (:question-count (:aggregate result))))
+            (is (every? #(= :correct (:query-score %)) (:results result)))
+            (is (every? #(= :correct (:raw-score %)) (:results result))))
+          (testing "run-id and checkpoint-path returned"
+            (is (string? (:run-id result)))
+            (is (string? (:checkpoint-path result)))))
+        (finally
+          (doseq [f (reverse (file-seq (io/file dir)))]
+            (.delete f)))))))
+
+(deftest resume-after-concurrent-run
+  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
+                                              :query-name "test" :rubric "r1"}
+                                             {:id :t02 :question "Q2?" :category :test
+                                              :query-name "test" :rubric "r2"}])
+                bench/query-context  (fn [_db _qn] "mock query context")
+                bench/raw-context    (fn [_rp] "mock raw context")
+                bench/repo-head-sha  (fn [_rp] "abc123")]
+    (let [dir        (str (io/file (System/getProperty "java.io.tmpdir")
+                                   (str "bench-concresume-" (System/currentTimeMillis))))
+          fail-calls (atom 0)
+          failing-llm (throwing-mock-llm fail-calls 5)]
+      (try
+        ;; Run with concurrency until failure
+        (try (bench/run-benchmark! nil "." failing-llm :checkpoint-dir dir :concurrency 2)
+             (catch Exception _))
+        ;; Load checkpoint and resume with different concurrency
+        (let [cp-path (bench/find-checkpoint dir "latest")
+              cp      (bench/checkpoint-read cp-path)
+              _       (is (pos? (count (:stages cp))) "Some stages completed before failure")
+              calls   (atom 0)
+              counting-llm (fn [prompt]
+                             (swap! calls inc)
+                             {:text (if (str/includes? prompt "Score this answer")
+                                      (pr-str {:score :correct :reasoning "Mock judge"})
+                                      "Mock answer")
+                              :usage mock-usage})
+              result  (bench/run-benchmark! nil "." counting-llm
+                                            :checkpoint-dir dir
+                                            :resume-checkpoint cp
+                                            :concurrency 1)]
+          (is (= 2 (count (:results result))) "All questions completed after resume")
+          (is (= (- 8 (count (:stages cp))) @calls) "Only remaining stages executed"))
+        (finally
+          (doseq [f (reverse (file-seq (io/file dir)))]
+            (.delete f)))))))
+
+(deftest budget-with-concurrency
+  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
+                                              :query-name "test" :rubric "r1"}
+                                             {:id :t02 :question "Q2?" :category :test
+                                              :query-name "test" :rubric "r2"}])
+                bench/query-context  (fn [_db _qn] "mock query context")
+                bench/raw-context    (fn [_rp] "mock raw context")
+                bench/repo-head-sha  (fn [_rp] "abc123")]
+    (let [dir (str (io/file (System/getProperty "java.io.tmpdir")
+                            (str "bench-concbudget-" (System/currentTimeMillis))))
+          expensive-llm (fn [prompt]
+                          {:text (if (str/includes? prompt "Score this answer")
+                                   (pr-str {:score :correct :reasoning "ok"})
+                                   "Mock answer")
+                           :usage {:input-tokens 10 :output-tokens 5
+                                   :cost-usd 0.001 :duration-ms 100}})]
+      (try
+        (let [result (bench/run-benchmark! nil "." expensive-llm
+                                           :checkpoint-dir dir
+                                           :budget {:max-cost-usd 0.003}
+                                           :concurrency 2)]
+          (is (= :max-cost (:stop-reason result)))
+          ;; With concurrency 2, up to 1 extra pair may complete beyond budget
+          (let [cp (bench/checkpoint-read (:checkpoint-path result))]
+            (is (<= 4 (count (:stages cp)) 8)
+                "At least 1 question's stages, at most all")))
+        (finally
+          (doseq [f (reverse (file-seq (io/file dir)))]
+            (.delete f)))))))
+
+(deftest llm-failure-during-concurrent-run
+  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
+                                              :query-name "test" :rubric "r1"}
+                                             {:id :t02 :question "Q2?" :category :test
+                                              :query-name "test" :rubric "r2"}])
+                bench/query-context  (fn [_db _qn] "mock query context")
+                bench/raw-context    (fn [_rp] "mock raw context")
+                bench/repo-head-sha  (fn [_rp] "abc123")]
+    (let [dir   (str (io/file (System/getProperty "java.io.tmpdir")
+                              (str "bench-concfail-" (System/currentTimeMillis))))
+          calls (atom 0)
+          failing-llm (throwing-mock-llm calls 3)]
+      (try
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (bench/run-benchmark! nil "." failing-llm
+                                           :checkpoint-dir dir
+                                           :concurrency 2)))
+        ;; Checkpoint saved with completed stages
+        (let [cp-files (->> (io/file dir) .listFiles seq
+                            (filter #(str/ends-with? (.getName %) ".edn")))]
+          (is (= 1 (count cp-files)) "Checkpoint file exists")
+          (when (seq cp-files)
+            (let [cp (bench/checkpoint-read (str (first cp-files)))]
+              (is (pos? (count (:stages cp))) "Some stages saved before failure"))))
+        (finally
+          (doseq [f (reverse (file-seq (io/file dir)))]
+            (.delete f)))))))
+
+(deftest concurrency-1-matches-sequential
+  (with-redefs [bench/load-questions (fn [] [{:id :t01 :question "Q1?" :category :test
+                                              :query-name "test" :rubric "r1"}
+                                             {:id :t02 :question "Q2?" :category :test
+                                              :query-name "test" :rubric "r2"}])
+                bench/query-context  (fn [_db _qn] "mock query context")
+                bench/raw-context    (fn [_rp] "mock raw context")
+                bench/repo-head-sha  (fn [_rp] "abc123")]
+    (let [dir1   (str (io/file (System/getProperty "java.io.tmpdir")
+                               (str "bench-seq1-" (System/currentTimeMillis))))
+          dir2   (str (io/file (System/getProperty "java.io.tmpdir")
+                               (str "bench-seq2-" (System/currentTimeMillis))))
+          calls1 (atom [])
+          calls2 (atom [])
+          tracking-llm (fn [calls-atom]
+                         (fn [prompt]
+                           (swap! calls-atom conj (if (str/includes? prompt "Score this answer")
+                                                    :judge :answer))
+                           {:text (if (str/includes? prompt "Score this answer")
+                                    (pr-str {:score :correct :reasoning "ok"})
+                                    "Mock answer")
+                            :usage mock-usage}))]
+      (try
+        (let [r1 (bench/run-benchmark! nil "." (tracking-llm calls1)
+                                       :checkpoint-dir dir1 :concurrency 1)
+              r2 (bench/run-benchmark! nil "." (tracking-llm calls2)
+                                       :checkpoint-dir dir2 :concurrency 1)]
+          (testing "same call count"
+            (is (= (count @calls1) (count @calls2))))
+          (testing "same call ordering"
+            (is (= @calls1 @calls2)))
+          (testing "same results"
+            (is (= (count (:results r1)) (count (:results r2))))
+            (is (= (:aggregate r1) (:aggregate r2)))))
+        (finally
+          (doseq [d [dir1 dir2]
+                  f (reverse (file-seq (io/file d)))]
             (.delete f)))))))
