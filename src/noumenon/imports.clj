@@ -2,6 +2,7 @@
   "Deterministic import extraction — parses source code to build a file→file
    dependency graph without an LLM. Dispatches on :file/lang via multimethods."
   (:require [clojure.core.async :as async]
+            [clojure.data.json :as json]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
             [clojure.tools.namespace.parse :as ns-parse]
@@ -36,7 +37,7 @@
   "Check if a command-line tool is on PATH."
   [cmd]
   (try
-    (let [{:keys [exit]} (shell/sh "which" cmd)]
+    (let [{:keys [exit]} (shell/sh "sh" "-c" (str "command -v " cmd))]
       (zero? exit))
     (catch Exception _ false)))
 
@@ -129,7 +130,7 @@ print(json.dumps(imports))")
     (let [{:keys [exit out]} (shell/sh "python3" "-c" python-extract-script
                                        :in text)]
       (when (zero? exit)
-        (read-string (str/replace out #"'" "\""))))
+        (json/read-str (str/trim out))))
     (catch Exception _ [])))
 
 (defn- resolve-python-import [import-name all-paths]
@@ -156,7 +157,7 @@ console.log(JSON.stringify(imports))")
   (try
     (let [{:keys [exit out]} (shell/sh "node" "-e" node-extract-script :in text)]
       (when (zero? exit)
-        (read-string out)))
+        (json/read-str (str/trim out))))
     (catch Exception _ [])))
 
 (defmethod extract-imports :typescript [_ text]
@@ -195,12 +196,22 @@ console.log(JSON.stringify(imports))")
 (defmethod extract-imports :cpp [_ _text]
   [])
 
+(defn- under-repo-path?
+  "True when full-path's canonical form is inside repo-path's canonical tree."
+  [repo-path full-path]
+  (let [canon     (.getCanonicalPath (java.io.File. full-path))
+        repo-root (.getCanonicalPath (java.io.File. (str repo-path)))]
+    (.startsWith canon (str repo-root "/"))))
+
 (defn- extract-c-includes-from-compiler
   "Run clang/gcc -MM on a file and parse the makefile output into dependency paths."
   [repo-path source-path]
   (when-let [cc (find-c-compiler)]
     (try
       (let [full-path (str repo-path "/" source-path)
+            _         (when-not (under-repo-path? repo-path full-path)
+                        (throw (ex-info "Path traversal blocked"
+                                        {:source-path source-path})))
             {:keys [exit out]} (shell/sh cc "-MM" full-path
                                          :dir (str repo-path))]
         (when (zero? exit)
