@@ -78,7 +78,7 @@
 
 (def ^:private tools
   [{:name "noumenon_import"
-    :description "Import a git repository's commit history and file structure into the knowledge graph"
+    :description "Import a git repository's commit history and file structure into the knowledge graph. Safe to call on already-imported repositories — only processes new commits and files."
     :inputSchema {:type "object"
                   :properties repo-path-prop
                   :required ["repo_path"]}}
@@ -167,9 +167,12 @@
 (defn- handle-query [args defaults]
   (with-conn args defaults
     (fn [{:keys [db]}]
-      (let [result (query/run-named-query db (args "query_name"))]
+      (let [qname  (args "query_name")
+            result (query/run-named-query db qname)]
         (if (:ok result)
-          (tool-result (pr-str (:ok result)))
+          (let [rows (:ok result)]
+            (tool-result (str "Query '" qname "': " (count rows) " results\n"
+                              (pr-str rows))))
           (tool-error (:error result)))))))
 
 (defn- handle-list-queries [_args _defaults]
@@ -327,6 +330,12 @@
 
                   "tools/call"
                   (.println writer (format-response id (handle-tools-call params defaults)))
+
+                  "ping"
+                  (.println writer (format-response id {}))
+
+                  "resources/list"
+                  (.println writer (format-response id {:resources []}))
 
                   ;; unknown method
                   (.println writer (format-error id -32601 (str "Method not found: " method)))))
