@@ -117,13 +117,15 @@
             head-sha (git/head-sha repo-path)]
         (when head-sha
           (d/transact conn {:tx-data [{:repo/uri repo-uri :repo/head-sha head-sha}]}))
-        (log! (str "Next: run '" cli/program-name " analyze " repo-path
-                   "' to add semantic metadata."))
+        (log! (str "Next: run '" cli/program-name " postprocess " repo-path
+                   "' to build the import graph, then '"
+                   cli/program-name " analyze " repo-path
+                   "' for semantic metadata."))
         {:exit   0
          :result (merge (select-keys git-r [:commits-imported :commits-skipped])
                         (select-keys files-r [:files-imported :files-skipped :dirs-imported])
                         {:db-path    (db-path ctx)
-                         :next-step  (str cli/program-name " analyze " repo-path)})}))))
+                         :next-step  (str cli/program-name " postprocess " repo-path)})}))))
 
 (defn do-analyze
   "Run the analyze subcommand. Returns {:exit n :result map-or-nil}."
@@ -283,10 +285,15 @@
                                                            " chars)"))
                                 :else               "thinking")]
                       (log! (str "  [" i "/" max-iters "] " tag))))))
-              {:exit   (if (= :budget-exhausted (:status result)) 2 0)
-               :result {:answer (:answer result)
-                        :status (:status result)
-                        :usage  (:usage result)}})))
+              (let [exit-code (if (= :budget-exhausted (:status result)) 2 0)]
+                (if (= :budget-exhausted (:status result))
+                  (log! "Budget exhausted — no answer found.")
+                  (when-let [answer (:answer result)]
+                    (log! answer)))
+                {:exit   exit-code
+                 :result {:answer (:answer result)
+                          :status (:status result)
+                          :usage  (:usage result)}}))))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
           {:exit 1})))))
@@ -449,7 +456,9 @@
                           :rubric-hash        "Rubric"
                           :answer-prompt-hash "Answer prompt"}]
         (print-error!
-         (str "Incompatible checkpoint. Mismatched fields:\n"
+         (str "Incompatible checkpoint. The benchmark configuration has changed "
+              "since this checkpoint was created. Start a fresh run without --resume.\n"
+              "Mismatched fields:\n"
               (str/join "\n"
                         (map #(str "  " (get field-labels (:field %) (name (:field %)))
                                    ": checkpoint=" (:checkpoint %)

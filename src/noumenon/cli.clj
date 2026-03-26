@@ -538,7 +538,8 @@
                  "watch"       watch-command-spec
                  simple-command-spec)
           result (parse-command spec args)]
-      (assoc result :subcommand sub))))
+      (cond-> (assoc result :subcommand sub)
+        (:error result) (select-keys [:error :subcommand :flag :value])))))
 
 (defn parse-args
   "Top-level CLI arg parser. Returns opts map, {:help ...}, or {:error keyword ...}."
