@@ -196,9 +196,7 @@
             :steps  steps
             :usage  (assoc total-usage :iterations iterations)
             :status :budget-exhausted}}
-    (let [full-messages (update-in (vec messages) [0 :content]
-                                   #(str system-prompt "\n\n" %))
-          response      (invoke-fn full-messages)
+    (let [response      (invoke-fn (vec messages))
           usage         (merge-with + total-usage
                                     (select-keys (:usage response)
                                                  [:input-tokens :output-tokens :cost-usd :duration-ms]))
@@ -231,7 +229,7 @@
                 :or   {max-iterations default-max-iterations}}]
   (let [system-prompt (build-system-prompt db repo-name)
         context      {:db db :invoke-fn invoke-fn :system-prompt system-prompt}
-        initial      {:messages [{:role "user" :content question}]
+        initial      {:messages [{:role "user" :content (str system-prompt "\n\n" question)}]
                       :steps []
                       :iterations 0
                       :total-usage llm/zero-usage

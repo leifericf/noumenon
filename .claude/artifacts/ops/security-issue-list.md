@@ -1,14 +1,211 @@
-| severity | priority | fix_complexity | category | area | summary | threat_scenario | evidence | suggested_mitigation |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| High | High | Easy | Unsafe Deserialization / Code Execution | imports.clj | `read-string` used to parse untrusted Python subprocess output, enabling arbitrary code execution | The Python import extractor pipes `python3` output through Clojure's `read-string` after a naive `str/replace` on single-quotes. A repo file could contain Python that causes the subprocess to emit a Clojure reader macro like `#=(java.lang.Runtime/getRuntime)` in its stdout, which `read-string` would evaluate. Even without that, `read-string` is unsafe on untrusted input and can throw or consume unexpected data shapes silently converted by the quote-replace. | `imports.clj:131-132` — `(read-string (str/replace out #"'" "\""))` processes raw `python3` output. The subprocess produces a JSON array, but the parser used is Clojure's EDN reader, not a JSON parser. | Replace `read-string` with `(clojure.data.json/read-str out)` or `(clojure.edn/read-string out)` on output known to be a JSON array. Since the script outputs valid JSON, `json/read-str` is the correct tool and eliminates the injection surface entirely. |
-| High | High | Easy | Unsafe Deserialization / Code Execution | imports.clj | `read-string` used to parse untrusted Node.js subprocess output for JavaScript/TypeScript imports | Same pattern as Python: the Node.js import extractor pipes `node` stdout through `(read-string out)` directly (without even the quote-replace). The subprocess emits a JSON array, but `read-string` evaluates it as EDN and is susceptible to reader macro injection if the output is ever non-JSON (e.g. a Node error that happens to include EDN-shaped text). | `imports.clj:157-159` — `(read-string out)` processes raw `node` stdout. | Replace with `(clojure.data.json/read-str out)` to parse JSON safely. |
-| High | High | Medium | Command Injection | imports.clj | C/C++ compiler invocation constructs the full file path by string concatenation without sanitization | `extract-c-includes-from-compiler` constructs the path `(str repo-path "/" source-path)` and passes it directly as a compiler argument. If `source-path` contains shell metacharacters (e.g. a file named `foo; rm -rf ~`), `clojure.java.shell/sh` is used which does NOT invoke a shell — however, the concatenated path is passed as a single arg to `clang/gcc -MM`, so path traversal via `../` in the file path could escape the repo directory and cause the compiler to process files outside the repo. | `imports.clj:202-206` — `(str repo-path "/" source-path)` is passed as `full-path` to `(shell/sh cc "-MM" full-path :dir ...)`. The `source-path` originates from `git ls-tree` output (`files.clj:104-113`), which is trusted, but paths traversing `../` are not normalized before use. | Verify that the resolved `full-path` is strictly under `repo-path` using `(.getCanonicalPath)` comparison before passing to the compiler. |
-| Normal | High | Easy | Path Traversal | mcp.clj | `repo_path` is not canonicalized before deriving the db-name, allowing symlink-based aliasing | `validate-repo-path!` checks that the path exists and has a `.git` directory, but it does not resolve symlinks. Two `repo_path` values pointing to the same real directory via different symlinks (`/home/user/repo` vs `/tmp/link-to-repo`) produce different `db-name` values (via `derive-db-name`), resulting in duplicate databases being created for the same repository. This wastes resources and can cause divergent knowledge graphs. More critically, if `validate-repo-path!` is bypassed by crafting a symlink, a caller may import from outside the intended directory tree. | `mcp.clj:19-25` — `derive-db-name` uses `(.getCanonicalPath (io/file repo-path))` (which does resolve symlinks), but `validate-repo-path!` at lines 31-39 uses `(io/file repo-path)` without canonicalization before checking `.git`. The canonical path is re-derived inside `with-conn` after validation. | Canonicalize `repo-path` once at the top of `with-conn` (before `validate-repo-path!`), and use the canonical path throughout. |
+# Security Issue Discovery — Pass 1
 
+**Scope:** Full repo (src/noumenon/*.clj)
+**Commit:** e63cd59
+**Date:** 2026-03-26
 
-| Minor | Low | Trivial | Security Misconfiguration | imports.clj | `probe-tools` and tool availability check uses `which` which is not available on all platforms and is PATH-dependent | `tool-available?` at `imports.clj:36-41` calls `(shell/sh "which" cmd)` to probe for external tool availability. On Windows, `which` does not exist. On some minimal Linux containers, `which` may not be installed. A missing `which` causes the `catch Exception` branch to return `false`, silently disabling all non-Clojure import extraction. | `imports.clj:36-41` — `(shell/sh "which" cmd)`. | Use `(shell/sh cmd "--version")` or `(shell/sh "command" "-v" cmd)` which are more portable; or use Java's `ProcessBuilder` with a simple version-flag invocation to check reachability. |
-| Normal | High | Medium | Injection / Command Injection | sync.clj | Stored HEAD SHA passed directly to `git diff` without format validation, enabling git ref injection | `sync-repo!` retrieves the stored HEAD SHA from Datomic with `stored-head-sha` and passes it verbatim to `changed-files`, which calls `(shell/sh "git" "-C" ... "diff" "--name-status" old-sha "HEAD")`. If the stored SHA value were ever corrupted or tampered with (e.g. via a Datomic transaction with a crafted `:repo/head-sha` value), an attacker could inject arbitrary git ref expressions such as `HEAD~1..HEAD` or `--option-injection`. While `shell/sh` does not invoke a shell, git itself interprets ref arguments and supports special syntax like `--` separators and `..` ranges. | `sync.clj:30-33` — `(shell/sh "git" "-C" (str repo-path) "diff" "--name-status" old-sha "HEAD")` where `old-sha` is read from the database at `sync.clj:21-22` via `(stored-head-sha db)`. The SHA is never validated to match the pattern `[0-9a-f]{40}` before use. | Validate `old-sha` against a strict `#"[0-9a-f]{40}"` regex before passing to `git diff`. If it does not match, treat the state as a fresh sync (no incremental diff). |
-| Normal | Medium | Medium | Insecure Direct Object Reference | benchmark.clj | Checkpoint file path is derived from a user-supplied `run-id` without path sanitization, enabling directory traversal | `find-checkpoint` resolves checkpoint files by listing the checkpoint directory and matching by filename. However, when `resume-arg` is not `"latest"`, it constructs `(str resume-arg ".edn")` and compares against actual filenames in the directory. The `run-id` read back from the checkpoint itself (`:run-id` field) is then used to construct the JSONL output path via `result-jsonl-path` in `longbench.clj`. If a crafted checkpoint has a `:run-id` containing `../` sequences, the JSONL output could be written outside the intended results directory. | `longbench.clj:206` — `(defn result-jsonl-path [run-id] (str "data/longbench/results/" run-id ".jsonl"))`. `longbench.clj:375` — `run-id` is taken from `:run-id` in the loaded checkpoint. `benchmark.clj:463-477` — `find-checkpoint` compares by filename only, but the `run-id` embedded in the checkpoint content is trusted without validation. | Validate `run-id` from checkpoint content against the same `<timestamp>-<uuid>` format used by `generate-run-id` (e.g. `#"^\d+-[0-9a-f-]{36}$"`) before using it to construct output paths. |
-| Normal | Medium | Easy | Integrity Bypass | benchmark.clj | Legacy checkpoint files without a checksum header are silently accepted, allowing tampered checkpoints to be loaded | `checkpoint-read` at `benchmark.clj:417-430` checks for the `";; checksum:<hash>"` header and verifies it when present. If the header is absent, the file is read with `(edn/read-string raw)` without any integrity check. An attacker who can write to the checkpoint directory (local access) can create or modify a checkpoint file without the header and load it undetected. | `benchmark.clj:428-429` — `(edn/read-string raw)` fallback branch in `checkpoint-read` has no warning and no integrity verification for legacy files. | Emit a warning log when reading a legacy checkpoint, and consider refusing to resume from checkpoint files that lack a checksum header (or at least flag the result as potentially untrustworthy in the output). |
-| Minor | Low | Easy | Information Disclosure | benchmark.clj | `git show HEAD:<path>` output from arbitrary repo files is included verbatim in LLM prompts with only a content-length truncation | `raw-context` reads every `.clj`, `.cljs`, `.cljc`, and `.java` file from the repo at HEAD and injects it into the LLM prompt. File content undergoes `sanitize-file-content` which truncates at 10,000 chars and escapes `{{`/`}}` template variables. However, files could contain sensitive data (API keys, credentials, private keys embedded in source) that is forwarded to the configured LLM endpoint, which may be a third-party API. | `benchmark.clj:72-91` — `raw-context` calls `(shell/sh "git" "-C" ... "show" (str "HEAD:" path))` for each source file and passes the sanitized content to the LLM prompt. No secrets-scanning is performed before inclusion. | Document clearly that `raw-context` will send source file contents to an external LLM API. Optionally add a secrets-pattern scan (e.g. detect `PRIVATE KEY`, `sk-`, `ghp_` patterns) and redact matching lines before inclusion. |
-| Minor | Low | Easy | Integrity | longbench.clj | SHA-256 integrity check on downloaded dataset logs a warning but does not abort, making it ineffective as a security control | `verify-integrity!` at `longbench.clj:47-56` computes the SHA-256 of the downloaded dataset file and compares it to `expected-sha256`. On mismatch it emits a log warning (`log!`) but does not throw or return an error. The function comment acknowledges this as intentional, but the result is that a man-in-the-middle substitution of the dataset file would go undetected during automated runs. The `expected-sha256` value is also a placeholder string that does not match any real SHA-256 digest. | `longbench.clj:29-30` — `expected-sha256` is `"6380b9a1e4bba7e3bbcf3ca08b3e7e5c5a23e5a6f0fc3e9d8a1d4b0e2c6a9f17"` (64 hex chars but not a real hash). `longbench.clj:50-56` — mismatch logs `"longbench/integrity-warning"` only. | Set `expected-sha256` to the actual SHA-256 of the verified dataset file. Change `verify-integrity!` to throw on mismatch by default, with an opt-in `--skip-integrity-check` flag for dataset updates. |
+## Summary
+
+| Severity   | Count |
+|------------|-------|
+| Very High  | 0     |
+| High       | 1     |
+| Medium     | 4     |
+| Low        | 2     |
+
+---
+
+## Issues
+
+### SEC-002: SSRF via unvalidated Git URLs in `import` and `update` CLI commands
+- **Severity:** High
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/git.clj:13-17`, `/Users/leif/Code/noumenon/src/noumenon/main.clj:69-81`
+- **Threat:** The `git-url?` predicate accepts any string matching `https?://.+` or `git@.+`, including URLs that target internal network resources. A user or script invoking `noumenon import https://169.254.169.254/latest/meta-data/` or an internal IP would cause the server to clone from that address, creating a server-side request forgery channel. The process runs with the same network privileges as the server.
+- **Evidence:**
+  ```clojure
+  (defn git-url?
+    [s]
+    (boolean (or (re-matches #"https?://.+" s)
+                 (re-matches #"git@.+" s))))
+  ```
+  No block-list for loopback (`127.0.0.0/8`), link-local (`169.254.0.0/16`), or RFC-1918 private ranges. `resolve-repo-path` in `main.clj` calls `git/clone!` for any URL that passes this check, without any further host validation.
+- **Mitigation:** Before cloning, resolve the URL hostname to an IP address and reject loopback, link-local, and RFC-1918 ranges. Alternatively, document that URL-based import is a trusted-user CLI feature only and is not exposed via the MCP server surface.
+- **Confidence:** High (the MCP `noumenon_import` handler requires a local path and calls `validate-repo-path!`, so the MCP surface itself is not affected; the CLI `import` and `update` subcommands are the attack surface)
+
+---
+
+### SEC-003: Prompt injection via unescaped file path in `raw-context` XML attribute
+- **Severity:** Medium
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/benchmark.clj:99-101`
+- **Threat:** File paths from a repository are embedded verbatim as an XML attribute value. A repository containing a file with a double-quote in its name (legal on Linux/macOS) breaks out of the attribute and injects arbitrary XML into the prompt context, potentially injecting LLM instructions.
+- **Evidence:**
+  ```clojure
+  (str "<file-content path=\"" path "\">\n"
+       (sanitize-file-content out)
+       "\n</file-content>")
+  ```
+  `sanitize-file-content` escapes `{{` in the file *content* and truncates it, but the *path* string is embedded without any escaping. A filename like `foo"> <inject>IGNORE INSTRUCTIONS` would break the attribute quoting.
+- **Mitigation:** HTML/XML-escape the `path` value (at minimum escape `"`, `<`, `>`, `&`) before embedding in the attribute, or use a path-safe delimiter that cannot appear in a filename (e.g., a newline boundary).
+- **Confidence:** High
+
+---
+
+### SEC-004: Datalog query denial-of-service — unbounded `d/q` execution before result truncation
+- **Severity:** Medium
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/agent.clj:139-147`
+- **Threat:** A malicious MCP client using `noumenon_ask` can craft a Datalog query that passes `validate-query` (all symbols are on the allowlist) but performs a cartesian join across large relations. `d/q` runs to completion without a timeout before results are truncated. This can exhaust JVM heap and cause a denial of service.
+- **Evidence:**
+  ```clojure
+  (let [limit  (min (or (:limit parsed-args) default-row-limit) max-row-limit)
+        result (try
+                 (d/q q db rules) ...)
+        taken  (vec (take (inc limit) result))
+  ```
+  The full query executes before `take` applies truncation. A query like `[:find ?c ?f :where [?c :git/type :commit] [?f :file/path _]]` could return millions of tuples on a large repo before truncation occurs.
+- **Mitigation:** Wrap `d/q` in a `future` with a `deref` timeout (e.g., 5 seconds), canceling the query on timeout. Alternatively, prepend a `:limit N` constraint to agent-generated queries if Datomic Local supports it.
+- **Confidence:** Medium
+
+---
+
+### SEC-005: `model` and `provider` MCP inputs lack length validation
+- **Severity:** Medium
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:284-319`
+- **Threat:** `handle-ask`, `handle-analyze`, and `handle-benchmark-run` validate `question` (8000 chars) and `repo_path` (4096 chars) length but do not validate `model` or `provider` input lengths. A malicious client supplying a multi-megabyte string for `model` causes heap allocation before the value is rejected by `model-alias->id` or `provider->kw`.
+- **Evidence:**
+  ```clojure
+  (defn- handle-ask [args defaults]
+    (validate-string-length! "question" (args "question") max-question-len)
+    ;; No length check on (args "model") or (args "provider")
+    (with-conn args defaults
+      (fn [...]
+        (let [model-id (llm/model-alias->id (or (args "model") ...))]
+  ```
+- **Mitigation:** Add `(validate-string-length! "model" (args "model") 256)` and `(validate-string-length! "provider" (args "provider") 64)` at the top of each handler that accepts these fields.
+- **Confidence:** Medium
+
+---
+
+### SEC-006: Stored HEAD SHA used in `git diff` without format validation in sync.clj
+- **Severity:** Medium
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/sync.clj:41-46`
+- **Threat:** The stored HEAD SHA retrieved from the Datomic database is passed directly to `git diff`. If the stored value were ever set to a non-SHA string (corrupted write, direct Datomic transact, or future code path), it could be interpreted as a git ref expression or flag by git. While `shell/sh` does not invoke a shell (no shell metacharacter risk), git itself accepts complex ref syntax like `HEAD~1`, `--option`, or `origin/main` as positional arguments.
+- **Evidence:**
+  ```clojure
+  (defn changed-files [repo-path old-sha]
+    (if-not (valid-sha? old-sha)
+      (do (log! "WARNING" ...) nil)
+      (let [{:keys [exit out]}
+            (shell/sh "git" "-C" (str repo-path)
+                      "diff" "--name-status" old-sha "HEAD")]
+  ```
+  `valid-sha?` is called and returns nil on invalid input, so this is currently guarded. The guard works correctly. This is a low-severity note that the guard is the only defense.
+- **Mitigation:** The existing `valid-sha?` guard is sufficient. For defense in depth, add `--` before `old-sha` in the git argument list to prevent interpretation as a flag: `"diff" "--name-status" "--" old-sha "HEAD"`. However, `git diff` positional argument order means this would need to be `old-sha..HEAD` syntax.
+- **Confidence:** Low (currently guarded; flag injection via `--` would require the SHA to start with `-`)
+
+---
+
+### SEC-007: API error response body logged to stderr — potential credential leakage
+- **Severity:** Low
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/llm.clj:117-119`
+- **Threat:** When an LLM API returns a non-200 status, up to 200 characters of the raw response body are logged to stderr. API error responses sometimes include request context or provider-specific error messages that may contain partial credential hints. In a shared-logging environment this could be observed.
+- **Evidence:**
+  ```clojure
+  (log! (str "API error response (HTTP " status "): "
+             (truncate (str body) 200)))
+  ```
+- **Mitigation:** Parse the response as JSON and log only specific safe fields (`error.type`, `error.code`) rather than the raw body. The thrown exception correctly omits the body.
+- **Confidence:** Low
+
+---
+
+### SEC-009: `escape-template-vars` only escapes `{{` — misleading as a security primitive
+- **Severity:** Low
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/util.clj:18-21`
+- **Threat:** `escape-template-vars` is used throughout to "sanitize" untrusted file content before embedding in LLM prompts. It only replaces `{{` with `{ {`. This is sufficient for template-variable injection (preventing `{{repo-name}}` from being substituted) but provides no defense against LLM-level natural-language instruction injection from adversarial file content. The function name implies a broader security guarantee than it delivers.
+- **Evidence:**
+  ```clojure
+  (defn escape-template-vars [s]
+    (str/replace (or s "") "{{" "{ {"))
+  ```
+  Called in `analyze.clj:render-prompt` and `benchmark.clj:sanitize-file-content` on untrusted source file contents.
+- **Mitigation:** No code change required for template injection (the current defense is correct for that threat). Rename to `escape-template-delimiters` or add a docstring clarifying the scope: "prevents `{{var}}` substitution; does not sanitize LLM instruction injection." The XML delimiters in `render-prompt` (`<file-content>`) serve as the primary LLM injection mitigation.
+- **Confidence:** High (for the naming/documentation gap); Low (for exploitability given existing XML delimiters and the `answer-prompt` instruction note)
+
+---
+
+## Pass 2 — Saturation
+
+**Files reviewed:** `deps.edn`, `llm.clj`, `db.clj`, `mcp.clj`, `analyze.clj`, `files.clj`, `imports.clj`, `sync.clj`, `agent.clj`, `benchmark.clj`, `util.clj`, `query.clj`, `git.clj`
+**Date:** 2026-03-27
+
+---
+
+### SEC-010: `handle-update` bypasses `with-conn` canonicalization — raw path used for validation and git operations
+- **Severity:** Medium
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:262-282`
+- **Threat:** Unlike every other MCP tool handler, `handle-update` does not call `with-conn`. It calls `validate-repo-path!` on the raw `(args "repo_path")` string before canonicalizing, then passes the raw non-canonical path directly to `sync/update-repo!` (which calls `git/import-commits!`, `files/import-files!`, and `imports/enrich-repo!`). This means: (1) length validation on `repo_path` is never called (the `validate-string-length!` call inside `with-conn` is skipped entirely), and (2) a path containing symlink traversals is validated against the symlink target but then used as the raw string in subsequent git shell invocations, which can produce inconsistent behavior.
+- **Evidence:**
+  ```clojure
+  (defn- handle-update [args defaults]
+    (let [repo-path (args "repo_path")]      ; raw, uncanonicalized
+      (validate-repo-path! repo-path)        ; validates raw path
+      (let [db-dir   (util/resolve-db-dir defaults)
+            db-name  (util/derive-db-name repo-path)   ; uses raw path
+            conn     (get-or-create-conn db-dir db-name)
+            repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
+            ...
+            result   (sync/update-repo! conn repo-path repo-uri opts)]))  ; raw path to git
+  ```
+  Compare with `with-conn`, which applies `validate-string-length!` on `repo_path` and calls `.getCanonicalPath` before passing anywhere. `handle-update` skips `validate-string-length!` entirely and uses the non-canonical `repo-path` for all git operations.
+- **Mitigation:** Refactor `handle-update` to use `with-conn` (passing `analyze?` opts inside the callback), or at minimum add `(validate-string-length! "repo_path" repo-path max-repo-path-len)` and `(.getCanonicalPath (io/file repo-path))` before all uses.
+- **Confidence:** High
+
+---
+
+### SEC-011: `valid-git-path?` in `analyze.clj` does not block paths beginning with `-` — potential git flag injection
+- **Severity:** Low
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/analyze.clj:265-282`
+- **Threat:** `valid-git-path?` only rejects paths containing `:` or `\0`. Paths beginning with `-` (e.g. `-p`, `--output`) are valid git ref components but are also interpreted as options by git when passed as positional arguments. In `git show HEAD:<path>`, the path is appended to the string `"HEAD:"` before being passed as a single argument, so a leading `-` on the path does not reach git as a bare flag in this specific call. However the guard is misleadingly incomplete: if `git-show` is ever refactored to pass `file-path` as a separate argument (e.g. `git show HEAD -- <file-path>`), a path starting with `-` would become a flag injection. The existing guard provides false confidence.
+- **Evidence:**
+  ```clojure
+  (defn- valid-git-path?
+    [file-path]
+    (not (or (str/includes? file-path ":")
+             (str/includes? file-path "\0"))))
+  ...
+  (shell/sh "git" "-C" (str repo-path) "show" (str "HEAD:" file-path))
+  ```
+  File paths are sourced from `git ls-tree` output (trusted), but the validation function is also called in `imports.clj` via `analyze/git-show` on paths that originate from the Datomic database, which were in turn sourced from `git ls-tree`. The risk is low in the current call shape but the guard does not cover the full threat model it implies.
+- **Mitigation:** Add `(str/starts-with? file-path "-")` to the rejection conditions in `valid-git-path?`, or add a `path-traversal` check that also rejects `..` path components.
+- **Confidence:** Low (current call shape `"HEAD:" file-path` prevents the flag from reaching git as an option; this is a defense-in-depth gap)
+
+---
+
+### SEC-012: `invoke-claude-cli` passes full prompt as a CLI argument — argument length not bounded
+- **Severity:** Low
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/llm.clj:154-158`
+- **Threat:** The full prompt string (which may include file content up to `max-file-content-chars` = 100,000 characters from `analyze.clj`, or entire flattened message histories from `agent.clj`) is passed as a single positional argument via `-p prompt` to the Claude CLI subprocess. On macOS/Linux the per-argument limit is typically 128 KB–2 MB depending on kernel configuration. A prompt approaching or exceeding this limit causes `ProcessBuilder` to throw, potentially with an unhelpful error or silent truncation in some JVM implementations. More importantly, in the context of `invoke-cli` called from the agent loop, the flattened conversation history grows unboundedly across iterations (up to 50 iterations) with no truncation before the CLI call.
+- **Evidence:**
+  ```clojure
+  (let [cmd (cond-> ["claude" "--print" "--output-format" "json"]
+               (:model opts) (into ["--model" (:model opts)])
+               true          (into ["-p" prompt]))]
+  ```
+  `flatten-messages` in `invoke-cli` joins all messages with double newlines. After 50 iterations the accumulated prompt could easily reach several hundred kilobytes.
+- **Mitigation:** Add a character length cap on the prompt before passing it to `ProcessBuilder` (e.g. truncate at 512 KB with a warning). Alternatively, use `stdin` for the prompt rather than a CLI argument — `ProcessBuilder` supports writing to the process's stdin stream, which avoids OS argument length limits entirely.
+- **Confidence:** Medium (the issue is real; exploitability depends on how large the repository files and conversation history grow in practice)
+
+---
+
+### SEC-013: Benchmark `layers` input split and converted to keywords without allowlist validation
+- **Severity:** Low
+- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:343-346`, also `handle-digest` at line 449
+- **Threat:** The `layers` parameter from MCP input is split on `,` and each element is passed through `keyword` without any allowlist check. While the downstream `bench/run-benchmark!` function uses only `:raw`, `:import`, `:enrich`, `:full`, unexpected keywords are silently ignored rather than rejected. An attacker-controlled `layers` value with very long comma-separated tokens (e.g. a 10 MB string of commas) causes `str/split` to produce a very large vector, allocating heap proportional to input size before any validation.
+- **Evidence:**
+  ```clojure
+  (let [layers-str (args "layers")
+        layers     (when layers-str (mapv keyword (str/split layers-str #",")))]
+  ```
+  No length check on `layers-str` and no validation that each element is one of the four known layer names.
+- **Mitigation:** Add `(validate-string-length! "layers" layers-str 64)` before the split, and filter the resulting keywords against `#{:raw :import :enrich :full}` before use.
+- **Confidence:** Medium (heap allocation is bounded by `max-line-bytes` = 10 MB at the JSON-RPC input layer, but within that budget a large `layers` string would allocate excessively)

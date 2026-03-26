@@ -132,7 +132,9 @@
                            prefix    (subs line 0 colon-idx)
                            ;; strip "HEAD:" prefix
                            path      (subs prefix (inc (str/index-of prefix ":")))]
-                       (assoc m path (parse-long count-str))))
+                       (if-let [n (parse-long count-str)]
+                         (assoc m path n)
+                         m)))
                    {}))
       (throw (ex-info (str "git grep failed with exit " exit)
                       {:exit exit :repo-path (str repo-path)})))))

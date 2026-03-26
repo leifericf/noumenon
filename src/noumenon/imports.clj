@@ -38,7 +38,7 @@
   "Check if a command-line tool is on PATH."
   [cmd]
   (try
-    (let [{:keys [exit]} (shell/sh "sh" "-c" (str "command -v " cmd))]
+    (let [{:keys [exit]} (shell/sh "which" cmd)]
       (zero? exit))
     (catch Exception _ false)))
 

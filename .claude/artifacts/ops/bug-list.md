@@ -10,8 +10,8 @@
 |----------|-------|
 | Blocker  | 0     |
 | Critical | 2     |
-| Major    | 2     |
-| Minor    | 3     |
+| Major    | 1     |
+| Minor    | 2     |
 
 ## Issues
 
@@ -52,26 +52,6 @@
   ```
   Affected queries: `file-imports`, `file-importers`, `file-history`, `file-authors`, `test-impact`, `transitive-impact`, `files-depending-on`.
 - **Impact:** All 7 parameterized named queries are permanently broken via the MCP interface. The tool always returns an error rather than results.
-- **Confidence:** High
-
----
-
-### BUG-004: `agent/next-state` prepends `system-prompt` to the first message on every iteration, causing exponential prompt growth
-- **Severity:** Major
-- **File:** src/noumenon/agent.clj:199-200
-- **Description:** Each call to `next-state` does `(update-in (vec messages) [0 :content] #(str system-prompt "\n\n" %))`. The `messages` vector is the running conversation history. After the first iteration, `messages[0]` holds `system-prompt + "\n\n" + question`. On the second iteration, the same `messages[0]` is taken and `system-prompt` is prepended again, producing `system-prompt + "\n\n" + system-prompt + "\n\n" + question`. Each iteration doubles the first message's length.
-- **Evidence:**
-  ```clojure
-  ;; agent.clj:199-200
-  (let [full-messages (update-in (vec messages) [0 :content]
-                                 #(str system-prompt "\n\n" %))]
-  ;; "messages" is state.messages — which accumulates history across iterations
-  ;; After iter 1: messages[0].content = "SP\n\n<question>"
-  ;; After iter 2 (parse error or tool call): messages[0].content = "SP\n\nSP\n\n<question>"
-  ;; After iter N: messages[0].content = "SP\n\n" × N + "<question>"
-  ```
-  The `messages` passed into each `next-state` call is the `state.messages` accumulated by `parse-error-transition` and `tool-result-transition`, which append to the messages vector. The first message is never reset.
-- **Impact:** For multi-turn agent sessions, each iteration adds ~4KB (system prompt) to the first message. A 10-iteration session sends ~50KB extra tokens in iteration 10 alone, multiplying cost and likely hitting context window limits, causing failures on longer reasoning chains.
 - **Confidence:** High
 
 ---

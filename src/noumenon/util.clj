@@ -55,7 +55,7 @@
   (let [canonical (.getCanonicalPath (java.io.File. (str repo-path)))
         raw       (-> canonical (str/replace #"/+$" "") (str/split #"/") last)
         sanitized (str/replace raw #"[^a-zA-Z0-9\-_.]" "")]
-    (when (and (seq sanitized) (not= ".." sanitized))
+    (when (and (seq sanitized) (not (re-matches #"\.+" sanitized)))
       sanitized)))
 
 (defn read-version
