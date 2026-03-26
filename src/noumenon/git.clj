@@ -238,11 +238,14 @@
                                (mapv #(vector :git/sha %) parent-shas))
                         (seq file-tids)
                         (assoc :commit/changed-files file-tids))]
-    (into [{:db/id author-tid :person/email author-email :person/name author-name}
-           {:db/id committer-tid :person/email committer-email :person/name committer-name}
-           commit
-           {:repo/uri repo-uri :repo/commits [commit-tid]}
-           {:db/id "datomic.tx" :tx/op :import :tx/source :deterministic}]
+    (into (cond-> [{:db/id author-tid :person/email author-email :person/name author-name}]
+            (not= author-email committer-email)
+            (conj {:db/id committer-tid :person/email committer-email
+                   :person/name committer-name})
+            :always (into [commit
+                           {:repo/uri repo-uri :repo/commits [commit-tid]}
+                           {:db/id "datomic.tx" :tx/op :import
+                            :tx/source :deterministic}]))
           (map (fn [[path tid]] {:db/id tid :file/path path}))
           (map vector changed-files file-tids))))
 
@@ -291,7 +294,14 @@
   [conn repo-uri commits]
   (let [total (count commits)]
     (doseq [[i commit] (map-indexed vector commits)]
-      (d/transact conn {:tx-data (commit->tx-data repo-uri commit)})
+      (try
+        (d/transact conn {:tx-data (commit->tx-data repo-uri commit)})
+        (catch Exception e
+          (throw (ex-info (str "Failed to import commit " (:sha commit)
+                               " (" (inc i) "/" total "): " (.getMessage e))
+                          {:sha (:sha commit) :index (inc i)
+                           :changed-files (:changed-files commit)}
+                          e))))
       (when (and (pos? total) (zero? (mod (inc i) 100)))
         (log! (str "  [" (inc i) "/" total "] commits imported..."))))))
 
