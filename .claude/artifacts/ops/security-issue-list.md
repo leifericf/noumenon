@@ -10,8 +10,8 @@
 |------------|-------|
 | Very High  | 0     |
 | High       | 1     |
-| Medium     | 4     |
-| Low        | 2     |
+| Medium     | 2     |
+| Low        | 0     |
 
 ---
 
@@ -34,20 +34,6 @@
 
 ---
 
-### SEC-003: Prompt injection via unescaped file path in `raw-context` XML attribute
-- **Severity:** Medium
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/benchmark.clj:99-101`
-- **Threat:** File paths from a repository are embedded verbatim as an XML attribute value. A repository containing a file with a double-quote in its name (legal on Linux/macOS) breaks out of the attribute and injects arbitrary XML into the prompt context, potentially injecting LLM instructions.
-- **Evidence:**
-  ```clojure
-  (str "<file-content path=\"" path "\">\n"
-       (sanitize-file-content out)
-       "\n</file-content>")
-  ```
-  `sanitize-file-content` escapes `{{` in the file *content* and truncates it, but the *path* string is embedded without any escaping. A filename like `foo"> <inject>IGNORE INSTRUCTIONS` would break the attribute quoting.
-- **Mitigation:** HTML/XML-escape the `path` value (at minimum escape `"`, `<`, `>`, `&`) before embedding in the attribute, or use a path-safe delimiter that cannot appear in a filename (e.g., a newline boundary).
-- **Confidence:** High
-
 ---
 
 ### SEC-004: Datalog query denial-of-service — unbounded `d/q` execution before result truncation
@@ -63,24 +49,6 @@
   ```
   The full query executes before `take` applies truncation. A query like `[:find ?c ?f :where [?c :git/type :commit] [?f :file/path _]]` could return millions of tuples on a large repo before truncation occurs.
 - **Mitigation:** Wrap `d/q` in a `future` with a `deref` timeout (e.g., 5 seconds), canceling the query on timeout. Alternatively, prepend a `:limit N` constraint to agent-generated queries if Datomic Local supports it.
-- **Confidence:** Medium
-
----
-
-### SEC-005: `model` and `provider` MCP inputs lack length validation
-- **Severity:** Medium
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:284-319`
-- **Threat:** `handle-ask`, `handle-analyze`, and `handle-benchmark-run` validate `question` (8000 chars) and `repo_path` (4096 chars) length but do not validate `model` or `provider` input lengths. A malicious client supplying a multi-megabyte string for `model` causes heap allocation before the value is rejected by `model-alias->id` or `provider->kw`.
-- **Evidence:**
-  ```clojure
-  (defn- handle-ask [args defaults]
-    (validate-string-length! "question" (args "question") max-question-len)
-    ;; No length check on (args "model") or (args "provider")
-    (with-conn args defaults
-      (fn [...]
-        (let [model-id (llm/model-alias->id (or (args "model") ...))]
-  ```
-- **Mitigation:** Add `(validate-string-length! "model" (args "model") 256)` and `(validate-string-length! "provider" (args "provider") 64)` at the top of each handler that accepts these fields.
 - **Confidence:** Medium
 
 ---
@@ -159,25 +127,6 @@
   Compare with `with-conn`, which applies `validate-string-length!` on `repo_path` and calls `.getCanonicalPath` before passing anywhere. `handle-update` skips `validate-string-length!` entirely and uses the non-canonical `repo-path` for all git operations.
 - **Mitigation:** Refactor `handle-update` to use `with-conn` (passing `analyze?` opts inside the callback), or at minimum add `(validate-string-length! "repo_path" repo-path max-repo-path-len)` and `(.getCanonicalPath (io/file repo-path))` before all uses.
 - **Confidence:** High
-
----
-
-### SEC-011: `valid-git-path?` in `analyze.clj` does not block paths beginning with `-` — potential git flag injection
-- **Severity:** Low
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/analyze.clj:265-282`
-- **Threat:** `valid-git-path?` only rejects paths containing `:` or `\0`. Paths beginning with `-` (e.g. `-p`, `--output`) are valid git ref components but are also interpreted as options by git when passed as positional arguments. In `git show HEAD:<path>`, the path is appended to the string `"HEAD:"` before being passed as a single argument, so a leading `-` on the path does not reach git as a bare flag in this specific call. However the guard is misleadingly incomplete: if `git-show` is ever refactored to pass `file-path` as a separate argument (e.g. `git show HEAD -- <file-path>`), a path starting with `-` would become a flag injection. The existing guard provides false confidence.
-- **Evidence:**
-  ```clojure
-  (defn- valid-git-path?
-    [file-path]
-    (not (or (str/includes? file-path ":")
-             (str/includes? file-path "\0"))))
-  ...
-  (shell/sh "git" "-C" (str repo-path) "show" (str "HEAD:" file-path))
-  ```
-  File paths are sourced from `git ls-tree` output (trusted), but the validation function is also called in `imports.clj` via `analyze/git-show` on paths that originate from the Datomic database, which were in turn sourced from `git ls-tree`. The risk is low in the current call shape but the guard does not cover the full threat model it implies.
-- **Mitigation:** Add `(str/starts-with? file-path "-")` to the rejection conditions in `valid-git-path?`, or add a `path-traversal` check that also rejects `..` path components.
-- **Confidence:** Low (current call shape `"HEAD:" file-path` prevents the flag from reaching git as an option; this is a defense-in-depth gap)
 
 ---
 

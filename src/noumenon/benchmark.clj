@@ -34,8 +34,13 @@
   "Evaluate canary results. Takes a seq of result maps for canary questions.
    Returns {:status :pass/:warn :details [...]}."
   [canary-results]
-  (let [scores (mapv (fn [r] {:id (:id r) :score (:full-score r)}) canary-results)
-        all-wrong? (every? (comp #{:wrong} :score) scores)]
+  (let [score-keys (fn [r] (->> (keys r) (filter #(str/ends-with? (name %) "-score"))))
+        scores (mapv (fn [r]
+                       (let [sks (score-keys r)
+                             vals (map #(get r %) sks)]
+                         {:id (:id r) :scores (vec vals)}))
+                     canary-results)
+        all-wrong? (every? (fn [s] (every? #{:wrong} (:scores s))) scores)]
     (if all-wrong?
       {:status :warn :details scores}
       {:status :pass :details scores})))
@@ -96,8 +101,13 @@
          (filter #(re-find #"\.(clj[cs]?|java)$" %))
          (map (fn [path]
                 (let [{:keys [out]} (shell/sh "git" "-C" (str repo-path)
-                                              "show" (str "HEAD:" path))]
-                  (str "<file-content path=\"" path "\">\n"
+                                              "show" (str "HEAD:" path))
+                      escaped-path (-> path
+                                       (str/replace "&" "&amp;")
+                                       (str/replace "\"" "&quot;")
+                                       (str/replace "<" "&lt;")
+                                       (str/replace ">" "&gt;"))]
+                  (str "<file-content path=\"" escaped-path "\">\n"
                        (sanitize-file-content out)
                        "\n</file-content>"))))
          (str/join "\n"))))
@@ -587,18 +597,18 @@
         resolved-model (first-resolved-model (or stages {}))
         run-entity
         (cond->
-          {:bench.run/id              run-id
-           :bench.run/repo-path       (str repo-path)
-           :bench.run/commit-sha      (or commit-sha "unknown")
-           :bench.run/started-at      (or started-at (java.util.Date.))
-           :bench.run/completed-at    (java.util.Date.)
-           :bench.run/status          status
-           :bench.run/model-config    (pr-str model-config)
-           :bench.run/layers          (pr-str layers)
-           :bench.run/mode            (pr-str mode)
-           :bench.run/question-count  (long (:question-count aggregate 0))
-           :bench.run/results         result-entities
-           :bench.run/checkpoint-path (str checkpoint-path)}
+         {:bench.run/id              run-id
+          :bench.run/repo-path       (str repo-path)
+          :bench.run/commit-sha      (or commit-sha "unknown")
+          :bench.run/started-at      (or started-at (java.util.Date.))
+          :bench.run/completed-at    (java.util.Date.)
+          :bench.run/status          status
+          :bench.run/model-config    (pr-str model-config)
+          :bench.run/layers          (pr-str layers)
+          :bench.run/mode            (pr-str mode)
+          :bench.run/question-count  (long (:question-count aggregate 0))
+          :bench.run/results         result-entities
+          :bench.run/checkpoint-path (str checkpoint-path)}
 
           (:canonical aggregate)
           (assoc :bench.run/canonical? true)
@@ -928,7 +938,7 @@
                        answer (get-in stages [[qid layer :answer] :result])]
                    (cond-> result
                      answer (assoc (keyword (str (name layer) "-answer")) answer)
-                     true   (assoc (keyword (str (name layer) "-score"))
+                     judge  (assoc (keyword (str (name layer) "-score"))
                                    (or (:score judge) :wrong)
                                    (keyword (str (name layer) "-reasoning"))
                                    (:reasoning judge)))))
@@ -1201,9 +1211,10 @@
     (.append sb (str "| Deterministic | "
                      (format-pct (:deterministic-mean aggregate))
                      " | " (:deterministic-count aggregate) " |\n"))
-    (.append sb (str "| LLM-judged | "
-                     (format-pct (:llm-judged-mean aggregate))
-                     " | " (:llm-judged-count aggregate) " |\n"))
+    (when (pos? (:llm-judged-count aggregate 0))
+      (.append sb (str "| LLM-judged | "
+                       (format-pct (:llm-judged-mean aggregate))
+                       " | " (:llm-judged-count aggregate) " |\n")))
     (.append sb "\n## Per-Question Results\n\n")
     (.append sb (str "| # | Category | Scoring | "
                      (str/join " | " (map name layers)) " |\n"))

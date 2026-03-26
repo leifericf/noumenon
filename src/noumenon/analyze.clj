@@ -265,7 +265,8 @@
 (defn- valid-git-path?
   "Return true when file-path is safe to embed in a git refspec."
   [file-path]
-  (not (or (str/includes? file-path ":")
+  (not (or (str/starts-with? file-path "-")
+           (str/includes? file-path ":")
            (str/includes? file-path "\0"))))
 
 (defn git-show
@@ -386,7 +387,9 @@
                                     (update :elapsed-ms (fnil + 0) dur)
                                     (update :total-usage llm/sum-usage (or usage llm/zero-usage)))
                           (= :parse-error status)
-                          (update :parse-error-paths (fnil conj []) path))))]
+                          (update :parse-error-paths (fnil conj []) path)
+                          truncated?
+                          (update :truncated (fnil inc 0)))))]
     (log! (str "  [" (:started n) "/" total "] "
                path " "
                (format "%.1f" (/ dur 1000.0)) "s "
@@ -479,6 +482,8 @@
                  cost       (:cost-usd tu 0.0)
                  pe-paths   (:parse-error-paths results [])]
              (log! (str "Done. " (:ok results 0) " analyzed"
+                        (when (pos? (:truncated results 0))
+                          (str ", " (:truncated results 0) " truncated"))
                         (when (pos? (:parse-error results 0))
                           (str ", " (:parse-error results 0) " parse errors (re-run analyze to retry)"))
                         (when (pos? (:error results 0))

@@ -9,20 +9,11 @@
 | Severity | Count |
 |----------|-------|
 | Critical | 0     |
-| Major    | 6     |
-| Minor    | 11    |
+| Major    | 4     |
+| Minor    | 8     |
 | Cosmetic | 2     |
 
 ## Issues
-
-### UX-001: `watch` error loop — repeated sync failures silently accumulate with no escalation
-- **Severity:** Major
-- **Surface:** CLI
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:196-200`
-- **Description:** When `sync-repo!` throws inside the `watch` poll loop, the error is caught, logged once, and the loop continues. There is no failure counter, no backoff, and no stop condition. A broken database or network failure produces a new error log line every 30 seconds forever with no suggestion of what to do.
-- **Evidence:** `(catch Exception e (log! (str "Update error: " (.getMessage e))))` followed immediately by `(Thread/sleep ...)` and `(recur)` — no state tracking, no escalation.
-- **Suggestion:** Track consecutive failure count. After N failures (e.g. 5), log a prominent actionable message: "Repeated errors — check logs. Run `noumenon import <repo-path>` to reset." Consider exponential backoff.
-- **Confidence:** High
 
 ### UX-002: `query list` sub-subcommand is absent from help text — undiscoverable
 - **Severity:** Major
@@ -67,15 +58,6 @@
 - **Description:** When `(sync/stale? db repo-path)` is true, `with-conn` calls `sync/update-repo!` synchronously before returning any result to the MCP client. For large repositories this can take minutes. The MCP client receives no keepalive, no progress indication, and may time out. The `log!` call goes to stderr (invisible to the MCP client). There is no configurable timeout.
 - **Evidence:** `(when (:auto-update defaults true) (let [db (d/db conn)] (when (sync/stale? db repo-path) (log! "auto-update" "HEAD changed, updating...") (sync/update-repo! conn repo-path repo-uri {:concurrency 8}))))` — fully blocking, no timeout, no intermediate response.
 - **Suggestion:** Either make auto-update asynchronous (update in background, return possibly-stale results immediately), or add a configurable `:auto-update-timeout-ms` that falls back to returning stale results with a warning if exceeded.
-- **Confidence:** High
-
-### UX-007: `--interval` and `--concurrency` validation errors missing from `error-messages` map — produce blank errors
-- **Severity:** Major
-- **Surface:** CLI
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:534-565`
-- **Description:** `watch-command-spec` declares `:error-invalid :invalid-interval` and `:error-missing :missing-interval-value`. Neither keyword appears in the `error-messages` map. When a user passes `--interval bad`, the `when-let` in `run` finds no match and produces no error message — the CLI fails silently (prints nothing, exits 1). Same gap: `:invalid-interval`, `:missing-interval-value` are missing.
-- **Evidence:** `error-messages` map at lines 534–565 contains entries for `invalid-concurrency`, `missing-concurrency-value`, `invalid-min-delay`, `missing-min-delay-value`, `invalid-max-iterations`, but has no `:invalid-interval` or `:missing-interval-value` entries.
-- **Suggestion:** Add to `error-messages`: `:invalid-interval #(str "Invalid --interval value: " (:value %) ". Must be a positive integer.")` and `:missing-interval-value "Missing value for --interval."`. Also add both to `errors-with-subcommand-usage`.
 - **Confidence:** High
 
 ### UX-008: `--concurrency` default documented as "default varies: analyze=3, others=8" only in shared flag but per-command help says "default: 8" inconsistently
@@ -211,24 +193,6 @@
 - **Suggestion:** Add a rolling ETA to the per-file log line using actual elapsed/completed stats: `"[N/total] path 2.1s ok — ETA ~12m"`. Recompute ETA from `(* (/ elapsed-ms started) remaining)` using the actual `stats-atom` values.
 - **Confidence:** High
 
-### UX-023: `benchmark` report `generate-report` shows `nil` for `deterministic-mean` and `llm-judged-mean` when those scoring methods produce no results
-- **Severity:** Minor
-- **Surface:** CLI
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/benchmark.clj:1200-1206`
-- **Description:** In the "Results by Scoring Method" table, `generate-report` always emits rows for both `Deterministic` and `LLM-judged` even when one category has no questions (e.g. `--fast` mode runs deterministic-only). When there are no LLM-judged questions, `(:llm-judged-mean aggregate)` is `0.0` (from `aggregate-scores`) and `(:llm-judged-count aggregate)` is `0`, producing a row `| LLM-judged | 0.0% | 0 |` that implies zero performance rather than "not run". This is misleading for fast/deterministic-only runs.
-- **Evidence:** `(.append sb (str "| LLM-judged | " (format-pct (:llm-judged-mean aggregate)) " | " (:llm-judged-count aggregate) " |"))` at line 1204 — no guard against `:llm-judged-count` being 0.
-- **Suggestion:** Suppress a scoring method row when its count is 0: `(when (pos? (:llm-judged-count aggregate)) ...)`. Or replace the `0.0%` value with `"—"` and add a note `"(not run)"`.
-- **Confidence:** High
-
-### UX-024: `unknown-subcommand` error is not in `errors-with-global-usage` or `errors-with-subcommand-usage` — user gets error with no help
-- **Severity:** Minor
-- **Surface:** CLI
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/main.clj:536-537` and `567-576`
-- **Description:** When a user types an unknown subcommand (e.g. `clj -M:run foobar`), `parse-args` returns `{:error :unknown-subcommand :subcommand "foobar"}`. In `run`, the error message is found (`error-messages` has `:unknown-subcommand`), so the message "Unknown subcommand: foobar. Run 'noumenon --help'..." is printed. However, `:unknown-subcommand` is not in `errors-with-global-usage` so global usage is not printed, and it is not in `errors-with-subcommand-usage` (no subcommand to look up). The user gets one line and then silence — no list of valid subcommands is shown.
-- **Evidence:** `errors-with-global-usage` at line 567 contains only `#{:no-args}`. `errors-with-subcommand-usage` at line 570 does not include `:unknown-subcommand`. The error message references `--help` but does not print the global usage inline.
-- **Suggestion:** Add `:unknown-subcommand` to `errors-with-global-usage` so the full command list is shown after the error message, or print `(format-global-help)` inline in the `:unknown-subcommand` branch.
-- **Confidence:** High
-
 ### UX-025: `handle-digest` in MCP returns raw EDN result map — inconsistent with every other MCP handler
 - **Severity:** Minor
 - **Surface:** MCP
@@ -247,11 +211,3 @@
 - **Suggestion:** Add a human-readable pre-run summary line: `"Running 22 deterministic questions across layers: full (fast mode). Estimated cost: $0.45."` This combines the existing cost banner with mode information.
 - **Confidence:** Medium
 
-### UX-027: `analyze-repo!` truncation warning is per-file but provides no aggregate summary at completion
-- **Severity:** Minor
-- **Surface:** CLI
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/analyze.clj:397-398` and `481-496`
-- **Description:** When a file is truncated (content exceeds `max-file-content-chars` = 100,000 chars), `analyze-one-file!` logs `"Warning: truncated path/to/file"` inline. However, the final summary log at line 481 reports only `ok`, `parse-error`, and `error` counts — truncated files are not counted or mentioned in the summary even though truncation can degrade analysis quality on large files. A user running analyze on a large repo with many big files has no way to know how many truncations occurred without scanning all log lines.
-- **Evidence:** `analyze-one-file!` at line 397: `(when truncated? (log! ...))` per file. The `stats-atom` at line 454 tracks `:ok`, `:parse-error`, `:error`, `:started`, `:elapsed-ms`, `:total-usage` — no `:truncated` counter. The final `Done.` log at line 481 does not include a truncation count.
-- **Suggestion:** Add `:truncated 0` to the initial `stats-atom`, increment it in `analyze-one-file!` when `truncated?` is true, and include a truncation count in the final summary: `"Done. 47 analyzed, 3 truncated (analysis may be partial), 2 parse errors."` The `truncated?` flag is already computed and returned from `analyze-file!`.
-- **Confidence:** High

@@ -192,13 +192,18 @@
                                               {:model (llm/model-alias->id
                                                        (or model llm/default-model-alias))}))))]
         (log! (str "Watching " repo-path " (polling every " interval-s "s)"))
-        (loop []
-          (try
-            (sync/update-repo! conn repo-path repo-uri sync-opts)
-            (catch Exception e
-              (log! (str "Update error: " (.getMessage e)))))
-          (Thread/sleep (* interval-s 1000))
-          (recur))))))
+        (loop [failures 0]
+          (let [failed? (try
+                          (sync/update-repo! conn repo-path repo-uri sync-opts)
+                          false
+                          (catch Exception e
+                            (log! (str "Update error: " (.getMessage e)))
+                            true))
+                new-failures (if failed? (inc failures) 0)]
+            (when (and failed? (= new-failures 5))
+              (log! (str "WARNING: 5 consecutive failures. Check database and repository.")))
+            (Thread/sleep (* interval-s 1000 (if (>= new-failures 3) (min new-failures 10) 1)))
+            (recur new-failures)))))))
 
 (defn- do-query-list
   "List available named queries with descriptions."
@@ -301,7 +306,7 @@
         ctx
         (fn [{:keys [db] :as c}]
           (let [stats (merge (query/repo-stats db)
-                            {:db-path (db-path c)})
+                             {:db-path (db-path c)})
                 head  (when-let [sha (:head-sha stats)]
                         (str " -- head: " (subs sha 0 (min 7 (count sha)))))]
             (log! (str (:commits stats) " commits, "
@@ -562,10 +567,12 @@
    :missing-param-value          "Missing value for --param. Use --param key=value."
    :invalid-param-value          #(str "Invalid --param value: " (:value %) ". Expected key=value format.")
    :invalid-max-files            #(str "Invalid --max-files value: " (:value %))
-   :missing-max-files-value      "Missing value for --max-files."})
+   :missing-max-files-value      "Missing value for --max-files."
+   :invalid-interval             #(str "Invalid --interval value: " (:value %) ". Must be a positive integer.")
+   :missing-interval-value       "Missing value for --interval."})
 
 (def ^:private errors-with-global-usage
-  #{:no-args})
+  #{:no-args :unknown-subcommand})
 
 (def ^:private errors-with-subcommand-usage
   #{:no-repo-path :missing-db-dir-value :unknown-flag
@@ -573,7 +580,8 @@
     :missing-param-value :invalid-param-value
     :invalid-concurrency :missing-concurrency-value
     :invalid-min-delay :missing-min-delay-value
-    :invalid-max-iterations :missing-max-iterations-value})
+    :invalid-max-iterations :missing-max-iterations-value
+    :invalid-interval :missing-interval-value})
 
 ;; --- Entry point ---
 
