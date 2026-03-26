@@ -1249,6 +1249,24 @@
     (.append sb (str "| Checkpoint | `" checkpoint-path "` |\n"))
     (.toString sb)))
 
+(defn compare-runs
+  "Compare two benchmark runs pulled from Datomic. Returns a delta map.
+   Each run is a map with bench.run/* keys."
+  [run-a run-b]
+  (let [mean-keys [:raw-mean :import-mean :enrich-mean :full-mean
+                   :deterministic-mean :llm-judged-mean]
+        deltas    (reduce (fn [m k]
+                            (let [a-key (keyword "bench.run" (name k))
+                                  a-val (get run-a a-key)
+                                  b-val (get run-b a-key)]
+                              (if (and a-val b-val)
+                                (assoc m k (- (double b-val) (double a-val)))
+                                m)))
+                          {} mean-keys)]
+    {:run-a-id (:bench.run/id run-a)
+     :run-b-id (:bench.run/id run-b)
+     :deltas   deltas}))
+
 (defn write-report!
   "Write a Markdown report to data/benchmarks/reports/<run-id>.md."
   [run-id report-str]

@@ -1,0 +1,14 @@
+{:name "benchmark-runs"
+ :description "List benchmark runs with aggregate scores, newest first"
+ :query [:find ?id ?sha ?status ?full-mean ?raw-mean ?count ?cost ?date
+         :where
+         [?r :bench.run/id ?id]
+         [?r :bench.run/commit-sha ?sha]
+         [?r :bench.run/status ?status]
+         [?r :bench.run/question-count ?count]
+         [?r :bench.run/started-at ?date]
+         [(get-else $ ?r :bench.run/full-mean -1.0) ?full-mean]
+         [(get-else $ ?r :bench.run/raw-mean -1.0) ?raw-mean]
+         [(get-else $ ?r :bench.run/cost-usd 0.0) ?cost]]
+ :sort-by 7
+ :sort-order :desc}

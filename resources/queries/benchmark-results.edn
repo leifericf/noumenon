@@ -1,0 +1,14 @@
+{:name "benchmark-results"
+ :description "Per-question results for a benchmark run"
+ :params {:run-id "Benchmark run ID"}
+ :query [:find ?qid ?cat ?scoring ?full-score ?raw-score
+         :in $ ?run-id
+         :where
+         [?r :bench.run/id ?run-id]
+         [?r :bench.run/results ?res]
+         [?res :bench.result/question-id ?qid]
+         [?res :bench.result/category ?cat]
+         [(get-else $ ?res :bench.result/scoring :llm) ?scoring]
+         [(get-else $ ?res :bench.result/full-score :n/a) ?full-score]
+         [(get-else $ ?res :bench.result/raw-score :n/a) ?raw-score]]
+ :sort-by 0}

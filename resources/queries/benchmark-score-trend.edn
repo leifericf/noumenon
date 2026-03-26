@@ -1,0 +1,10 @@
+{:name "benchmark-score-trend"
+ :description "Benchmark score trend over time for canonical runs"
+ :query [:find ?date ?full-mean ?raw-mean ?sha
+         :where
+         [?r :bench.run/canonical? true]
+         [?r :bench.run/started-at ?date]
+         [?r :bench.run/full-mean ?full-mean]
+         [?r :bench.run/commit-sha ?sha]
+         [(get-else $ ?r :bench.run/raw-mean -1.0) ?raw-mean]]
+ :sort-by 0}

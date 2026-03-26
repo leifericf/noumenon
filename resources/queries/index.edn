@@ -1,4 +1,7 @@
 ["ai-authored-segments"
+ "benchmark-results"
+ "benchmark-runs"
+ "benchmark-score-trend"
  "author-spread"
  "authors-by-file"
  "boundary-crossings"
