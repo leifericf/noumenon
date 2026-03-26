@@ -1,0 +1,314 @@
+[;; ============================================================
+ ;; Benchmark Run — one per benchmark execution
+ ;; ============================================================
+
+ ;; --- Identity & context ---
+ {:db/ident       :bench.run/id
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Benchmark run identifier (timestamp-uuid)"}
+
+ {:db/ident       :bench.run/repo-path
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Repository path benchmarked"}
+
+ {:db/ident       :bench.run/commit-sha
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Git HEAD SHA at time of benchmark"}
+
+ {:db/ident       :bench.run/started-at
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "When the benchmark run started"}
+
+ {:db/ident       :bench.run/completed-at
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "When the benchmark run completed"}
+
+ {:db/ident       :bench.run/duration-ms
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Wall-clock duration in milliseconds"}
+
+ {:db/ident       :bench.run/model-config
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Model configuration as EDN string {:provider :model :judge-model}"}
+
+ {:db/ident       :bench.run/resolved-model
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Actual model ID resolved from alias (e.g. claude-sonnet-4-6-20250514)"}
+
+ {:db/ident       :bench.run/resolved-judge-model
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Actual judge model ID resolved from alias"}
+
+ {:db/ident       :bench.run/concurrency
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Parallel workers used"}
+
+ {:db/ident       :bench.run/noumenon-version
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Noumenon version at benchmark time"}
+
+ {:db/ident       :bench.run/layers
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "EDN vector of conditions run, e.g. [:raw :full]"}
+
+ ;; --- Validity & status ---
+ {:db/ident       :bench.run/status
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Run outcome — :completed, :stopped, :error"}
+
+ {:db/ident       :bench.run/stop-reason
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Why the run stopped early — :max-questions, :max-cost, :stop-after"}
+
+ {:db/ident       :bench.run/error-message
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Error details when status is :error"}
+
+ {:db/ident       :bench.run/canonical?
+  :db/valueType   :db.type/boolean
+  :db/cardinality :db.cardinality/one
+  :db/doc         "True if full mode with all layers and no skip flags — only canonical runs are comparable"}
+
+ {:db/ident       :bench.run/completed-count
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Questions actually completed"}
+
+ {:db/ident       :bench.run/expected-count
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Questions expected to complete"}
+
+ {:db/ident       :bench.run/empty-context-count
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Questions where KG query returned no data — indicates pipeline gaps"}
+
+ {:db/ident       :bench.run/mode
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "EDN mode flags, e.g. {:skip-raw true :deterministic-only true}"}
+
+ {:db/ident       :bench.run/tags
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Free-form labels — :baseline, :pre-refactor, :after-import-fix, etc."}
+
+ {:db/ident       :bench.run/notes
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Free-text annotation about the run"}
+
+ ;; --- Reproducibility ---
+ {:db/ident       :bench.run/question-set-hash
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "SHA-256 of questions EDN — detects question changes between runs"}
+
+ {:db/ident       :bench.run/rubric-hash
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "SHA-256 of judge template"}
+
+ {:db/ident       :bench.run/answer-prompt-hash
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "SHA-256 of answer prompt template"}
+
+ {:db/ident       :bench.run/db-basis-t
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Datomic (d/basis-t db) — exact KG state at benchmark time"}
+
+ ;; --- Aggregate scores ---
+ {:db/ident       :bench.run/question-count
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Number of scored questions"}
+
+ {:db/ident       :bench.run/raw-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Mean score for :raw condition (0.0-1.0)"}
+
+ {:db/ident       :bench.run/import-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Mean score for :import condition (absent if not run)"}
+
+ {:db/ident       :bench.run/enrich-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Mean score for :enrich condition (absent if not run)"}
+
+ {:db/ident       :bench.run/full-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Mean score for :full condition (0.0-1.0)"}
+
+ {:db/ident       :bench.run/deterministic-count
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Number of deterministically scored questions"}
+
+ {:db/ident       :bench.run/deterministic-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Mean score for deterministically scored questions"}
+
+ {:db/ident       :bench.run/llm-judged-count
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Number of LLM-judged questions"}
+
+ {:db/ident       :bench.run/llm-judged-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Mean score for LLM-judged questions"}
+
+ ;; --- Usage ---
+ {:db/ident       :bench.run/input-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Total input tokens consumed"}
+
+ {:db/ident       :bench.run/output-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Total output tokens produced"}
+
+ {:db/ident       :bench.run/cost-usd
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Total estimated cost in USD"}
+
+ ;; --- References ---
+ {:db/ident       :bench.run/results
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/isComponent true
+  :db/doc         "Per-question result entities (component — retracted with run)"}
+
+ {:db/ident       :bench.run/checkpoint-path
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Path to the EDN checkpoint file with full answer text"}
+
+ {:db/ident       :bench.run/report-path
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Path to generated Markdown report"}
+
+ ;; ============================================================
+ ;; Benchmark Result — one per question per run (component)
+ ;; ============================================================
+
+ {:db/ident       :bench.result/question-id
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Question identifier — :q01, :q02, etc."}
+
+ {:db/ident       :bench.result/category
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Question category — :single-hop, :multi-hop, :architectural"}
+
+ {:db/ident       :bench.result/scoring
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Scoring method — :deterministic or :llm"}
+
+ {:db/ident       :bench.result/query-name
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Named Datalog query used for context"}
+
+ {:db/ident       :bench.result/question-text
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Resolved question text (with substituted parameters)"}
+
+ {:db/ident       :bench.result/min-layer
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Minimum layer needed to answer — :import, :enrich, or :full"}
+
+ ;; --- Per-layer scores (raw condition) ---
+ {:db/ident       :bench.result/raw-score
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Score for raw condition — :correct, :partial, :wrong"}
+
+ {:db/ident       :bench.result/raw-reasoning
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Judge reasoning for raw condition score"}
+
+ {:db/ident       :bench.result/raw-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Input + output tokens for raw condition"}
+
+ ;; --- Per-layer scores (import condition) ---
+ {:db/ident       :bench.result/import-score
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Score for import condition — :correct, :partial, :wrong"}
+
+ {:db/ident       :bench.result/import-reasoning
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Judge reasoning for import condition score"}
+
+ {:db/ident       :bench.result/import-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Input + output tokens for import condition"}
+
+ ;; --- Per-layer scores (enrich condition) ---
+ {:db/ident       :bench.result/enrich-score
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Score for enrich condition — :correct, :partial, :wrong"}
+
+ {:db/ident       :bench.result/enrich-reasoning
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Judge reasoning for enrich condition score"}
+
+ {:db/ident       :bench.result/enrich-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Input + output tokens for enrich condition"}
+
+ ;; --- Per-layer scores (full condition) ---
+ {:db/ident       :bench.result/full-score
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Score for full KG condition — :correct, :partial, :wrong"}
+
+ {:db/ident       :bench.result/full-reasoning
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Judge reasoning for full KG condition score"}
+
+ {:db/ident       :bench.result/full-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Input + output tokens for full KG condition"}]

@@ -6,7 +6,8 @@
 (def schema-files
   ["schema/core.edn"
    "schema/architecture.edn"
-   "schema/provenance.edn"])
+   "schema/provenance.edn"
+   "schema/benchmark.edn"])
 
 (defn load-schema
   "Read a schema EDN file from the classpath. Throws if file not found."
