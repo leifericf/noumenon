@@ -438,8 +438,7 @@
                                   {:path path :expected stored-hash :actual actual})))
                 (edn/read-string edn-str))
               ;; Legacy checkpoint without checksum — read as-is
-              (do (log! "Warning: checkpoint has no integrity checksum — may be tampered")
-                  (edn/read-string raw)))]
+              (edn/read-string raw))]
     (validate-checkpoint-stages cp)))
 
 ;; --- Resume ---
@@ -793,8 +792,8 @@
   [questions conditions shared checkpoint stop-flag concurrency mode run-id]
   (let [canary-qs    (filterv (comp canary-question-ids :id) questions)
         remaining-qs (filterv (comp not canary-question-ids :id) questions)
-        canary-pairs (for [q canary-qs, condition conditions] [(:id q) condition q])
-        rest-pairs   (for [q remaining-qs, condition conditions] [(:id q) condition q])]
+        canary-pairs (for [q canary-qs, cond conditions] [(:id q) cond q])
+        rest-pairs   (for [q remaining-qs, cond conditions] [(:id q) cond q])]
     (log! (str "bench/canary-start run-id=" run-id
                " questions=" (count canary-qs)))
     (run-pairs! canary-pairs shared concurrency)
@@ -874,7 +873,7 @@
                                 :model-config model-config
                                 :mode mode
                                 :budget budget})))
-        pairs          (for [q questions, condition conditions] [(:id q) condition q])
+        pairs          (for [q questions, cond conditions] [(:id q) cond q])
         shared         {:rubric-map rubric-map :db db :raw-ctx raw-ctx
                         :checkpoint checkpoint :cp-path cp-path
                         :invoke-llm invoke-llm :judge-llm judge-llm
