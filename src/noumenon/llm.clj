@@ -127,6 +127,10 @@
                 usage   (:usage parsed)
                 in      (:input_tokens usage 0)
                 out     (:output_tokens usage 0)]
+            (when-not text
+              (log! (str "WARNING: API returned HTTP 200 but no text content"
+                         " (stop_reason=" (:stop_reason parsed)
+                         " content=" (truncate (pr-str (:content parsed)) 200) ")")))
             {:text  text
              :usage {:input-tokens  in
                      :output-tokens out
