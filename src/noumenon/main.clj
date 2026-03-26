@@ -474,6 +474,58 @@
           (print-error! (.getMessage e))
           {:exit 1})))))
 
+(defn do-digest
+  "Run the full pipeline: import → enrich → analyze → benchmark.
+   Each step is idempotent and can be skipped with --skip-* flags."
+  [{:keys [skip-import skip-enrich skip-analyze skip-benchmark
+           model provider concurrency max-questions layers report] :as opts}]
+  (with-valid-repo
+    (update opts :repo-path resolve-repo-path)
+    (fn [{:keys [repo-path db-dir db-name]}]
+      (try
+        (let [conn     (db/connect-and-ensure-schema db-dir db-name)
+              repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
+              results  (atom {})]
+          ;; Step 1: Import + Enrich (via update-repo!)
+          (when-not (and skip-import skip-enrich)
+            (log! "digest: import + enrich...")
+            (let [r (sync/update-repo! conn repo-path repo-uri
+                                       {:concurrency (or concurrency 8)})]
+              (swap! results assoc :update r)))
+          ;; Step 2: Analyze
+          (when-not skip-analyze
+            (log! "digest: analyze...")
+            (let [provider-kw (llm/provider->kw (or provider llm/default-provider))
+                  model-id    (llm/model-alias->id (or model llm/default-model-alias))
+                  invoke-llm  (llm/make-prompt-fn
+                               (llm/make-invoke-fn provider-kw {:model model-id}))
+                  r (analyze/analyze-repo! conn repo-path invoke-llm
+                                           {:model-id model-id
+                                            :concurrency (or concurrency 3)})]
+              (swap! results assoc :analyze r)))
+          ;; Step 3: Benchmark
+          (when-not skip-benchmark
+            (log! "digest: benchmark...")
+            (let [db          (d/db conn)
+                  provider-kw (llm/provider->kw (or provider llm/default-provider))
+                  model-id    (llm/model-alias->id (or model llm/default-model-alias))
+                  invoke-llm  (llm/make-prompt-fn
+                               (llm/make-invoke-fn provider-kw {:model model-id}))
+                  mode        (cond-> {} layers (assoc :layers layers))
+                  r (bench/run-benchmark! db repo-path invoke-llm
+                                          :conn conn
+                                          :mode mode
+                                          :budget {:max-questions max-questions}
+                                          :report? report
+                                          :concurrency (or concurrency 3))]
+              (swap! results assoc :benchmark
+                     (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
+          (log! "digest: complete")
+          {:exit 0 :result @results})
+        (catch Exception e
+          (print-error! (.getMessage e))
+          {:exit 1})))))
+
 ;; --- Error dispatch ---
 
 (def ^:private error-messages
@@ -566,6 +618,7 @@
                      "status"         (do-status parsed)
                      "list-databases" (do-list-databases parsed)
                      "benchmark"      (do-benchmark parsed)
+                     "digest"         (do-digest parsed)
                      "serve"          (do (mcp/serve! parsed) {:exit 0}))]
         (when (and (:result result)
                    (zero? (:exit result))

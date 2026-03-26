@@ -292,7 +292,29 @@
    "benchmark" {:spec benchmark-command-spec
                 :summary "Evaluate knowledge graph efficacy against a repository"
                 :usage "benchmark [options] <repo-path>"
-                :epilog "By default, runs 22 deterministic questions (objective, reproducible).\nPass --full to include 18 LLM-judged architectural questions.\nUse --fast for cheapest mode (deterministic + query-only, no raw context)."}
+                :epilog "By default, runs 22 deterministic questions (objective, reproducible).\nPass --full to include 18 LLM-judged architectural questions.\nUse --fast for cheapest mode (deterministic + full-only, no raw context)."}
+   "digest"    {:spec {:flags (vec (concat
+                                    (with-provider-valid benchmark-flags all-valid-providers)
+                                    concurrency-flags
+                                    budget-flags
+                                    [{:flag "--skip-import" :key :skip-import :parse :bool
+                                      :desc "Skip import step"}
+                                     {:flag "--skip-enrich" :key :skip-enrich :parse :bool
+                                      :desc "Skip enrich step"}
+                                     {:flag "--skip-analyze" :key :skip-analyze :parse :bool
+                                      :desc "Skip analyze step"}
+                                     {:flag "--skip-benchmark" :key :skip-benchmark :parse :bool
+                                      :desc "Skip benchmark step"}
+                                     {:flag "--layers" :key :layers :parse :string
+                                      :desc "Benchmark layers: raw,import,enrich,full (default: raw,full)"
+                                      :error-missing :missing-layers-value}
+                                     {:flag "--report" :key :report :parse :bool
+                                      :desc "Generate Markdown benchmark report"}]))
+                       :initial {:subcommand "digest"}
+                       :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}}
+                :summary "Run full pipeline: import, enrich, analyze, benchmark"
+                :usage "digest [options] <repo-path>"
+                :epilog "Runs the entire Noumenon pipeline in one go. Each step is idempotent.\nUse --skip-* flags to omit individual steps.\nRe-running digest picks up where a previous run left off."}
    "serve"     {:spec {:flags [{:flag "--db-dir" :key :db-dir :parse :string
                                 :desc "Override storage directory (default: data/datomic/)"
                                 :error-missing :missing-db-dir-value}
@@ -312,7 +334,7 @@
                 :usage "serve [options]"}})
 
 (def ^:private command-order
-  ["import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark"])
+  ["digest" "import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark"])
 
 ;; --- Help text generation ---
 
@@ -516,6 +538,14 @@
       (let [[sub & rest-args] args]
         (case sub
           "benchmark"      (parse-benchmark-args rest-args)
+          "digest"         (if (contains-help? rest-args)
+                             {:help "digest"}
+                             (let [result (parse-command (get-in command-registry ["digest" :spec]) rest-args)
+                                   result (if-let [ls (:layers result)]
+                                            (assoc result :layers (mapv keyword (str/split ls #",")))
+                                            result)]
+                               (if (:error result) result
+                                   (assoc result :subcommand "digest"))))
           "ask"            (parse-ask-args rest-args)
           "serve"          (if (contains-help? rest-args)
                              {:help "serve"}

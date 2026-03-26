@@ -169,7 +169,21 @@
                   :properties (merge repo-path-prop
                                      {"run_id_a" {:type "string" :description "First run ID"}
                                       "run_id_b" {:type "string" :description "Second run ID"}})
-                  :required ["repo_path" "run_id_a" "run_id_b"]}}])
+                  :required ["repo_path" "run_id_a" "run_id_b"]}}
+   {:name "noumenon_digest"
+    :description "Run the full Noumenon pipeline: import git history, enrich with dependency graph, analyze with LLM, and benchmark knowledge graph quality. Each step is idempotent. Use skip_* params to omit steps."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"provider" {:type "string" :description "LLM provider"}
+                                      "model" {:type "string" :description "Model alias"}
+                                      "skip_import" {:type "boolean" :description "Skip import step"}
+                                      "skip_enrich" {:type "boolean" :description "Skip enrich step"}
+                                      "skip_analyze" {:type "boolean" :description "Skip analyze step"}
+                                      "skip_benchmark" {:type "boolean" :description "Skip benchmark step"}
+                                      "max_questions" {:type "integer" :description "Benchmark: limit to N questions"}
+                                      "layers" {:type "string" :description "Benchmark layers: raw,import,enrich,full (default: raw,full)"}
+                                      "report" {:type "boolean" :description "Generate Markdown benchmark report"}})
+                  :required ["repo_path"]}}])
 
 ;; --- Tool handlers ---
 
@@ -405,6 +419,40 @@
                                         (format "%.1f" (* 100.0 v)) "pp"))
                                  (sort-by key deltas)))))))))))
 
+(defn- handle-digest [args defaults]
+  (with-conn args defaults
+    (fn [{:keys [conn db repo-path]}]
+      (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
+            model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
+            repo-uri    (.getCanonicalPath (java.io.File. (str repo-path)))
+            results     (atom {})]
+        ;; Import + Enrich
+        (when-not (and (args "skip_import") (args "skip_enrich"))
+          (let [r (sync/update-repo! conn repo-path repo-uri {:concurrency 8})]
+            (swap! results assoc :update r)))
+        ;; Analyze
+        (when-not (args "skip_analyze")
+          (let [invoke-llm (llm/make-prompt-fn
+                            (llm/make-invoke-fn provider-kw {:model model-id}))
+                r (analyze/analyze-repo! conn repo-path invoke-llm
+                                         {:model-id model-id :concurrency 3})]
+            (swap! results assoc :analyze r)))
+        ;; Benchmark
+        (when-not (args "skip_benchmark")
+          (let [invoke-llm  (llm/make-prompt-fn
+                             (llm/make-invoke-fn provider-kw {:model model-id}))
+                layers-str  (args "layers")
+                layers      (when layers-str (mapv keyword (str/split layers-str #",")))
+                mode        (cond-> {} layers (assoc :layers layers))
+                r (bench/run-benchmark! db repo-path invoke-llm
+                                        :conn conn :mode mode
+                                        :budget {:max-questions (args "max_questions")}
+                                        :report? (args "report")
+                                        :concurrency 3)]
+            (swap! results assoc :benchmark
+                   (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
+        (tool-result (pr-str @results))))))
+
 (def ^:private tool-handlers
   {"noumenon_import"            handle-import
    "noumenon_status"            handle-status
@@ -418,7 +466,8 @@
    "noumenon_list_databases"    handle-list-databases
    "noumenon_benchmark_run"     handle-benchmark-run
    "noumenon_benchmark_results" handle-benchmark-results
-   "noumenon_benchmark_compare" handle-benchmark-compare})
+   "noumenon_benchmark_compare" handle-benchmark-compare
+   "noumenon_digest"            handle-digest})
 
 ;; --- MCP method handlers ---
 
