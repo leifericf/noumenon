@@ -193,7 +193,7 @@ clj -M:run <subcommand> [options]
 
 Run `clj -M:run --help` for global help, or `clj -M:run <subcommand> --help` for details.
 
-`import` accepts either `<repo-path>` or a Git URL (auto-cloned to `data/repos/<name>/`).
+`import` accepts either `<repo-path>` or a Git URL (auto-cloned to `data/repos/<name>/`). See [Using with Perforce](#using-with-perforce) for Helix Core repositories.
 
 | Subcommand | Purpose |
 |---|---|
@@ -412,6 +412,34 @@ clj -M:nrepl
 - `resources/prompts/` - prompt templates
 - `test/` - test suite
 - `data/` - local runtime artifacts (ignored)
+
+## Using with Perforce
+
+Noumenon works with Perforce (Helix Core) repositories via [git-p4](https://git-scm.com/docs/git-p4), which creates a local Git mirror from a P4 depot path. Noumenon then treats it as a regular Git repo.
+
+**Requirements**: `git`, `p4` CLI, and `git-p4` (bundled with most Git distributions) must be on PATH. Your Perforce environment (`P4PORT`, `P4USER`, `P4CLIENT`) must be configured.
+
+### Import a Perforce depot
+
+```bash
+git p4 clone //depot/project/main/... data/repos/project
+clj -M:run import data/repos/project
+```
+
+### Sync with new changelists
+
+```bash
+cd data/repos/project && git p4 sync && git p4 rebase && cd -
+clj -M:run sync data/repos/project
+```
+
+`git p4 sync` fetches new changelists from the Perforce server and `git p4 rebase` applies them as Git commits. Then `noumenon sync` detects the new HEAD and incrementally updates the knowledge graph.
+
+### If your server has Helix4Git
+
+If your Perforce admin has configured [Helix4Git](https://www.perforce.com/products/helix-core-git-connector), the depot is already mirrored as a Git repo. Point Noumenon at the Git URL directly — no `git-p4` needed.
+
+See the [git-p4 documentation](https://git-scm.com/docs/git-p4) for full usage details, including filtering by depot path, handling streams, and troubleshooting.
 
 ## Status
 

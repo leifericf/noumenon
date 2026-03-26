@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "noumenon": {
+      "command": "/bin/zsh",
+      "args": ["-c", "source .env && exec clj -M:run serve"],
+      "cwd": "/Users/leif/Code/noumenon"
+    }
+  }
+}
