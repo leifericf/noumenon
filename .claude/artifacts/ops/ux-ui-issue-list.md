@@ -9,8 +9,8 @@
 | Severity | Count |
 |----------|-------|
 | Critical | 0     |
-| Major    | 4     |
-| Minor    | 8     |
+| Major    | 3     |
+| Minor    | 4     |
 | Cosmetic | 2     |
 
 ## Issues
@@ -42,14 +42,6 @@
 - **Suggestion:** Add a warning line before deletion listing the cost/analyze stats for the database being deleted. Consider requiring `--force` flag or printing "Pass --force to confirm deletion." A `--dry-run` flag showing what would be deleted is also useful.
 - **Confidence:** High
 
-### UX-005: MCP `noumenon_ask` returns `nil` text when agent exhausts budget — breaks MCP protocol
-- **Severity:** Major
-- **Surface:** MCP
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:303-304`
-- **Description:** When the agent exhausts its iteration budget, `(:answer result)` is `nil`. The handler uses `(tool-result (or (:answer result) (str "No answer found (status: " (name (:status result)) ")")))` — this is actually already handled with the `or`. However, the `:budget-exhausted` status is not surfaced as an `isError` response. An AI assistant receives a success-looking tool result with "No answer found" text but no machine-readable signal that the budget was exhausted vs. a genuine "no information in graph" answer.
-- **Evidence:** `(tool-result (or (:answer result) (str "No answer found (status: " (name (:status result)) ")")))` — `tool-result` always sets `:isError false`. A `tool-error` would be more appropriate for `:budget-exhausted`.
-- **Suggestion:** When `(:status result)` is `:budget-exhausted`, return `(tool-error (str "Budget exhausted after " max-iter " iterations — no answer found. Try increasing max_iterations or narrowing the question."))` so the AI assistant knows to retry with different parameters.
-- **Confidence:** High
 
 ### UX-006: MCP auto-update blocks all tool responses synchronously with no timeout or progress
 - **Severity:** Major
@@ -96,41 +88,6 @@
 - **Suggestion:** After each step completes, log elapsed time and result summary: `"digest: import + enrich done (12s — 847 commits, 312 files)"`. This mirrors how each step reports individually.
 - **Confidence:** High
 
-### UX-012: MCP `noumenon_update` returns raw EDN `pr-str` output instead of a human-readable summary
-- **Severity:** Minor
-- **Surface:** MCP
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:281-282`
-- **Description:** `handle-update` returns `(tool-result (pr-str result))`. An AI assistant receives Clojure syntax: `{:status :synced, :added 3, :modified 1, :deleted 0, :commits 0, :files 3, ...}`. Compare with `handle-import` which returns a natural-language sentence. The inconsistency forces the AI to parse EDN rather than read a summary.
-- **Evidence:** `(tool-result (pr-str result))` at line 282. `handle-import` at line 215: `(tool-result (format-import-summary git-r files-r))` — uses a natural-language formatting function.
-- **Suggestion:** Format as natural language: `"Updated. 3 files added, 1 modified, 0 deleted. Commits: 2. Import graph refreshed."` Similar to `format-import-summary`.
-- **Confidence:** High
-
-### UX-013: MCP `noumenon_analyze` and `noumenon_enrich` return raw EDN — inconsistent with other tools
-- **Severity:** Minor
-- **Surface:** MCP
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:318-319` and `326-327`
-- **Description:** Both `handle-analyze` and `handle-enrich` return `(tool-result (pr-str result))`. `handle-analyze` result contains keys like `:files-analyzed`, `:files-parse-errored`, `:total-usage` with nested maps. An AI assistant receives raw Clojure data rather than a readable summary.
-- **Evidence:** `(tool-result (pr-str result))` at lines 318 and 326. `handle-benchmark-run` at line 354 uses a formatted string with labeled fields.
-- **Suggestion:** Format analyze results as: `"Analysis complete. 47 files analyzed, 2 parse errors, 1 error. Cost: $0.23. Run time: 8m."` Format enrich results with resolved import count.
-- **Confidence:** High
-
-### UX-014: `noumenon_ask` tool description does not explain what "iterative Datalog querying" means
-- **Severity:** Minor
-- **Surface:** MCP
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:117-125`
-- **Description:** The tool description reads "Ask a question about a repository using AI-powered iterative Datalog querying". An AI assistant using this tool has no context on what "iterative Datalog querying" means, when this tool is appropriate vs. `noumenon_query`, or what its limitations are (e.g., only works after import, uses LLM API credits).
-- **Evidence:** Description at line 118: `"Ask a question about a repository using AI-powered iterative Datalog querying"` — opaque for any caller unfamiliar with the system.
-- **Suggestion:** Expand: `"Ask a natural-language question about a repository. The agent runs iterative Datalog queries against the knowledge graph to find an answer. Requires prior import. Uses LLM API calls (costs money). For structured queries, prefer noumenon_query."`.
-- **Confidence:** High
-
-### UX-015: MCP `noumenon_digest` tool description does not warn about cost or duration
-- **Severity:** Minor
-- **Surface:** MCP
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:173-186`
-- **Description:** `noumenon_digest` runs the full pipeline including LLM analysis and benchmark, which can cost $10–$100+ in API calls and take 30+ minutes. The description says "Run the full Noumenon pipeline" and mentions it is idempotent, but gives no cost or time warning. `noumenon_benchmark_run` has "WARNING: Expensive" in its description; `noumenon_digest` does not.
-- **Evidence:** `noumenon_benchmark_run` description: `"WARNING: Expensive — uses many LLM calls."` `noumenon_digest` description has no equivalent warning.
-- **Suggestion:** Add: `"WARNING: Expensive and slow — runs LLM analysis (cost varies by repo size) and benchmarking. May take 30+ minutes. Use skip_analyze=true and skip_benchmark=true for a quick structural import."`.
-- **Confidence:** High
 
 ### UX-016: `--resume` placement constraint is documented but the failure mode is misleading
 - **Severity:** Minor
@@ -193,14 +150,6 @@
 - **Suggestion:** Add a rolling ETA to the per-file log line using actual elapsed/completed stats: `"[N/total] path 2.1s ok — ETA ~12m"`. Recompute ETA from `(* (/ elapsed-ms started) remaining)` using the actual `stats-atom` values.
 - **Confidence:** High
 
-### UX-025: `handle-digest` in MCP returns raw EDN result map — inconsistent with every other MCP handler
-- **Severity:** Minor
-- **Surface:** MCP
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:457`
-- **Description:** `handle-digest` ends with `(tool-result (pr-str @results))`. The results atom accumulates `:update`, `:analyze`, and `:benchmark` sub-maps, each containing nested Clojure data. The AI assistant receives a raw `{:update {...} :analyze {...} :benchmark {...}}` EDN string. This is the most complex raw-EDN response in the entire MCP surface. All other completed tools return natural language or formatted strings (see UX-012, UX-013 for the related `update`/`analyze`/`enrich` issues).
-- **Evidence:** `(tool-result (pr-str @results))` at line 457. By contrast, `handle-benchmark-run` at line 353 formats a natural-language summary.
-- **Suggestion:** Format as a multi-line summary: `"Digest complete.\nImport: 3 files added. Enrich: 12 imports resolved.\nAnalysis: 47 files analyzed, cost $0.23.\nBenchmark run-id: abc123, full mean: 72.3%."` Each step's sub-result should be formatted using the same helpers as the individual tool handlers.
-- **Confidence:** High
 
 ### UX-026: `benchmark` run-start log line and cost warning are the only pre-run output — no confirmation of what questions will run
 - **Severity:** Minor

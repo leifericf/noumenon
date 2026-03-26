@@ -63,6 +63,10 @@
 
 (def ^:private max-repo-path-len 4096)
 (def ^:private max-question-len 8000)
+(def ^:private max-model-len 256)
+(def ^:private max-provider-len 64)
+(def ^:private max-layers-len 64)
+(def ^:private allowed-layers #{:raw :import :enrich :full})
 
 (defn- validate-string-length!
   "Throw ex-info if s exceeds max-len characters."
@@ -70,6 +74,25 @@
   (when (> (count s) max-len)
     (throw (ex-info (str field-name " exceeds maximum length of " max-len " characters")
                     {:field field-name :length (count s) :max max-len}))))
+
+(defn- validate-llm-inputs!
+  "Validate model and provider string lengths when present."
+  [args]
+  (when-let [m (args "model")] (validate-string-length! "model" m max-model-len))
+  (when-let [p (args "provider")] (validate-string-length! "provider" p max-provider-len)))
+
+(defn- validate-layers
+  "Parse and validate a comma-separated layers string. Returns keyword vector or nil."
+  [layers-str]
+  (when layers-str
+    (validate-string-length! "layers" layers-str max-layers-len)
+    (let [kws (mapv keyword (str/split layers-str #","))]
+      (when-let [bad (seq (remove allowed-layers kws))]
+        (throw (ex-info (str "Unknown layers: " (pr-str bad)
+                             ". Valid: raw, import, enrich, full")
+                        {:user-message (str "Unknown layers: " (pr-str bad)
+                                            ". Valid: raw, import, enrich, full")})))
+      kws)))
 
 ;; --- Tool definitions ---
 
@@ -115,7 +138,7 @@
                                                  :description "Also run LLM analysis on changed files (default: false)"}})
                   :required ["repo_path"]}}
    {:name "noumenon_ask"
-    :description "Ask a question about a repository using AI-powered iterative Datalog querying"
+    :description "Ask a natural-language question about a repository. Uses an AI agent to run iterative Datalog queries against the knowledge graph. Requires prior import. Uses LLM API calls. For structured queries, prefer noumenon_query."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"question" {:type "string" :description "Question to ask about the repository"}
@@ -171,7 +194,7 @@
                                       "run_id_b" {:type "string" :description "Second run ID"}})
                   :required ["repo_path" "run_id_a" "run_id_b"]}}
    {:name "noumenon_digest"
-    :description "Run the full Noumenon pipeline: import git history, enrich with dependency graph, analyze with LLM, and benchmark knowledge graph quality. Each step is idempotent. Use skip_* params to omit steps."
+    :description "Run the full Noumenon pipeline: import, enrich, analyze (LLM), and benchmark. WARNING: analyze and benchmark steps are expensive (LLM calls). Use skip_analyze and skip_benchmark for a quick structural import. Each step is idempotent."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"provider" {:type "string" :description "LLM provider"}
@@ -234,7 +257,7 @@
 (defn- handle-query [args defaults]
   (with-conn args defaults
     (fn [{:keys [db]}]
-      (let [params (args "params")
+      (let [params (into {} (map (fn [[k v]] [(keyword k) v])) (args "params"))
             result (query/run-named-query db (args "query_name") params)]
         (if (:ok result)
           (let [rows       (:ok result)
@@ -260,6 +283,8 @@
       (tool-result (query/schema-summary db)))))
 
 (defn- handle-update [args defaults]
+  (validate-string-length! "repo_path" (args "repo_path") max-repo-path-len)
+  (validate-llm-inputs! args)
   (let [repo-path (args "repo_path")]
     (validate-repo-path! repo-path)
     (let [db-dir   (util/resolve-db-dir defaults)
@@ -279,10 +304,15 @@
                                           {:model (llm/model-alias->id
                                                    (or (:model defaults) llm/default-model-alias))}))))
           result   (sync/update-repo! conn repo-path repo-uri opts)]
-      (tool-result (pr-str result)))))
+      (tool-result (str "Update complete."
+                        (when-let [a (:added result)] (str " " a " files added."))
+                        (when-let [m (:modified result)] (str " " m " modified."))
+                        (when-let [d (:deleted result)] (str " " d " deleted."))
+                        (when-let [c (:commits result)] (str " " c " new commits.")))))))
 
 (defn- handle-ask [args defaults]
   (validate-string-length! "question" (args "question") max-question-len)
+  (validate-llm-inputs! args)
   (with-conn args defaults
     (fn [{:keys [db db-name]}]
       (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
@@ -300,10 +330,14 @@
               (str "status=" (:status result)
                    " iterations=" (:iterations usage)
                    " tokens=" (+ (:input-tokens usage 0) (:output-tokens usage 0))))
-        (tool-result (or (:answer result)
-                         (str "No answer found (status: " (name (:status result)) ")")))))))
+        (if (= :budget-exhausted (:status result))
+          (tool-error (str "Budget exhausted after " max-iter " iterations. "
+                           "Try increasing max_iterations or narrowing the question."))
+          (tool-result (or (:answer result)
+                           (str "No answer found (status: " (name (:status result)) ")"))))))))
 
 (defn- handle-analyze [args defaults]
+  (validate-llm-inputs! args)
   (with-conn args defaults
     (fn [{:keys [conn repo-path]}]
       (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
@@ -316,7 +350,16 @@
                                                (cond-> {:model-id    model-id
                                                         :concurrency concurrency}
                                                  max-files (assoc :max-files max-files)))]
-        (tool-result (pr-str result))))))
+        (tool-result (str "Analysis complete. "
+                          (:files-analyzed result 0) " files analyzed"
+                          (when (pos? (:files-parse-errored result 0))
+                            (str ", " (:files-parse-errored result 0) " parse errors"))
+                          (when (pos? (:files-errored result 0))
+                            (str ", " (:files-errored result 0) " errors"))
+                          ". Tokens: " (get-in result [:total-usage :input-tokens] 0)
+                          "/" (get-in result [:total-usage :output-tokens] 0)
+                          (when-let [c (get-in result [:total-usage :cost-usd])]
+                            (when (pos? c) (str " ($" (format "%.2f" c) ")")))))))))
 
 (defn- handle-enrich [args defaults]
   (with-conn args defaults
@@ -324,7 +367,9 @@
       (let [concurrency (min (or (args "concurrency") 8) 20)
             result      (imports/enrich-repo! conn repo-path
                                               {:concurrency concurrency})]
-        (tool-result (pr-str result))))))
+        (tool-result (str "Enrich complete. "
+                          (:files-processed result 0) " files processed, "
+                          (:imports-resolved result 0) " imports resolved."))))))
 
 (defn- handle-list-databases [_args defaults]
   (let [db-dir (util/resolve-db-dir defaults)
@@ -334,14 +379,14 @@
       (tool-result "No databases found."))))
 
 (defn- handle-benchmark-run [args defaults]
+  (validate-llm-inputs! args)
   (with-conn args defaults
     (fn [{:keys [conn db repo-path]}]
       (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
             model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
             invoke-llm  (llm/make-prompt-fn
                          (llm/make-invoke-fn provider-kw {:model model-id}))
-            layers-str  (args "layers")
-            layers      (when layers-str (mapv keyword (str/split layers-str #",")))
+            layers      (validate-layers (args "layers"))
             mode        (cond-> {}
                           layers (assoc :layers layers))
             result      (bench/run-benchmark! db repo-path invoke-llm
@@ -423,6 +468,7 @@
                                  (sort-by key deltas)))))))))))
 
 (defn- handle-digest [args defaults]
+  (validate-llm-inputs! args)
   (with-conn args defaults
     (fn [{:keys [conn db repo-path]}]
       (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
@@ -444,8 +490,7 @@
         (when-not (args "skip_benchmark")
           (let [invoke-llm  (llm/make-prompt-fn
                              (llm/make-invoke-fn provider-kw {:model model-id}))
-                layers-str  (args "layers")
-                layers      (when layers-str (mapv keyword (str/split layers-str #",")))
+                layers      (validate-layers (args "layers"))
                 mode        (cond-> {} layers (assoc :layers layers))
                 r (bench/run-benchmark! db repo-path invoke-llm
                                         :conn conn :mode mode
@@ -454,7 +499,20 @@
                                         :concurrency 3)]
             (swap! results assoc :benchmark
                    (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
-        (tool-result (pr-str @results))))))
+        (let [r @results]
+          (tool-result
+           (str "Digest complete."
+                (when-let [u (:update r)]
+                  (str "\nUpdate: " (or (:added u) 0) " added, "
+                       (or (:modified u) 0) " modified."))
+                (when-let [a (:analyze r)]
+                  (str "\nAnalyze: " (:files-analyzed a 0) " files analyzed"
+                       (when-let [c (get-in a [:total-usage :cost-usd])]
+                         (when (pos? c) (str " ($" (format "%.2f" c) ")")))))
+                (when-let [b (:benchmark r)]
+                  (str "\nBenchmark: run-id=" (:run-id b)
+                       (when-let [fm (get-in b [:aggregate :full-mean])]
+                         (str ", full=" (format "%.1f%%" (* 100.0 (double fm))))))))))))))
 
 (def ^:private tool-handlers
   {"noumenon_import"            handle-import

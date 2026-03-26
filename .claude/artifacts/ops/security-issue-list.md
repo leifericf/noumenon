@@ -108,28 +108,6 @@
 
 ---
 
-### SEC-010: `handle-update` bypasses `with-conn` canonicalization — raw path used for validation and git operations
-- **Severity:** Medium
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:262-282`
-- **Threat:** Unlike every other MCP tool handler, `handle-update` does not call `with-conn`. It calls `validate-repo-path!` on the raw `(args "repo_path")` string before canonicalizing, then passes the raw non-canonical path directly to `sync/update-repo!` (which calls `git/import-commits!`, `files/import-files!`, and `imports/enrich-repo!`). This means: (1) length validation on `repo_path` is never called (the `validate-string-length!` call inside `with-conn` is skipped entirely), and (2) a path containing symlink traversals is validated against the symlink target but then used as the raw string in subsequent git shell invocations, which can produce inconsistent behavior.
-- **Evidence:**
-  ```clojure
-  (defn- handle-update [args defaults]
-    (let [repo-path (args "repo_path")]      ; raw, uncanonicalized
-      (validate-repo-path! repo-path)        ; validates raw path
-      (let [db-dir   (util/resolve-db-dir defaults)
-            db-name  (util/derive-db-name repo-path)   ; uses raw path
-            conn     (get-or-create-conn db-dir db-name)
-            repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
-            ...
-            result   (sync/update-repo! conn repo-path repo-uri opts)]))  ; raw path to git
-  ```
-  Compare with `with-conn`, which applies `validate-string-length!` on `repo_path` and calls `.getCanonicalPath` before passing anywhere. `handle-update` skips `validate-string-length!` entirely and uses the non-canonical `repo-path` for all git operations.
-- **Mitigation:** Refactor `handle-update` to use `with-conn` (passing `analyze?` opts inside the callback), or at minimum add `(validate-string-length! "repo_path" repo-path max-repo-path-len)` and `(.getCanonicalPath (io/file repo-path))` before all uses.
-- **Confidence:** High
-
----
-
 ### SEC-012: `invoke-claude-cli` passes full prompt as a CLI argument — argument length not bounded
 - **Severity:** Low
 - **File:** `/Users/leif/Code/noumenon/src/noumenon/llm.clj:154-158`
@@ -146,15 +124,3 @@
 
 ---
 
-### SEC-013: Benchmark `layers` input split and converted to keywords without allowlist validation
-- **Severity:** Low
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/mcp.clj:343-346`, also `handle-digest` at line 449
-- **Threat:** The `layers` parameter from MCP input is split on `,` and each element is passed through `keyword` without any allowlist check. While the downstream `bench/run-benchmark!` function uses only `:raw`, `:import`, `:enrich`, `:full`, unexpected keywords are silently ignored rather than rejected. An attacker-controlled `layers` value with very long comma-separated tokens (e.g. a 10 MB string of commas) causes `str/split` to produce a very large vector, allocating heap proportional to input size before any validation.
-- **Evidence:**
-  ```clojure
-  (let [layers-str (args "layers")
-        layers     (when layers-str (mapv keyword (str/split layers-str #",")))]
-  ```
-  No length check on `layers-str` and no validation that each element is one of the four known layer names.
-- **Mitigation:** Add `(validate-string-length! "layers" layers-str 64)` before the split, and filter the resulting keywords against `#{:raw :import :enrich :full}` before use.
-- **Confidence:** Medium (heap allocation is bounded by `max-line-bytes` = 10 MB at the JSON-RPC input layer, but within that budget a large `layers` string would allocate excessively)
