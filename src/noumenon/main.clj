@@ -7,6 +7,7 @@
             [noumenon.db :as db]
             [noumenon.files :as files]
             [noumenon.git :as git]
+            [noumenon.agent :as agent]
             [noumenon.llm :as llm]
             [noumenon.longbench :as longbench]
             [noumenon.query :as query]))
@@ -221,6 +222,62 @@
         {:error :longbench-unknown-subcommand :subcommand "longbench"
          :longbench-command sub}))))
 
+(defn- parse-agent-args
+  "Parse agent-specific CLI args: agent <question> <repo-path> [options]."
+  [args]
+  (loop [remaining args
+         opts      {:subcommand "agent"}
+         positional []]
+    (cond
+      (empty? remaining)
+      (cond
+        (< (count positional) 2)
+        {:error :agent-missing-args :subcommand "agent"}
+        :else
+        (assoc opts :question (first positional) :repo-path (second positional)))
+
+      (= "--max-iterations" (first remaining))
+      (if-let [v (second remaining)]
+        (let [n (try (Integer/parseInt v) (catch Exception _ nil))]
+          (if (and n (pos? n))
+            (recur (drop 2 remaining) (assoc opts :max-iterations n) positional)
+            {:error :invalid-max-iterations :value v}))
+        {:error :missing-max-iterations-value})
+
+      (= "--max-cost" (first remaining))
+      (if-let [v (second remaining)]
+        (let [n (try (Double/parseDouble v) (catch Exception _ nil))]
+          (if (and n (pos? n))
+            (recur (drop 2 remaining) (assoc opts :max-cost n) positional)
+            {:error :invalid-max-cost :value v}))
+        {:error :missing-max-cost-value})
+
+      (= "--model" (first remaining))
+      (if (second remaining)
+        (recur (drop 2 remaining) (assoc opts :model (second remaining)) positional)
+        {:error :missing-model-value})
+
+      (= "--provider" (first remaining))
+      (if-let [v (second remaining)]
+        (if (#{"glm" "claude-api" "claude-cli"} v)
+          (recur (drop 2 remaining) (assoc opts :provider v) positional)
+          {:error :invalid-provider :value v})
+        {:error :missing-provider-value})
+
+      (= "-v" (first remaining))
+      (recur (rest remaining) (assoc opts :verbose true) positional)
+
+      (= "--db-dir" (first remaining))
+      (if (second remaining)
+        (recur (drop 2 remaining) (assoc opts :db-dir (second remaining)) positional)
+        {:error :missing-db-dir-value})
+
+      (str/starts-with? (first remaining) "-")
+      {:error :unknown-flag :flag (first remaining)}
+
+      :else
+      (recur (rest remaining) opts (conj positional (first remaining))))))
+
 (defn- parse-args
   "Parse CLI args into {:subcommand s, :repo-path p, :db-dir d} or {:error keyword}."
   [args]
@@ -230,6 +287,7 @@
       (case sub
         "benchmark" (parse-benchmark-args rest-args)
         "longbench" (parse-longbench-args rest-args)
+        "agent"     (parse-agent-args rest-args)
         (if-not (#{"import" "status" "analyze" "query"} sub)
           {:error :unknown-subcommand :subcommand sub}
           (loop [remaining rest-args
@@ -281,6 +339,7 @@
              "  analyze    Enrich imported files with LLM-driven semantic analysis"
              "  query      Run a named Datalog query against the knowledge graph"
              "  status     Show import counts for a repository"
+             "  agent      Ask a question about a repository using AI-powered querying"
              "  benchmark  Run benchmark suite against a repository"
              "  longbench  Run LongBench v2 standard benchmark"
              ""
@@ -288,6 +347,11 @@
              "  --db-dir <dir>        Override default storage directory (default: data/datomic/)"
              "  --model <alias>       Model alias (e.g. sonnet, haiku)"
              "  --provider <name>     Provider: glm (default) or claude"
+             ""
+             "Agent options:"
+             "  --max-iterations <n>  Max query iterations (default: 10)"
+             "  --max-cost <dollars>  Stop when session cost exceeds threshold"
+             "  -v                    Verbose: log iterations to stderr"
              ""
              "Benchmark options:"
              "  --skip-raw            Omit raw-context condition (halves LLM calls)"
@@ -420,6 +484,54 @@
             (do (print-error! error) {:exit 1})
             {:exit 0 :result ok}))))))
 
+(defn- model-alias->id
+  "Map model alias to full model ID for Anthropic API."
+  [alias]
+  (case alias
+    "sonnet"  "claude-sonnet-4-6-20250514"
+    "haiku"   "claude-haiku-4-5-20251001"
+    "opus"    "claude-opus-4-6-20250514"
+    alias))
+
+(defn do-agent
+  "Run the agent subcommand. Returns {:exit n :result map-or-nil}.
+   Unlike other subcommands, agent only needs the DB — the repo need not exist on disk."
+  [{:keys [repo-path question model provider max-iterations verbose] :as opts}]
+  (try
+    (let [db-dir      (resolve-db-dir opts)
+          db-name     (derive-db-name repo-path)
+          provider-kw (keyword (or provider "glm"))
+          model-id    (model-alias->id (or model "sonnet"))]
+      (if-not (db-exists? db-dir db-name)
+        (do (print-error! (str "No database found for \"" db-name
+                               "\". Run `import` first."))
+            {:exit 1})
+        (let [conn      (db/connect-and-ensure-schema db-dir db-name)
+              db        (d/db conn)
+              invoke-fn (llm/make-invoke-fn provider-kw
+                                            {:model       model-id
+                                             :temperature 0.3
+                                             :max-tokens  4096})
+              agent-opts (cond-> {:invoke-fn invoke-fn
+                                  :repo-name db-name}
+                           max-iterations (assoc :max-iterations max-iterations))
+              result    (agent/ask db question agent-opts)]
+          (when verbose
+            (binding [*out* *err*]
+              (doseq [step (:steps result)]
+                (println (str "agent/step iteration=" (:iteration step)
+                              (when (:tool-result step) " tool-result-size=")
+                              (when (:tool-result step) (count (:tool-result step)))
+                              (when (:error step) (str " error=" (:error step)))
+                              (when (:answer step) " answer=yes"))))))
+          {:exit   0
+           :result {:answer (:answer result)
+                    :status (:status result)
+                    :usage  (:usage result)}})))
+    (catch clojure.lang.ExceptionInfo e
+      (print-error! (.getMessage e))
+      {:exit 1})))
+
 (defn do-status
   "Run the status subcommand. Returns {:exit n :result map-or-nil}."
   [{:keys [repo-path] :as opts}]
@@ -545,15 +657,6 @@
       (catch clojure.lang.ExceptionInfo e
         (print-error! (.getMessage e))
         {:exit 1}))))
-
-(defn- model-alias->id
-  "Map model alias to full model ID for Anthropic API."
-  [alias]
-  (case alias
-    "sonnet"  "claude-sonnet-4-6-20250514"
-    "haiku"   "claude-haiku-4-5-20251001"
-    "opus"    "claude-opus-4-6-20250514"
-    alias))
 
 (defn- do-longbench-run
   "Run the longbench run subcommand."
@@ -770,11 +873,24 @@
                              ". Usage: longbench <download|run|results>"))
           {:exit 1})
 
+      :agent-missing-args
+      (do (print-error! "Usage: agent <question> <repo-path> [options]")
+          {:exit 1})
+
+      :invalid-max-iterations
+      (do (print-error! (str "Invalid --max-iterations value: " (:value parsed)))
+          {:exit 1})
+
+      :missing-max-iterations-value
+      (do (print-error! "Missing value for --max-iterations.")
+          {:exit 1})
+
       ;; no error — dispatch subcommand
       (let [result (case (:subcommand parsed)
                      "import"    (do-import parsed)
                      "analyze"   (do-analyze parsed)
                      "query"     (do-query parsed)
+                     "agent"     (do-agent parsed)
                      "status"    (do-status parsed)
                      "benchmark" (do-benchmark parsed)
                      "longbench" (do-longbench parsed))]

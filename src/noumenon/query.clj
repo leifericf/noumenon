@@ -1,6 +1,7 @@
 (ns noumenon.query
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [datomic.client.api :as d]))
 
 ;; --- Loading ---
@@ -32,6 +33,43 @@
   "Return the list of available named query names."
   []
   query-names)
+
+;; --- Schema introspection ---
+
+(defn list-attributes
+  "Return a sorted seq of {:ident kw :value-type kw :cardinality kw :doc str}
+   for all user-defined attributes (excludes :db and :fressian prefixes)."
+  [db]
+  (->> (d/q '[:find ?ident ?vt ?card ?doc
+              :where
+              [?a :db/ident ?ident]
+              [?a :db/valueType ?vt]
+              [?a :db/cardinality ?card]
+              [(get-else $ ?a :db/doc "") ?doc]]
+            db)
+       (remove (fn [[ident]]
+                 (let [ns (namespace ident)]
+                   (or (= "db" ns)
+                       (= "db.type" ns)
+                       (= "db.cardinality" ns)
+                       (= "db.unique" ns)
+                       (= "fressian" ns)
+                       (.startsWith (name ident) "db")))))
+       (sort-by first)
+       (mapv (fn [[ident vt card doc]]
+               {:ident       ident
+                :value-type  vt
+                :cardinality card
+                :doc         doc}))))
+
+(defn schema-summary
+  "Return a human-readable string summarizing all user-defined attributes."
+  [db]
+  (->> (list-attributes db)
+       (map (fn [{:keys [ident value-type cardinality doc]}]
+              (str ident " " value-type " " cardinality
+                   (when (seq doc) (str " — " doc)))))
+       (str/join "\n")))
 
 ;; --- Execution ---
 

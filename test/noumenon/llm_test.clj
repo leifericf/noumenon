@@ -17,10 +17,12 @@
                           (is (re-find #"/v1/messages" (:url opts)))
                           (let [body (json/read-str (:body opts) :key-fn keyword)]
                             (is (= 0.1 (:temperature body)))
-                            (is (= 128 (:max_tokens body))))
+                            (is (= 128 (:max_tokens body)))
+                            (is (= [{:role "user" :content "test prompt"}]
+                                   (:messages body))))
                           (delay {:status 200 :body response-body :error nil}))]
       (with-redefs [org.httpkit.client/request mock-request]
-        (let [result (llm/invoke-api "test prompt"
+        (let [result (llm/invoke-api [{:role "user" :content "test prompt"}]
                                      {:model "claude-3-5-sonnet-20241022"
                                       :temperature 0.1
                                       :max-tokens 128
@@ -38,9 +40,10 @@
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo
              #"API error: HTTP 429.*Resume"
-             (llm/invoke-api "test" {:model "m" :temperature 0.1
-                                     :max-tokens 128 :base-url "https://x"
-                                     :auth-token "t"})))))))
+             (llm/invoke-api [{:role "user" :content "test"}]
+                             {:model "m" :temperature 0.1
+                              :max-tokens 128 :base-url "https://x"
+                              :auth-token "t"})))))))
 
 (deftest invoke-api-500-throws
   (testing "HTTP 500 throws ex-info with resume guidance"
@@ -50,9 +53,10 @@
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo
              #"API error: HTTP 500.*Resume"
-             (llm/invoke-api "test" {:model "m" :temperature 0.1
-                                     :max-tokens 128 :base-url "https://x"
-                                     :auth-token "t"})))))))
+             (llm/invoke-api [{:role "user" :content "test"}]
+                             {:model "m" :temperature 0.1
+                              :max-tokens 128 :base-url "https://x"
+                              :auth-token "t"})))))))
 
 (deftest invoke-api-connection-error-throws
   (testing "connection error throws ex-info with resume guidance"
@@ -63,9 +67,10 @@
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo
              #"API request failed.*Resume"
-             (llm/invoke-api "test" {:model "m" :temperature 0.1
-                                     :max-tokens 128 :base-url "https://x"
-                                     :auth-token "t"})))))))
+             (llm/invoke-api [{:role "user" :content "test"}]
+                             {:model "m" :temperature 0.1
+                              :max-tokens 128 :base-url "https://x"
+                              :auth-token "t"})))))))
 
 ;; --- Provider factory ---
 
@@ -90,3 +95,21 @@
   (testing "claude-cli provider returns a function"
     (let [f (llm/make-invoke-fn :claude-cli {:model "haiku" :temperature 0.1 :max-tokens 128})]
       (is (fn? f)))))
+
+;; --- flatten-messages ---
+
+(deftest flatten-messages-single-user-message
+  (is (= "User:\nhello"
+         (llm/flatten-messages [{:role "user" :content "hello"}]))))
+
+(deftest flatten-messages-multi-turn
+  (is (= "User:\nhi\n\nAssistant:\nok\n\nUser:\nthanks"
+         (llm/flatten-messages [{:role "user" :content "hi"}
+                                {:role "assistant" :content "ok"}
+                                {:role "user" :content "thanks"}]))))
+
+(deftest flatten-messages-system-role
+  (testing "system role uses role name verbatim"
+    (is (= "system:\nbe helpful\n\nUser:\nhi"
+           (llm/flatten-messages [{:role "system" :content "be helpful"}
+                                  {:role "user" :content "hi"}])))))

@@ -327,3 +327,35 @@
   (let [{:keys [exit stderr]} (run-capturing ["longbench" "results"])]
     (is (= 1 exit))
     (is (str/includes? stderr "No runs found"))))
+
+;; --- Agent subcommand ---
+
+(deftest agent-missing-args
+  (let [{:keys [exit stderr]} (run-capturing ["agent"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Usage: agent"))))
+
+(deftest agent-missing-repo-path
+  (let [{:keys [exit stderr]} (run-capturing ["agent" "some question"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Usage: agent"))))
+
+(deftest agent-invalid-max-iterations
+  (let [{:keys [exit stderr]} (run-capturing ["agent" "q" "/tmp" "--max-iterations" "abc"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Invalid --max-iterations"))))
+
+(deftest agent-missing-max-iterations-value
+  (let [{:keys [exit stderr]} (run-capturing ["agent" "q" "/tmp" "--max-iterations"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Missing value for --max-iterations"))))
+
+(deftest agent-unknown-flag
+  (let [{:keys [exit stderr]} (run-capturing ["agent" "q" "/tmp" "--unknown"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Unknown option"))))
+
+(deftest agent-no-database
+  (let [{:keys [exit stderr]} (run-capturing ["agent" "question" "/tmp/nonexistent-repo-xyz"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "No database found"))))

@@ -268,7 +268,7 @@
                                                            " original=" (count (:context question))
                                                            " truncated=" (count ctx)))))
                                 prompt   (build-prompt (assoc question :context ctx))
-                                response (invoke-llm prompt)
+                                response (invoke-llm [{:role "user" :content prompt}])
                                 pred     (extract-answer (:text response))
                                 correct  (= pred (:answer question))]
                             (swap! session-cost + (get-in response [:usage :cost-usd] 0.0))
@@ -385,7 +385,7 @@
                         (when-not @stop-flag
                           (let [ctx      (truncate-middle (:context question))
                                 prompt   (build-prompt (assoc question :context ctx))
-                                response (invoke-llm prompt)
+                                response (invoke-llm [{:role "user" :content prompt}])
                                 pred     (extract-answer (:text response))
                                 correct  (= pred (:answer question))]
                             (swap! session-cost + (get-in response [:usage :cost-usd] 0.0))

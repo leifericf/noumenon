@@ -1,5 +1,6 @@
 (ns noumenon.llm
   (:require [clojure.data.json :as json]
+            [clojure.string :as str]
             [noumenon.analyze :as analyze]
             [org.httpkit.client :as http]))
 
@@ -7,16 +8,17 @@
 
 (defn invoke-api
   "Invoke Anthropic Messages API directly via http-kit.
+   `messages` is [{:role \"user\"/\"assistant\" :content string} ...].
    Returns {:text string :usage {:input-tokens n :output-tokens m} :model string}.
    Throws ex-info on HTTP errors (429, 500, timeout) with status and resume guidance."
-  [prompt {:keys [model temperature max-tokens base-url auth-token]}]
+  [messages {:keys [model temperature max-tokens base-url auth-token]}]
   (let [url      (str base-url "/v1/messages")
         start-ms (System/currentTimeMillis)
         body     (json/write-str
                   {:model      model
                    :max_tokens max-tokens
                    :temperature temperature
-                   :messages   [{:role "user" :content prompt}]})
+                   :messages   messages})
         {:keys [status body error]}
         @(http/request {:url     url
                         :method  :post
@@ -49,19 +51,30 @@
 
 ;; --- Claude CLI wrapper ---
 
+(defn flatten-messages
+  "Flatten a messages vector into a single prompt string for CLI invocation.
+   Prefixes each message with its role, separated by blank lines."
+  [messages]
+  (->> messages
+       (map (fn [{:keys [role content]}]
+              (str (case role "user" "User" "assistant" "Assistant" (str role)) ":\n" content)))
+       (str/join "\n\n")))
+
 (defn invoke-cli
-  "Invoke Claude via CLI. Wraps analyze/invoke-claude-cli."
-  [prompt opts]
-  (analyze/invoke-claude-cli prompt opts))
+  "Invoke Claude via CLI. Flattens messages to a single prompt string."
+  [messages opts]
+  (analyze/invoke-claude-cli (flatten-messages messages) opts))
 
 ;; --- Provider factory ---
 
 (defn make-invoke-fn
   "Create an invoke function for the given provider.
-   Returns (fn [prompt] -> {:text :usage :model}).
+   Returns (fn [messages] -> {:text :usage :model}) where messages is
+   [{:role \"user\"/\"assistant\" :content string} ...].
+   Opts (model, temperature, etc.) are baked in at factory time.
    Provider :glm — direct API via Z.ai proxy, reads NOUMENON_ZAI_TOKEN.
    Provider :claude-api — direct API to Anthropic, reads ANTHROPIC_API_KEY.
-   Provider :claude-cli — fallback via `claude --print`."
+   Provider :claude-cli — flattens messages to single prompt string."
   [provider {:keys [model temperature max-tokens]}]
   (case provider
     :glm
@@ -69,25 +82,25 @@
       (when-not token
         (throw (ex-info "NOUMENON_ZAI_TOKEN environment variable is not set"
                         {:provider :glm})))
-      (fn [prompt]
-        (invoke-api prompt {:model       model
-                            :temperature temperature
-                            :max-tokens  max-tokens
-                            :base-url    "https://api.z.ai/api/anthropic"
-                            :auth-token  token})))
+      (fn [messages]
+        (invoke-api messages {:model       model
+                              :temperature temperature
+                              :max-tokens  max-tokens
+                              :base-url    "https://api.z.ai/api/anthropic"
+                              :auth-token  token})))
 
     :claude-api
     (let [api-key (System/getenv "ANTHROPIC_API_KEY")]
       (when-not api-key
         (throw (ex-info "ANTHROPIC_API_KEY environment variable is not set. Check .env setup."
                         {:provider :claude-api})))
-      (fn [prompt]
-        (invoke-api prompt {:model       model
-                            :temperature temperature
-                            :max-tokens  max-tokens
-                            :base-url    "https://api.anthropic.com"
-                            :auth-token  api-key})))
+      (fn [messages]
+        (invoke-api messages {:model       model
+                              :temperature temperature
+                              :max-tokens  max-tokens
+                              :base-url    "https://api.anthropic.com"
+                              :auth-token  api-key})))
 
     :claude-cli
-    (fn [prompt]
-      (invoke-cli prompt (when model {:model model})))))
+    (fn [messages]
+      (invoke-cli messages (when model {:model model})))))
