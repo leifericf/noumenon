@@ -297,6 +297,14 @@
     (is (not (str/blank? content)))
     (is (str/includes? content "deps"))))
 
+(deftest git-show-rejects-colon-in-path
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid file path"
+                        (analyze/git-show "." "src/foo:bar.clj"))))
+
+(deftest git-show-rejects-null-byte-in-path
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid file path"
+                        (analyze/git-show "." (str "src/foo" (char 0) "bar.clj")))))
+
 ;; --- Tier 1: Integration tests ---
 
 (defn- make-conn

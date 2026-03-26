@@ -235,9 +235,18 @@
 
 ;; --- File content ---
 
+(defn- valid-git-path?
+  "Return true when file-path is safe to embed in a git refspec."
+  [file-path]
+  (not (or (str/includes? file-path ":")
+           (str/includes? file-path "\0"))))
+
 (defn git-show
   "Read file content from HEAD via `git show HEAD:<path>`."
   [repo-path file-path]
+  (when-not (valid-git-path? file-path)
+    (throw (ex-info "Invalid file path for git-show"
+                    {:path file-path})))
   (let [{:keys [exit out err]} (shell/sh "git" "-C" (str repo-path)
                                          "show" (str "HEAD:" file-path))]
     (when (not= 0 exit)
