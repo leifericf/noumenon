@@ -83,7 +83,7 @@
   "Load and execute a named query. Returns {:ok results} or {:error message}.
    Validates query-name against the index allowlist before loading.
    `params` is an optional map for parameterized queries."
-  ([db query-name] (run-named-query db query-name nil))
+  ([db query-name] (run-named-query db query-name {}))
   ([db query-name params]
    (if-not ((set (list-query-names)) query-name)
      {:error (str "Unknown query: " query-name

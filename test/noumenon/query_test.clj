@@ -81,6 +81,21 @@
     (is (string? error))
     (is (re-find #"Unknown query" error))))
 
+(deftest parameterized-query-without-params-reports-missing
+  (let [conn (make-conn)
+        {:keys [ok error]} (query/run-named-query (d/db conn) "file-imports")]
+    (is (nil? ok))
+    (is (string? error))
+    (is (re-find #"Missing required inputs" error))
+    (is (re-find #"file-path" error))))
+
+(deftest parameterized-query-with-params-does-not-report-missing
+  (let [conn (make-conn)]
+    (d/transact conn {:tx-data [{:file/path "src/a.clj" :file/size 100}]})
+    (let [{:keys [error]} (query/run-named-query (d/db conn) "file-imports"
+                                                 {:file-path "src/a.clj"})]
+      (is (nil? error)))))
+
 (deftest transitive-deps-rule
   (let [conn (make-conn)]
     ;; A depends-on B, B depends-on C

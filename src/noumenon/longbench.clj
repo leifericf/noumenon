@@ -56,6 +56,25 @@
         (throw (ex-info "Dataset integrity check failed: SHA-256 mismatch"
                         {:expected expected-sha256 :actual actual}))))))
 
+(def ^:private progress-interval-bytes
+  "Log download progress every 10 MB."
+  (* 10 1024 1024))
+
+(defn- copy-with-progress!
+  "Copy input stream to output stream, logging progress every `progress-interval-bytes`."
+  [^java.io.InputStream in ^java.io.OutputStream out]
+  (let [buf           (byte-array 65536)
+        last-reported (volatile! 0)]
+    (loop [total 0]
+      (let [n (.read in buf)]
+        (when (pos? n)
+          (.write out buf 0 n)
+          (let [new-total (+ total n)]
+            (when (>= (- new-total @last-reported) progress-interval-bytes)
+              (log! (str "longbench/downloading " (quot new-total (* 1024 1024)) " MB"))
+              (vreset! last-reported new-total))
+            (recur new-total)))))))
+
 (defn download-dataset!
   "Download LongBench v2 dataset from HuggingFace. Skips if already cached.
    Returns {:path str :total-items n :code-repo-items n}."
@@ -88,7 +107,7 @@
                        (when content-len (str " size=" content-len " bytes")))))
           (with-open [in (.body response)
                       out (io/output-stream tmp)]
-            (io/copy in out :buffer-size 65536))
+            (copy-with-progress! in out))
           (log! (str "longbench/download-saved path=" (.getPath tmp)
                      " bytes=" (.length tmp)))
           (Files/move (.toPath tmp) (.toPath f)
