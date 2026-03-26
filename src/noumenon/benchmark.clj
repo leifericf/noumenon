@@ -4,6 +4,7 @@
             [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
+            [noumenon.llm :as llm]
             [noumenon.query :as query])
   (:import [java.nio.file Files StandardCopyOption]
            [java.security MessageDigest]))
@@ -31,7 +32,7 @@
    Returns {:status :pass/:warn :details [...]}."
   [canary-results]
   (let [scores (mapv (fn [r] {:id (:id r) :score (:query-score r)}) canary-results)
-        all-wrong? (every? #(= :wrong (:score %)) scores)]
+        all-wrong? (every? (comp #{:wrong} :score) scores)]
     (if all-wrong?
       {:status :warn :details scores}
       {:status :pass :details scores})))
@@ -55,16 +56,17 @@
     (when (not= 0 exit)
       (throw (ex-info (str "git ls-tree failed: " (str/trim (or err "")))
                       {:exit exit})))
-    (->> (str/split-lines out)
-         (remove str/blank?)
-         (filter (fn [path]
-                   (some #(str/ends-with? path %)
-                         [".clj" ".cljs" ".cljc" ".java"])))
-         (map (fn [path]
-                (let [{:keys [out]} (shell/sh "git" "-C" (str repo-path)
-                                              "show" (str "HEAD:" path))]
-                  (str "--- " path " ---\n" out "\n"))))
-         (str/join "\n"))))
+    (let [source-ext? (fn [path]
+                        (some #(str/ends-with? path %)
+                              [".clj" ".cljs" ".cljc" ".java"]))]
+      (->> (str/split-lines out)
+           (remove str/blank?)
+           (filter source-ext?)
+           (map (fn [path]
+                  (let [{:keys [out]} (shell/sh "git" "-C" (str repo-path)
+                                                "show" (str "HEAD:" path))]
+                    (str "--- " path " ---\n" out "\n"))))
+           (str/join "\n")))))
 
 ;; --- Prompts ---
 
@@ -199,21 +201,10 @@
 
 ;; --- Usage tracking ---
 
-(def zero-usage
-  {:input-tokens 0 :output-tokens 0 :cost-usd 0.0 :duration-ms 0})
-
 (defn aggregate-usage
   "Sum usage maps from all completed stages. Returns a usage map."
   [stages]
-  (reduce (fn [acc stage-val]
-            (if-let [u (:usage stage-val)]
-              {:input-tokens  (+ (:input-tokens acc 0) (:input-tokens u 0))
-               :output-tokens (+ (:output-tokens acc 0) (:output-tokens u 0))
-               :cost-usd      (+ (:cost-usd acc 0.0) (:cost-usd u 0.0))
-               :duration-ms   (+ (:duration-ms acc 0) (:duration-ms u 0))}
-              acc))
-          zero-usage
-          (vals stages)))
+  (reduce llm/sum-usage llm/zero-usage (keep :usage (vals stages))))
 
 ;; --- Checkpoint I/O ---
 
@@ -383,7 +374,7 @@
           (println (str "bench/deterministic-score q=" (name qid)
                         " condition=" (name condition)
                         " score=" (name (:score score)))))
-        {:status :ok :result score :usage zero-usage :resolved-model nil
+        {:status :ok :result score :usage llm/zero-usage :resolved-model nil
          :completed-at (java.util.Date.)})
       ;; LLM scoring / answering
       (let [llm-fn  (if (= :judge stage-type) judge-llm invoke-llm)
@@ -671,15 +662,3 @@
        :run-id          run-id
        :checkpoint-path cp-path
        :stop-reason     stop-reason})))
-
-(defn save-results!
-  "Save benchmark results to data/benchmarks/ as EDN."
-  [results]
-  (let [dir  (io/file "data" "benchmarks")
-        ts   (System/currentTimeMillis)
-        file (io/file dir (str "benchmark-" ts ".edn"))]
-    (.mkdirs dir)
-    (spit file (pr-str results))
-    (binding [*out* *err*]
-      (println (str "Results saved to " (.getPath file))))
-    (.getPath file)))

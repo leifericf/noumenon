@@ -384,25 +384,6 @@
              "LongBench results options:"
              "  --detail              Show per-question detail table"]))
 
-(defn- provider-env
-  "Build env var map for the given provider. Throws if GLM token is missing."
-  [provider]
-  (when (= "glm" provider)
-    (let [token (System/getenv "NOUMENON_ZAI_TOKEN")]
-      (when-not token
-        (throw (ex-info "NOUMENON_ZAI_TOKEN environment variable is not set"
-                        {:provider "glm"})))
-      {"ANTHROPIC_BASE_URL"   "https://api.z.ai/api/anthropic"
-       "ANTHROPIC_AUTH_TOKEN" token})))
-
-(defn- make-invoke-llm
-  "Create an invoke-llm closure for the given model alias and env map."
-  [model env]
-  (fn [prompt]
-    (analyze/invoke-claude-cli prompt (cond-> {}
-                                        model (assoc :model model)
-                                        env   (assoc :env env)))))
-
 (defn- print-usage! []
   (binding [*out* *err*]
     (println usage-text)))
@@ -450,10 +431,13 @@
   (if-let [err (validate-repo-path repo-path)]
     (do (print-error! err) {:exit 1})
     (try
-      (let [db-dir     (resolve-db-dir opts)
-            db-name    (derive-db-name repo-path)
-            env        (provider-env (or provider "glm"))
-            invoke-llm (make-invoke-llm model env)]
+      (let [db-dir      (resolve-db-dir opts)
+            db-name     (derive-db-name repo-path)
+            provider-kw (case (or provider "claude")
+                          "glm" :glm "claude" :claude-cli
+                          "claude-api" :claude-api :claude-cli)
+            invoke-llm  (llm/make-prompt-fn
+                         (llm/make-invoke-fn provider-kw {:model model}))]
         (if-not (db-exists? db-dir db-name)
           (do (print-error! (str "No database found for \"" db-name
                                  "\". Run `import` first."))
@@ -484,15 +468,6 @@
             (do (print-error! error) {:exit 1})
             {:exit 0 :result ok}))))))
 
-(defn- model-alias->id
-  "Map model alias to full model ID for Anthropic API."
-  [alias]
-  (case alias
-    "sonnet"  "claude-sonnet-4-6-20250514"
-    "haiku"   "claude-haiku-4-5-20251001"
-    "opus"    "claude-opus-4-6-20250514"
-    alias))
-
 (defn do-agent
   "Run the agent subcommand. Returns {:exit n :result map-or-nil}.
    Unlike other subcommands, agent only needs the DB — the repo need not exist on disk."
@@ -501,7 +476,7 @@
     (let [db-dir      (resolve-db-dir opts)
           db-name     (derive-db-name repo-path)
           provider-kw (keyword (or provider "glm"))
-          model-id    (model-alias->id (or model "sonnet"))]
+          model-id    (llm/model-alias->id (or model "sonnet"))]
       (if-not (db-exists? db-dir db-name)
         (do (print-error! (str "No database found for \"" db-name
                                "\". Run `import` first."))
@@ -565,12 +540,19 @@
             db-name        (derive-db-name repo-path)
             checkpoint-dir "data/benchmarks/runs"
             provider       (or provider "glm")
+            provider-kw    (case provider
+                             "glm"       :glm
+                             "claude"    :claude-cli
+                             "claude-api" :claude-api
+                             "claude-cli" :claude-cli
+                             :claude-cli)
             model-config   {:model       model
                             :judge-model (or judge-model model)
                             :provider    provider}
-            env            (provider-env provider)
-            answer-llm     (make-invoke-llm model env)
-            judge-llm      (make-invoke-llm (or judge-model model) env)
+            answer-llm     (llm/make-prompt-fn
+                            (llm/make-invoke-fn provider-kw {:model model}))
+            judge-llm      (llm/make-prompt-fn
+                            (llm/make-invoke-fn provider-kw {:model (or judge-model model)}))
             budget         {:max-questions max-questions
                             :stop-after-ms (when stop-after (* stop-after 1000))
                             :max-cost-usd  max-cost}
@@ -663,7 +645,7 @@
   [{:keys [resume max-questions stop-after max-cost model provider concurrency min-delay]}]
   (try
     (let [provider-kw    (keyword (or provider "glm"))
-          model-id       (model-alias->id (or model "sonnet"))
+          model-id       (llm/model-alias->id (or model "sonnet"))
           checkpoint-dir "data/longbench/runs"
           invoke-llm     (llm/make-invoke-fn provider-kw
                                              {:model       model-id
@@ -769,6 +751,42 @@
                    (print-error! (.getMessage e))
                    {:exit 1}))))
 
+;; --- Error dispatch ---
+
+(def ^:private error-messages
+  "Map of error keywords to message functions. Each value is either a string
+   or a fn of parsed-args -> string."
+  {:no-args                      nil
+   :unknown-subcommand           #(str "Unknown subcommand: " (:subcommand %))
+   :no-repo-path                 "Missing <repo-path> argument."
+   :query-missing-args           "Usage: query <query-name> <repo-path>"
+   :missing-db-dir-value         "Missing value for --db-dir."
+   :unknown-flag                 #(str "Unknown option: " (:flag %))
+   :invalid-max-questions        #(str "Invalid --max-questions value: " (:value %))
+   :missing-max-questions-value  "Missing value for --max-questions."
+   :invalid-stop-after           #(str "Invalid --stop-after value: " (:value %))
+   :missing-stop-after-value     "Missing value for --stop-after."
+   :missing-model-value          "Missing value for --model."
+   :missing-judge-model-value    "Missing value for --judge-model."
+   :missing-provider-value       "Missing value for --provider."
+   :invalid-provider             #(str "Invalid --provider value: " (:value %) ". Must be 'claude' or 'glm'.")
+   :invalid-max-cost             #(str "Invalid --max-cost value: " (:value %))
+   :missing-max-cost-value       "Missing value for --max-cost."
+   :invalid-concurrency          #(str "Invalid --concurrency value: " (:value %) ". Must be 1-20.")
+   :missing-concurrency-value    "Missing value for --concurrency."
+   :invalid-min-delay            #(str "Invalid --min-delay value: " (:value %) ". Must be >= 0.")
+   :missing-min-delay-value      "Missing value for --min-delay."
+   :longbench-no-subcommand      "Missing longbench subcommand. Usage: longbench <download|run|results>"
+   :longbench-unknown-subcommand #(str "Unknown longbench subcommand: " (:longbench-command %)
+                                       ". Usage: longbench <download|run|results>")
+   :agent-missing-args           "Usage: agent <question> <repo-path> [options]"
+   :invalid-max-iterations       #(str "Invalid --max-iterations value: " (:value %))
+   :missing-max-iterations-value "Missing value for --max-iterations."})
+
+(def ^:private errors-with-usage
+  "Error keywords that should also print usage text."
+  #{:no-args :unknown-subcommand :no-repo-path :missing-db-dir-value :unknown-flag})
+
 ;; --- Entry point ---
 
 (defn run
@@ -777,115 +795,13 @@
    Benchmark subcommand prints nothing to stdout."
   [args]
   (let [parsed (parse-args args)]
-    (case (:error parsed)
-      :no-args
-      (do (print-usage!) {:exit 1})
-
-      :unknown-subcommand
-      (do (print-error! (str "Unknown subcommand: " (:subcommand parsed)))
-          (print-usage!)
+    (if-let [err (:error parsed)]
+      (do (when-let [msg-or-fn (error-messages err)]
+            (let [msg (if (fn? msg-or-fn) (msg-or-fn parsed) msg-or-fn)]
+              (print-error! msg)))
+          (when (errors-with-usage err)
+            (print-usage!))
           {:exit 1})
-
-      :no-repo-path
-      (do (print-error! "Missing <repo-path> argument.")
-          (print-usage!)
-          {:exit 1})
-
-      :query-missing-args
-      (do (print-error! "Usage: query <query-name> <repo-path>")
-          {:exit 1})
-
-      :missing-db-dir-value
-      (do (print-error! "Missing value for --db-dir.")
-          (print-usage!)
-          {:exit 1})
-
-      :unknown-flag
-      (do (print-error! (str "Unknown option: " (:flag parsed)))
-          (print-usage!)
-          {:exit 1})
-
-      :invalid-max-questions
-      (do (print-error! (str "Invalid --max-questions value: " (:value parsed)))
-          {:exit 1})
-
-      :missing-max-questions-value
-      (do (print-error! "Missing value for --max-questions.")
-          {:exit 1})
-
-      :invalid-stop-after
-      (do (print-error! (str "Invalid --stop-after value: " (:value parsed)))
-          {:exit 1})
-
-      :missing-stop-after-value
-      (do (print-error! "Missing value for --stop-after.")
-          {:exit 1})
-
-      :missing-model-value
-      (do (print-error! "Missing value for --model.")
-          {:exit 1})
-
-      :missing-judge-model-value
-      (do (print-error! "Missing value for --judge-model.")
-          {:exit 1})
-
-      :missing-provider-value
-      (do (print-error! "Missing value for --provider.")
-          {:exit 1})
-
-      :invalid-provider
-      (do (print-error! (str "Invalid --provider value: " (:value parsed)
-                             ". Must be 'claude' or 'glm'."))
-          {:exit 1})
-
-      :invalid-max-cost
-      (do (print-error! (str "Invalid --max-cost value: " (:value parsed)))
-          {:exit 1})
-
-      :missing-max-cost-value
-      (do (print-error! "Missing value for --max-cost.")
-          {:exit 1})
-
-      :invalid-concurrency
-      (do (print-error! (str "Invalid --concurrency value: " (:value parsed)
-                             ". Must be 1-20."))
-          {:exit 1})
-
-      :missing-concurrency-value
-      (do (print-error! "Missing value for --concurrency.")
-          {:exit 1})
-
-      :invalid-min-delay
-      (do (print-error! (str "Invalid --min-delay value: " (:value parsed)
-                             ". Must be >= 0."))
-          {:exit 1})
-
-      :missing-min-delay-value
-      (do (print-error! "Missing value for --min-delay.")
-          {:exit 1})
-
-      :longbench-no-subcommand
-      (do (print-error! "Missing longbench subcommand. Usage: longbench <download|run|results>")
-          {:exit 1})
-
-      :longbench-unknown-subcommand
-      (do (print-error! (str "Unknown longbench subcommand: " (:longbench-command parsed)
-                             ". Usage: longbench <download|run|results>"))
-          {:exit 1})
-
-      :agent-missing-args
-      (do (print-error! "Usage: agent <question> <repo-path> [options]")
-          {:exit 1})
-
-      :invalid-max-iterations
-      (do (print-error! (str "Invalid --max-iterations value: " (:value parsed)))
-          {:exit 1})
-
-      :missing-max-iterations-value
-      (do (print-error! "Missing value for --max-iterations.")
-          {:exit 1})
-
-      ;; no error — dispatch subcommand
       (let [result (case (:subcommand parsed)
                      "import"    (do-import parsed)
                      "analyze"   (do-analyze parsed)

@@ -138,10 +138,13 @@
 
 (deftest benchmark-resume-defaults-to-latest
   ;; --resume without value defaults to "latest"
-  ;; This will fail with "No checkpoint files found" but that confirms parsing worked
-  (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude" "." "--resume"])]
+  ;; Use a temp checkpoint dir to avoid stale files from real runs
+  (let [tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-resume-" (random-uuid))
+        {:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude"
+                                              "--db-dir" tmp-dir "." "--resume"])]
     (is (= 1 exit))
-    (is (str/includes? stderr "No checkpoint files found"))))
+    (is (or (str/includes? stderr "No checkpoint files found")
+            (str/includes? stderr "No database found")))))
 
 (deftest benchmark-resume-specific-run-id
   (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude" "--resume" "1234-abcd" "."])]

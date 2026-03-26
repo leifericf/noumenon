@@ -3,7 +3,8 @@
             [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [noumenon.benchmark :as bench])
+            [noumenon.benchmark :as bench]
+            [noumenon.llm :as llm])
   (:import [java.net URI]
            [java.net.http HttpClient HttpClient$Redirect HttpRequest
             HttpResponse$BodyHandlers]
@@ -70,7 +71,7 @@
 (defn filter-code-repo-questions
   "Filter dataset items to code repository understanding questions."
   [items]
-  (filterv #(= code-repo-domain (:domain %)) items))
+  (filterv (comp #{code-repo-domain} :domain) items))
 
 (defn load-code-repo-questions
   "Load code repo questions from cached dataset. Returns vec of maps."
@@ -205,246 +206,171 @@
     (.mkdirs (.getParentFile f))
     (spit path (str (json/write-str rec) "\n") :append true)))
 
+;; --- Shared pipeline ---
+
+(defn- run-pipeline!
+  "Run LLM pipeline over remaining questions. Shared by fresh and resume paths.
+   Returns {:stop-reason kw-or-nil}. Mutates checkpoint-atom in place."
+  [invoke-llm remaining checkpoint-atom
+   {:keys [cp-path jsonl-path total budget concurrency min-delay-ms]}]
+  (let [session-cost (atom 0.0)
+        stop-flag    (atom nil)
+        error-atom   (atom nil)
+        rate-gate    (atom 0)
+        start-ms     (System/currentTimeMillis)
+        in-ch        (async/to-chan! (vec remaining))
+        out-ch       (async/chan (max 1 (count remaining)))]
+    (async/pipeline-blocking
+     concurrency out-ch
+     (map (fn [question]
+            (try
+              (when-not @stop-flag
+                (let [completed (count (:results @checkpoint-atom))
+                      b        (budget-check completed @session-cost budget start-ms)]
+                  (if (not= :ok b)
+                    (when (compare-and-set! stop-flag nil (:exhausted b))
+                      (binding [*out* *err*]
+                        (println (str "longbench/budget-exhausted limit="
+                                      (name (:exhausted b))))))
+                    (do
+                      (bench/acquire-rate-gate! rate-gate min-delay-ms)
+                      (when-not @stop-flag
+                        (let [ctx      (truncate-middle (:context question))
+                              _        (when (not= (count ctx) (count (:context question)))
+                                         (binding [*out* *err*]
+                                           (println (str "longbench/context-truncated"
+                                                         " q=" (:_id question)
+                                                         " original=" (count (:context question))
+                                                         " truncated=" (count ctx)))))
+                              prompt   (build-prompt (assoc question :context ctx))
+                              response (invoke-llm [{:role "user" :content prompt}])
+                              pred     (extract-answer (:text response))
+                              correct  (= pred (:answer question))]
+                          (swap! session-cost + (get-in response [:usage :cost-usd] 0.0))
+                          (swap! checkpoint-atom assoc-in [:results (:_id question)]
+                                 {:prediction pred
+                                  :correct    correct
+                                  :usage      (:usage response)})
+                          (bench/checkpoint-write-latest! cp-path checkpoint-atom)
+                          (write-result-line! jsonl-path question pred (:text response))
+                          (binding [*out* *err*]
+                            (println (str "longbench/question-complete"
+                                          " q=" (:_id question)
+                                          " pred=" (or pred "nil")
+                                          " correct=" correct
+                                          " [" (count (:results @checkpoint-atom))
+                                          "/" total "]")))))))))
+              (catch Exception e
+                (when (compare-and-set! error-atom nil e)
+                  (compare-and-set! stop-flag nil :error))))
+            :done))
+     in-ch)
+    (loop [] (when (async/<!! out-ch) (recur)))
+    (when-let [e @error-atom]
+      (throw e))
+    @stop-flag))
+
+(defn- finalize-run
+  "Aggregate results, write final checkpoint, log summary. Returns result map."
+  [questions checkpoint-atom cp-path run-id start-ms stop-reason]
+  (let [result-data (for [q questions
+                          :let [r (get-in @checkpoint-atom [:results (:_id q)])]
+                          :when r]
+                      {:_id        (:_id q)
+                       :prediction (:prediction r)
+                       :answer     (:answer q)
+                       :difficulty (:difficulty q)
+                       :length     (:length q)})
+        agg         (aggregate-results result-data)
+        total-usage (reduce llm/sum-usage llm/zero-usage
+                            (keep :usage (vals (:results @checkpoint-atom))))
+        total-ms    (- (System/currentTimeMillis) start-ms)]
+    (swap! checkpoint-atom assoc :aggregate agg :total-usage total-usage)
+    (bench/checkpoint-write cp-path @checkpoint-atom)
+    (binding [*out* *err*]
+      (println (str "longbench/run-complete run-id=" run-id
+                    " accuracy=" (when (:overall agg) (format "%.1f" (:overall agg))) "%"
+                    " questions=" (:total agg)
+                    " tokens=" (:input-tokens total-usage) "/" (:output-tokens total-usage)
+                    " cost=$" (format "%.4f" (double (:cost-usd total-usage 0.0)))
+                    " duration=" total-ms "ms"
+                    (when stop-reason (str " stopped-by=" (name stop-reason)))))
+      (when stop-reason
+        (println "Resume with: clj -M:run longbench run --resume")))
+    {:results         (vec result-data)
+     :aggregate       agg
+     :total-usage     total-usage
+     :run-id          run-id
+     :checkpoint-path cp-path
+     :stop-reason     stop-reason}))
+
 ;; --- Runner ---
 
 (defn run-longbench!
   "Run LongBench v2 benchmark on code repo questions.
-   `invoke-llm` is (fn [prompt] -> {:text :usage :model}).
+   `invoke-llm` is (fn [messages] -> {:text :usage :model}).
    Returns {:results [...] :aggregate {...} :total-usage {...} :run-id str :stop-reason kw-or-nil}."
   [invoke-llm & {:keys [checkpoint-dir budget concurrency min-delay-ms]
                  :or   {checkpoint-dir "data/longbench/runs"
                         budget         {}
                         concurrency    4
                         min-delay-ms   0}}]
-  (let [questions       (load-code-repo-questions)
-        total           (count questions)
-        concurrency     (max 1 (min 20 concurrency))
-        min-delay-ms    (max 0 min-delay-ms)
-        run-id          (bench/generate-run-id)
-        cp-path         (str (io/file checkpoint-dir (str run-id ".edn")))
-        jsonl-path      (result-jsonl-path run-id)
-        start-ms        (System/currentTimeMillis)
-        session-cost    (atom 0.0)
-        stop-flag       (atom nil)
-        error-atom      (atom nil)
-        rate-gate       (atom 0)
-        checkpoint      (atom {:run-id   run-id
-                               :metadata {:started-at (java.util.Date.)
-                                          :budget     budget}
-                               :results  {}})
-        remaining       (vec questions)]
+  (let [questions    (load-code-repo-questions)
+        total        (count questions)
+        concurrency  (max 1 (min 20 concurrency))
+        min-delay-ms (max 0 min-delay-ms)
+        run-id       (bench/generate-run-id)
+        cp-path      (str (io/file checkpoint-dir (str run-id ".edn")))
+        jsonl-path   (result-jsonl-path run-id)
+        start-ms     (System/currentTimeMillis)
+        checkpoint   (atom {:run-id   run-id
+                            :metadata {:started-at (java.util.Date.)
+                                       :budget     budget}
+                            :results  {}})]
     (binding [*out* *err*]
       (println (str "longbench/run-start run-id=" run-id
                     " questions=" total
-                    (when (> concurrency 1)
-                      (str " concurrency=" concurrency))
-                    (when (pos? min-delay-ms)
-                      (str " min-delay=" min-delay-ms "ms"))
-                    (when (:max-questions budget)
-                      (str " max-questions=" (:max-questions budget))))))
-    ;; Process questions via pipeline-blocking
-    (let [in-ch  (async/to-chan! remaining)
-          out-ch (async/chan (count remaining))]
-      (async/pipeline-blocking
-       concurrency out-ch
-       (map (fn [question]
-              (try
-                (when-not @stop-flag
-                  (let [completed (count (:results @checkpoint))
-                        b        (budget-check completed @session-cost budget start-ms)]
-                    (if (not= :ok b)
-                      (when (compare-and-set! stop-flag nil (:exhausted b))
-                        (binding [*out* *err*]
-                          (println (str "longbench/budget-exhausted limit="
-                                        (name (:exhausted b))))))
-                      (do
-                        (bench/acquire-rate-gate! rate-gate min-delay-ms)
-                        (when-not @stop-flag
-                          (let [ctx      (truncate-middle (:context question))
-                                _        (when (not= (count ctx) (count (:context question)))
-                                           (binding [*out* *err*]
-                                             (println (str "longbench/context-truncated"
-                                                           " q=" (:_id question)
-                                                           " original=" (count (:context question))
-                                                           " truncated=" (count ctx)))))
-                                prompt   (build-prompt (assoc question :context ctx))
-                                response (invoke-llm [{:role "user" :content prompt}])
-                                pred     (extract-answer (:text response))
-                                correct  (= pred (:answer question))]
-                            (swap! session-cost + (get-in response [:usage :cost-usd] 0.0))
-                            (swap! checkpoint assoc-in [:results (:_id question)]
-                                   {:prediction pred
-                                    :correct    correct
-                                    :usage      (:usage response)})
-                            (bench/checkpoint-write-latest! cp-path checkpoint)
-                            (write-result-line! jsonl-path question pred (:text response))
-                            (binding [*out* *err*]
-                              (println (str "longbench/question-complete"
-                                            " q=" (:_id question)
-                                            " pred=" (or pred "nil")
-                                            " correct=" correct
-                                            " [" (count (:results @checkpoint))
-                                            "/" total "]")))))))))
-                (catch Exception e
-                  (when (compare-and-set! error-atom nil e)
-                    (compare-and-set! stop-flag nil :error))))
-              :done))
-       in-ch)
-      (loop [] (when (async/<!! out-ch) (recur))))
-    ;; Re-throw stored error
-    (when-let [e @error-atom]
-      (throw e))
-    ;; Aggregate
-    (let [stop-reason @stop-flag
-          result-data (for [q questions
-                            :let [r (get-in @checkpoint [:results (:_id q)])]
-                            :when r]
-                        {:_id        (:_id q)
-                         :prediction (:prediction r)
-                         :answer     (:answer q)
-                         :difficulty (:difficulty q)
-                         :length     (:length q)})
-          agg         (aggregate-results result-data)
-          total-usage (reduce (fn [acc [_ r]]
-                                (if-let [u (:usage r)]
-                                  {:input-tokens  (+ (:input-tokens acc 0) (:input-tokens u 0))
-                                   :output-tokens (+ (:output-tokens acc 0) (:output-tokens u 0))
-                                   :cost-usd      (+ (:cost-usd acc 0.0) (:cost-usd u 0.0))
-                                   :duration-ms   (+ (:duration-ms acc 0) (:duration-ms u 0))}
-                                  acc))
-                              bench/zero-usage
-                              (:results @checkpoint))
-          total-ms    (- (System/currentTimeMillis) start-ms)]
-      (swap! checkpoint assoc :aggregate agg :total-usage total-usage)
-      (bench/checkpoint-write cp-path @checkpoint)
-      (binding [*out* *err*]
-        (println (str "longbench/run-complete run-id=" run-id
-                      " accuracy=" (when (:overall agg) (format "%.1f" (:overall agg))) "%"
-                      " questions=" (:total agg)
-                      " tokens=" (:input-tokens total-usage) "/" (:output-tokens total-usage)
-                      " cost=$" (format "%.4f" (double (:cost-usd total-usage 0.0)))
-                      " duration=" total-ms "ms"
-                      (when stop-reason (str " stopped-by=" (name stop-reason)))))
-        (when stop-reason
-          (println "Resume with: clj -M:run longbench run --resume")))
-      {:results         (vec result-data)
-       :aggregate       agg
-       :total-usage     total-usage
-       :run-id          run-id
-       :checkpoint-path cp-path
-       :stop-reason     stop-reason})))
+                    (when (> concurrency 1) (str " concurrency=" concurrency))
+                    (when (pos? min-delay-ms) (str " min-delay=" min-delay-ms "ms"))
+                    (when (:max-questions budget) (str " max-questions=" (:max-questions budget))))))
+    (let [stop-reason (run-pipeline! invoke-llm questions checkpoint
+                                     {:cp-path cp-path :jsonl-path jsonl-path
+                                      :total total :budget budget
+                                      :concurrency concurrency :min-delay-ms min-delay-ms})]
+      (finalize-run questions checkpoint cp-path run-id start-ms stop-reason))))
 
 ;; --- Resume ---
 
 (defn run-longbench-resume!
   "Resume a LongBench v2 benchmark from checkpoint.
    Skips already-completed questions, runs remaining."
-  [invoke-llm checkpoint & {:keys [checkpoint-dir budget concurrency min-delay-ms]
-                            :or   {checkpoint-dir "data/longbench/runs"
-                                   budget         {}
-                                   concurrency    4
-                                   min-delay-ms   0}}]
-  (let [questions       (load-code-repo-questions)
-        total           (count questions)
-        concurrency     (max 1 (min 20 concurrency))
-        min-delay-ms    (max 0 min-delay-ms)
-        run-id          (:run-id checkpoint)
-        cp-path         (str (io/file checkpoint-dir (str run-id ".edn")))
-        jsonl-path      (result-jsonl-path run-id)
-        completed-ids   (set (keys (:results checkpoint)))
-        remaining       (filterv #(not (completed-ids (:_id %))) questions)
-        start-ms        (System/currentTimeMillis)
-        session-cost    (atom 0.0)
-        stop-flag       (atom nil)
-        error-atom      (atom nil)
-        rate-gate       (atom 0)
-        checkpoint-atom (atom checkpoint)]
+  [invoke-llm prior-checkpoint & {:keys [checkpoint-dir budget concurrency min-delay-ms]
+                                  :or   {checkpoint-dir "data/longbench/runs"
+                                         budget         {}
+                                         concurrency    4
+                                         min-delay-ms   0}}]
+  (let [questions     (load-code-repo-questions)
+        total         (count questions)
+        concurrency   (max 1 (min 20 concurrency))
+        min-delay-ms  (max 0 min-delay-ms)
+        run-id        (:run-id prior-checkpoint)
+        cp-path       (str (io/file checkpoint-dir (str run-id ".edn")))
+        jsonl-path    (result-jsonl-path run-id)
+        completed-ids (set (keys (:results prior-checkpoint)))
+        remaining     (filterv (comp not completed-ids :_id) questions)
+        start-ms      (System/currentTimeMillis)
+        checkpoint    (atom prior-checkpoint)]
     (binding [*out* *err*]
       (println (str "longbench/run-start run-id=" run-id
                     " questions=" total
                     " resume-from=" (count completed-ids) "/" total
                     " remaining=" (count remaining)
-                    (when (> concurrency 1)
-                      (str " concurrency=" concurrency)))))
-    (let [in-ch  (async/to-chan! remaining)
-          out-ch (async/chan (count remaining))]
-      (async/pipeline-blocking
-       concurrency out-ch
-       (map (fn [question]
-              (try
-                (when-not @stop-flag
-                  (let [completed (count (:results @checkpoint-atom))
-                        b        (budget-check completed @session-cost budget start-ms)]
-                    (if (not= :ok b)
-                      (when (compare-and-set! stop-flag nil (:exhausted b))
-                        (binding [*out* *err*]
-                          (println (str "longbench/budget-exhausted limit="
-                                        (name (:exhausted b))))))
-                      (do
-                        (bench/acquire-rate-gate! rate-gate min-delay-ms)
-                        (when-not @stop-flag
-                          (let [ctx      (truncate-middle (:context question))
-                                prompt   (build-prompt (assoc question :context ctx))
-                                response (invoke-llm [{:role "user" :content prompt}])
-                                pred     (extract-answer (:text response))
-                                correct  (= pred (:answer question))]
-                            (swap! session-cost + (get-in response [:usage :cost-usd] 0.0))
-                            (swap! checkpoint-atom assoc-in [:results (:_id question)]
-                                   {:prediction pred
-                                    :correct    correct
-                                    :usage      (:usage response)})
-                            (bench/checkpoint-write-latest! cp-path checkpoint-atom)
-                            (write-result-line! jsonl-path question pred (:text response))
-                            (binding [*out* *err*]
-                              (println (str "longbench/question-complete"
-                                            " q=" (:_id question)
-                                            " pred=" (or pred "nil")
-                                            " correct=" correct
-                                            " [" (count (:results @checkpoint-atom))
-                                            "/" total "]")))))))))
-                (catch Exception e
-                  (when (compare-and-set! error-atom nil e)
-                    (compare-and-set! stop-flag nil :error))))
-              :done))
-       in-ch)
-      (loop [] (when (async/<!! out-ch) (recur))))
-    (when-let [e @error-atom]
-      (throw e))
-    (let [stop-reason @stop-flag
-          result-data (for [q questions
-                            :let [r (get-in @checkpoint-atom [:results (:_id q)])]
-                            :when r]
-                        {:_id        (:_id q)
-                         :prediction (:prediction r)
-                         :answer     (:answer q)
-                         :difficulty (:difficulty q)
-                         :length     (:length q)})
-          agg         (aggregate-results result-data)
-          total-usage (reduce (fn [acc [_ r]]
-                                (if-let [u (:usage r)]
-                                  {:input-tokens  (+ (:input-tokens acc 0) (:input-tokens u 0))
-                                   :output-tokens (+ (:output-tokens acc 0) (:output-tokens u 0))
-                                   :cost-usd      (+ (:cost-usd acc 0.0) (:cost-usd u 0.0))
-                                   :duration-ms   (+ (:duration-ms acc 0) (:duration-ms u 0))}
-                                  acc))
-                              bench/zero-usage
-                              (:results @checkpoint-atom))
-          total-ms    (- (System/currentTimeMillis) start-ms)]
-      (swap! checkpoint-atom assoc :aggregate agg :total-usage total-usage)
-      (bench/checkpoint-write cp-path @checkpoint-atom)
-      (binding [*out* *err*]
-        (println (str "longbench/run-complete run-id=" run-id
-                      " accuracy=" (when (:overall agg) (format "%.1f" (:overall agg))) "%"
-                      " questions=" (:total agg)
-                      " cost=$" (format "%.4f" (double (:cost-usd total-usage 0.0)))
-                      " duration=" total-ms "ms"
-                      (when stop-reason (str " stopped-by=" (name stop-reason))))))
-      {:results         (vec result-data)
-       :aggregate       agg
-       :total-usage     total-usage
-       :run-id          run-id
-       :checkpoint-path cp-path
-       :stop-reason     stop-reason})))
+                    (when (> concurrency 1) (str " concurrency=" concurrency)))))
+    (let [stop-reason (run-pipeline! invoke-llm remaining checkpoint
+                                     {:cp-path cp-path :jsonl-path jsonl-path
+                                      :total total :budget budget
+                                      :concurrency concurrency :min-delay-ms min-delay-ms})]
+      (finalize-run questions checkpoint cp-path run-id start-ms stop-reason))))
 
 ;; --- Results loading ---
 

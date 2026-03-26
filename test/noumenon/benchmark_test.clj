@@ -3,6 +3,7 @@
             [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [noumenon.benchmark :as bench]
+            [noumenon.llm :as llm]
             [noumenon.query :as query]))
 
 ;; --- Helper macro ---
@@ -978,7 +979,7 @@
                    :scoring :deterministic :rubric "r" :category :single-hop}
           stages  {[:q01 :query :answer] {:status :ok :result "ring/core.clj is complex"}}
           llm-called (atom false)
-          mock-llm   (fn [_] (reset! llm-called true) {:text "" :usage bench/zero-usage})
+          mock-llm   (fn [_] (reset! llm-called true) {:text "" :usage llm/zero-usage})
           result  (bench/run-stage [:q01 :query :judge] q {} nil nil stages mock-llm mock-llm)]
       (is (false? @llm-called) "LLM should not be called for deterministic scoring")
       (is (= :correct (get-in result [:result :score])))
@@ -1082,7 +1083,7 @@
                          {:text (if (str/includes? prompt "Score this answer")
                                   (pr-str {:score :correct :reasoning "Mock"})
                                   "ring/core.clj is complex")
-                          :usage bench/zero-usage})]
+                          :usage llm/zero-usage})]
       (try
         (let [result (bench/run-benchmark! nil "." counting-llm
                                            :checkpoint-dir dir

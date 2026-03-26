@@ -114,6 +114,6 @@ After editing a source file, reload it:
 ### Quality checks
 
 - **Format**: Automatic — `clj-paren-repair-claude-hook --cljfmt` runs on every Edit/Write via hooks
-- **Lint**: `clj -M:lint`
-- **Tests**: `clj -M:test` or in the REPL: `(require '[cognitect.test-runner.api]) (cognitect.test-runner.api/test)`
+- **Lint**: `clj -M:lint 2>&1 | tail -5`
+- **Tests**: `clj -M:test 2>&1 | tail -3` — **NEVER** run tests without filtering output. The benchmark tests produce thousands of lines of stderr logging. Only read full output if the summary shows failures.
 - **Compilation**: No build step. Requiring a namespace compiles it — use `(require '[noumenon.foo] :reload)` to verify

@@ -1,18 +1,14 @@
 (ns noumenon.analyze
-  (:require [clojure.data.json :as json]
-            [clojure.edn :as edn]
+  (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
-            [datomic.client.api :as d])
+            [datomic.client.api :as d]
+            [noumenon.llm :as llm])
   (:import [java.security MessageDigest]
            [java.util Date]))
 
 ;; --- Constants ---
-
-(def zero-usage
-  "Default usage map with all fields zeroed."
-  {:input-tokens 0 :output-tokens 0 :cost-usd 0.0 :duration-ms 0})
 
 (def ^:private max-string-length 4096)
 
@@ -60,7 +56,7 @@
     (subs s 0 max-string-length)
     s))
 
-(defn- strip-markdown-fences
+(defn strip-markdown-fences
   "Remove markdown code fences from LLM output."
   [s]
   (-> s
@@ -160,51 +156,6 @@
                     :prov/analyzed-at    (Date.)}]
       (into [file-tx prov-tx] seg-txs))))
 
-;; --- LLM invocation ---
-
-(defn invoke-claude-cli
-  "Invoke Claude Code CLI with the given prompt. Returns {:text string :usage map}.
-   Accepts optional opts map with :model (string) and :env (map of env vars).
-   Falls back to raw text + zero usage if JSON parse fails."
-  ([prompt] (invoke-claude-cli prompt {}))
-  ([prompt opts]
-   (let [start-ms (System/currentTimeMillis)
-         cmd      (cond-> ["claude" "--print" "--output-format" "json"]
-                    (:model opts) (into ["--model" (:model opts)])
-                    true          (into ["-p" prompt]))
-         pb       (ProcessBuilder. ^java.util.List (vec cmd))
-         _        (when-let [extra (:env opts)]
-                    (let [env (.environment pb)]
-                      (doseq [[k v] extra]
-                        (.put env (str k) (str v)))))
-         proc     (.start pb)
-         out-f    (future (slurp (.getInputStream proc)))
-         err-f    (future (slurp (.getErrorStream proc)))
-         exit     (.waitFor proc)
-         out-str  @out-f
-         err-str  @err-f
-         dur-ms   (- (System/currentTimeMillis) start-ms)]
-     (when (not= 0 exit)
-       (throw (ex-info (str "Claude CLI failed: " (str/trim (or err-str "")))
-                       {:exit exit})))
-     (let [parsed (try (json/read-str out-str :key-fn keyword)
-                       (catch Exception _ nil))]
-       (if (and (map? parsed) (contains? parsed :result))
-         {:text           (:result parsed)
-          :usage          (merge zero-usage
-                                 (when-let [u (:usage parsed)]
-                                   (cond-> {}
-                                     (:input_tokens u)  (assoc :input-tokens (:input_tokens u))
-                                     (:output_tokens u) (assoc :output-tokens (:output_tokens u))))
-                                 (when-let [c (:total_cost_usd parsed)]
-                                   {:cost-usd c})
-                                 {:duration-ms dur-ms})
-          :resolved-model (:model parsed)}
-         (do (binding [*out* *err*]
-               (println "Warning: Claude CLI returned non-JSON output, using raw text with zero usage"))
-             {:text  out-str
-              :usage (assoc zero-usage :duration-ms dur-ms)}))))))
-
 ;; --- File content ---
 
 (defn git-show
@@ -273,14 +224,6 @@
           (println (str "  Error analyzing " path ": " (.getMessage e))))
         {:status :error}))))
 
-(defn- sum-usage
-  "Sum two usage maps."
-  [a b]
-  {:input-tokens  (+ (:input-tokens a 0) (:input-tokens b 0))
-   :output-tokens (+ (:output-tokens a 0) (:output-tokens b 0))
-   :cost-usd      (+ (:cost-usd a 0.0) (:cost-usd b 0.0))
-   :duration-ms   (+ (:duration-ms a 0) (:duration-ms b 0))})
-
 (defn analyze-repo!
   "Analyze all source files in repo-path that need analysis.
    `invoke-llm` is a function (prompt -> {:text string :usage map}) for testability.
@@ -297,7 +240,7 @@
       (do (binding [*out* *err*]
             (println "All files already analyzed, nothing to do."))
           {:files-analyzed 0 :files-skipped 0 :files-errored 0 :elapsed-ms 0
-           :total-usage zero-usage})
+           :total-usage llm/zero-usage})
       (do
         (binding [*out* *err*]
           (println (str "Analyzing " total " files...")))
@@ -319,8 +262,8 @@
                                                   "/" (:output-tokens usage))))))
                            (-> acc
                                (update status (fnil inc 0))
-                               (update :total-usage sum-usage (or usage zero-usage)))))
-                       {:ok 0 :parse-error 0 :error 0 :total-usage zero-usage}
+                               (update :total-usage llm/sum-usage (or usage llm/zero-usage)))))
+                       {:ok 0 :parse-error 0 :error 0 :total-usage llm/zero-usage}
                        (map-indexed vector files))
               elapsed (- (System/currentTimeMillis) start-ms)
               tu      (:total-usage results)]

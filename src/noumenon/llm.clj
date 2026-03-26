@@ -1,8 +1,21 @@
 (ns noumenon.llm
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
-            [noumenon.analyze :as analyze]
             [org.httpkit.client :as http]))
+
+;; --- Usage tracking ---
+
+(def zero-usage
+  "Default usage map with all fields zeroed."
+  {:input-tokens 0 :output-tokens 0 :cost-usd 0.0 :duration-ms 0})
+
+(defn sum-usage
+  "Sum two usage maps."
+  [a b]
+  {:input-tokens  (+ (:input-tokens a 0) (:input-tokens b 0))
+   :output-tokens (+ (:output-tokens a 0) (:output-tokens b 0))
+   :cost-usd      (+ (:cost-usd a 0.0) (:cost-usd b 0.0))
+   :duration-ms   (+ (:duration-ms a 0) (:duration-ms b 0))})
 
 ;; --- Direct API invocation ---
 
@@ -49,7 +62,52 @@
                :duration-ms   dur-ms}
        :model (:model parsed)})))
 
-;; --- Claude CLI wrapper ---
+;; --- Claude CLI invocation ---
+
+(defn invoke-claude-cli
+  "Invoke Claude Code CLI with the given prompt. Returns {:text string :usage map}.
+   Accepts optional opts map with :model (string) and :env (map of env vars).
+   Falls back to raw text + zero usage if JSON parse fails."
+  ([prompt] (invoke-claude-cli prompt {}))
+  ([prompt opts]
+   (let [start-ms (System/currentTimeMillis)
+         cmd      (cond-> ["claude" "--print" "--output-format" "json"]
+                    (:model opts) (into ["--model" (:model opts)])
+                    true          (into ["-p" prompt]))
+         pb       (ProcessBuilder. ^java.util.List (vec cmd))
+         _        (when-let [extra (:env opts)]
+                    (let [env (.environment pb)]
+                      (doseq [[k v] extra]
+                        (.put env (str k) (str v)))))
+         proc     (.start pb)
+         out-f    (future (slurp (.getInputStream proc)))
+         err-f    (future (slurp (.getErrorStream proc)))
+         exit     (.waitFor proc)
+         out-str  @out-f
+         err-str  @err-f
+         dur-ms   (- (System/currentTimeMillis) start-ms)]
+     (when (not= 0 exit)
+       (throw (ex-info (str "Claude CLI failed: " (str/trim (or err-str "")))
+                       {:exit exit})))
+     (let [parsed (try (json/read-str out-str :key-fn keyword)
+                       (catch Exception _ nil))]
+       (if (and (map? parsed) (contains? parsed :result))
+         {:text           (:result parsed)
+          :usage          (merge zero-usage
+                                 (when-let [u (:usage parsed)]
+                                   (cond-> {}
+                                     (:input_tokens u)  (assoc :input-tokens (:input_tokens u))
+                                     (:output_tokens u) (assoc :output-tokens (:output_tokens u))))
+                                 (when-let [c (:total_cost_usd parsed)]
+                                   {:cost-usd c})
+                                 {:duration-ms dur-ms})
+          :resolved-model (:model parsed)}
+         (do (binding [*out* *err*]
+               (println "Warning: Claude CLI returned non-JSON output, using raw text with zero usage"))
+             {:text  out-str
+              :usage (assoc zero-usage :duration-ms dur-ms)}))))))
+
+;; --- CLI message flattening ---
 
 (defn flatten-messages
   "Flatten a messages vector into a single prompt string for CLI invocation.
@@ -63,7 +121,18 @@
 (defn invoke-cli
   "Invoke Claude via CLI. Flattens messages to a single prompt string."
   [messages opts]
-  (analyze/invoke-claude-cli (flatten-messages messages) opts))
+  (invoke-claude-cli (flatten-messages messages) opts))
+
+;; --- Model aliases ---
+
+(defn model-alias->id
+  "Map model alias to full model ID for Anthropic API."
+  [alias]
+  (case alias
+    "sonnet"  "claude-sonnet-4-6-20250514"
+    "haiku"   "claude-haiku-4-5-20251001"
+    "opus"    "claude-opus-4-6-20250514"
+    alias))
 
 ;; --- Provider factory ---
 
@@ -104,3 +173,10 @@
     :claude-cli
     (fn [messages]
       (invoke-cli messages (when model {:model model})))))
+
+(defn make-prompt-fn
+  "Wrap a messages-based invoke fn into a string-prompt fn.
+   Returns (fn [prompt-string] -> {:text :usage :resolved-model})."
+  [invoke-fn]
+  (fn [prompt]
+    (invoke-fn [{:role "user" :content prompt}])))

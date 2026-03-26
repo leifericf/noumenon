@@ -2,6 +2,7 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [datomic.client.api :as d]
+            [noumenon.analyze :as analyze]
             [noumenon.query :as query]))
 
 ;; --- Prompt assembly ---
@@ -36,11 +37,7 @@
    Strips markdown fences if present. Returns the parsed map or
    {:parse-error string} if unparseable."
   [text]
-  (let [cleaned (-> text
-                    str/trim
-                    (str/replace #"^```(?:edn|clojure)?\s*" "")
-                    (str/replace #"\s*```$" "")
-                    str/trim)]
+  (let [cleaned (analyze/strip-markdown-fences text)]
     (try
       (let [parsed (edn/read-string cleaned)]
         (if (map? parsed)
