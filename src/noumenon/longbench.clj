@@ -1,12 +1,12 @@
 (ns noumenon.longbench
   (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [noumenon.benchmark :as bench]
-            [noumenon.cli :as cli]
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
-            [noumenon.util :refer [log!]])
+            [noumenon.util :as util :refer [log!]])
   (:import [java.net URI]
            [java.net.http HttpClient HttpClient$Redirect HttpRequest
             HttpResponse$BodyHandlers]
@@ -121,6 +121,66 @@
            (json/read rdr :key-fn keyword))
          filter-code-repo-questions)))
 
+;; --- Experiment config ---
+
+(def ^:private config-defaults
+  {:dataset/path   data-file
+   :dataset/domain code-repo-domain
+   :budgets        {}
+   :execution      {:concurrency 3 :min-delay-ms 0 :repeats 1}
+   :output/dir     "data/longbench/experiments/"})
+
+(defn load-experiment-config
+  "Load experiment config from an EDN file. Returns the parsed map."
+  [path]
+  (edn/read-string (slurp path)))
+
+(defn validate-experiment-config
+  "Validate required fields in experiment config.
+   Returns {:ok config} or {:error message}."
+  [config]
+  (cond
+    (not (string? (:experiment/name config)))
+    {:error "Missing or invalid :experiment/name (must be a string)"}
+
+    (not (seq (:arms config)))
+    {:error "Missing or empty :arms (must be a non-empty vector)"}
+
+    (not (every? :arm/name (:arms config)))
+    {:error "Every arm must have :arm/name"}
+
+    (not (every? :arm/type (:arms config)))
+    {:error "Every arm must have :arm/type"}
+
+    (not (get-in config [:model :provider]))
+    {:error "Missing :model :provider"}
+
+    (not (get-in config [:model :alias]))
+    {:error "Missing :model :alias"}
+
+    :else {:ok config}))
+
+(defn resolve-config-defaults
+  "Merge defaults for optional config fields."
+  [config]
+  (-> (merge-with (fn [default override]
+                    (if (map? default)
+                      (merge default override)
+                      (or override default)))
+                  config-defaults config)
+      (update :execution #(merge (:execution config-defaults) %))))
+
+(defn config-hash
+  "Compute a reproducibility hash of the config. Excludes :output/dir."
+  [config]
+  (util/sha256-hex (pr-str (dissoc config :output/dir))))
+
+(defn resolve-model-config
+  "Resolve model provider and alias to concrete provider keyword and model ID."
+  [{:keys [provider alias]}]
+  {:provider-kw (llm/provider->kw provider)
+   :model-id    (llm/model-alias->id alias)})
+
 ;; --- Prompt building ---
 
 (def ^:private prompt-template
@@ -200,18 +260,39 @@
      :long     (accuracy (get by-len "long"))
      :total    (count scored)}))
 
-;; Budget check: reuse benchmark's with stages-per-question=1
-;; (longbench counts 1 question = 1 unit, not 4 stages)
+;; --- Arm runners ---
+
+(defn run-pure-llm-arm
+  "Pure-LLM arm: build prompt from question context, invoke LLM, extract answer.
+   Returns {:prediction str|nil :response str :usage map :timing-ms long}."
+  [{:keys [question invoke-llm]}]
+  (let [start-ms (System/currentTimeMillis)
+        raw-ctx  (:context question)
+        ctx      (truncate-middle raw-ctx)
+        _        (when (not= (count ctx) (count raw-ctx))
+                   (log! (str "longbench/context-truncated"
+                              " q=" (:_id question)
+                              " original=" (count raw-ctx)
+                              " truncated=" (count ctx))))
+        prompt   (build-prompt (assoc question :context ctx))
+        response (invoke-llm [{:role "user" :content prompt}])]
+    {:prediction (extract-answer (:text response))
+     :response   (:text response)
+     :usage      (:usage response)
+     :timing-ms  (- (System/currentTimeMillis) start-ms)}))
+
+(defn resolve-arm-runner
+  "Resolve an arm type keyword to its runner function. Throws on unknown type."
+  [arm-type]
+  (case arm-type
+    :pure-llm run-pure-llm-arm
+    (throw (ex-info (str "Unknown arm type: " arm-type
+                         ". Known types: :pure-llm")
+                    {:arm-type arm-type}))))
 
 ;; --- Per-question result JSONL ---
 
 (def ^:private jsonl-lock (Object.))
-
-(defn- result-jsonl-path
-  "Path for per-question JSONL results. Validates run-id to prevent path traversal."
-  [run-id]
-  (bench/validate-run-id run-id)
-  (str "data/longbench/results/" run-id ".jsonl"))
 
 (defn- write-result-line!
   "Append one result line to JSONL file."
@@ -237,27 +318,20 @@
 ;; --- Shared pipeline ---
 
 (defn- run-and-record-question!
-  "Invoke LLM for one question, record prediction in checkpoint and JSONL."
-  [{:keys [question invoke-llm checkpoint-atom cp-path jsonl-path total session-cost]}]
-  (let [raw-ctx  (:context question)
-        ctx      (truncate-middle raw-ctx)
-        _        (when (not= (count ctx) (count raw-ctx))
-                   (log! (str "longbench/context-truncated"
-                              " q=" (:_id question)
-                              " original=" (count raw-ctx)
-                              " truncated=" (count ctx))))
-        prompt   (build-prompt (assoc question :context ctx))
-        response (invoke-llm [{:role "user" :content prompt}])
-        pred     (extract-answer (:text response))
-        correct  (= pred (:answer question))]
-    (swap! session-cost + (get-in response [:usage :cost-usd] 0.0))
+  "Run arm runner for one question, record prediction in checkpoint and JSONL."
+  [{:keys [question invoke-llm arm-runner checkpoint-atom cp-path jsonl-path
+           total session-cost]}]
+  (let [{:keys [prediction response usage]} (arm-runner {:question   question
+                                                         :invoke-llm invoke-llm})
+        correct (= prediction (:answer question))]
+    (swap! session-cost + (get usage :cost-usd 0.0))
     (swap! checkpoint-atom assoc-in [:results (:_id question)]
-           {:prediction pred :correct correct :usage (:usage response)})
+           {:prediction prediction :correct correct :usage usage})
     (bench/checkpoint-write-latest! cp-path checkpoint-atom)
-    (write-result-line! jsonl-path question pred (:text response))
+    (write-result-line! jsonl-path question prediction response)
     (log! (str "longbench/question-complete"
                " q=" (:_id question)
-               " pred=" (or pred "nil")
+               " pred=" (or prediction "nil")
                " correct=" correct
                " [" (count (:results @checkpoint-atom)) "/" total "]"))))
 
@@ -280,13 +354,15 @@
   "Run LLM pipeline over remaining questions. Shared by fresh and resume paths.
    Returns stop-reason keyword or nil. Mutates checkpoint-atom in place."
   [invoke-llm remaining checkpoint-atom
-   {:keys [cp-path jsonl-path total budget concurrency min-delay-ms]}]
+   {:keys [cp-path jsonl-path total budget concurrency min-delay-ms arm-runner]}]
   (let [session-cost (atom 0.0)
         stop-flag    (atom nil)
         error-atom   (atom nil)
         rate-gate    (atom 0)
         start-ms     (System/currentTimeMillis)
+        arm-runner   (or arm-runner run-pure-llm-arm)
         shared       {:invoke-llm invoke-llm :checkpoint-atom checkpoint-atom
+                      :arm-runner arm-runner
                       :cp-path cp-path :jsonl-path jsonl-path :total total
                       :session-cost session-cost :stop-flag stop-flag
                       :budget budget :start-ms start-ms
@@ -324,7 +400,7 @@
                " duration=" total-ms "ms"
                (when stop-reason (str " stopped-by=" (name stop-reason)))))
     (when stop-reason
-      (log! (str "Resume with: " cli/program-name " longbench run --resume")))
+      (log! "Re-run the experiment to retry remaining questions."))
     {:results         (vec result-data)
      :aggregate       agg
      :total-usage     total-usage
@@ -332,85 +408,163 @@
      :checkpoint-path cp-path
      :stop-reason     stop-reason}))
 
-;; --- Runner ---
+;; --- Experiment orchestrator ---
 
-(defn run-longbench!
-  "Run LongBench v2 benchmark on code repo questions.
-   `invoke-llm` is (fn [messages] -> {:text :usage :model}).
-   Returns {:results [...] :aggregate {...} :total-usage {...} :run-id str :stop-reason kw-or-nil}."
-  [invoke-llm & {:keys [checkpoint-dir budget concurrency min-delay-ms]
-                 :or   {checkpoint-dir "data/longbench/runs"
-                        budget         {}
-                        concurrency    3
-                        min-delay-ms   0}}]
-  (let [questions    (load-code-repo-questions)
-        total        (count questions)
-        concurrency  (max 1 (min 20 concurrency))
-        min-delay-ms (max 0 min-delay-ms)
-        run-id       (bench/generate-run-id)
-        cp-path      (str (io/file checkpoint-dir (str run-id ".edn")))
-        jsonl-path   (result-jsonl-path run-id)
-        start-ms     (System/currentTimeMillis)
-        checkpoint   (atom {:run-id   run-id
-                            :metadata {:started-at (java.util.Date.)
-                                       :budget     budget}
-                            :results  {}})]
-    (log! (str "longbench/run-start run-id=" run-id
+(defn ensure-dataset!
+  "Ensure dataset exists at the configured path. Downloads if missing. Returns path."
+  [dataset-path]
+  (if (.exists (io/file dataset-path))
+    dataset-path
+    (do (download-dataset!) dataset-path)))
+
+(defn- dataset-hash
+  "Compute SHA-256 of the dataset file for reproducibility metadata."
+  [dataset-path]
+  (sha256-hex (io/file dataset-path)))
+
+(defn- git-sha
+  "Get current project git SHA, or nil if not in a git repo."
+  []
+  (try
+    (let [p (.start (ProcessBuilder. ["git" "rev-parse" "HEAD"]))]
+      (str/trim (slurp (.getInputStream p))))
+    (catch Exception _ nil)))
+
+(defn build-experiment-metadata
+  "Build metadata map for an experiment run."
+  [config config-hash-str dataset-path model-config]
+  {:git-sha       (git-sha)
+   :config-hash   config-hash-str
+   :dataset-hash  (dataset-hash dataset-path)
+   :model         model-config
+   :started-at    (java.util.Date.)
+   :experiment    (:experiment/name config)})
+
+(defn- experiment-output-dir
+  "Build output directory path for one arm run."
+  [base-dir experiment-name arm-name run-id]
+  (str (io/file base-dir experiment-name arm-name run-id)))
+
+(defn run-experiment-arm!
+  "Run one arm of the experiment. Returns result map."
+  [invoke-llm questions arm config metadata]
+  (let [{:keys [concurrency min-delay-ms]} (:execution config)
+        output-dir  (:output/dir config)
+        arm-name    (:arm/name arm)
+        arm-runner  (resolve-arm-runner (:arm/type arm))
+        run-id      (bench/generate-run-id)
+        out-dir     (experiment-output-dir output-dir
+                                           (:experiment/name config)
+                                           arm-name run-id)
+        cp-path     (str (io/file out-dir "checkpoint.edn"))
+        jsonl-path  (str (io/file out-dir "results.jsonl"))
+        total       (count questions)
+        budget      (let [b (:budgets config)]
+                      {:max-questions  (:max-questions b)
+                       :max-cost-usd   (:max-cost-usd b)
+                       :stop-after-ms  (when-let [s (:stop-after-s b)]
+                                         (* s 1000))})
+        start-ms    (System/currentTimeMillis)
+        checkpoint  (atom {:run-id   run-id
+                           :metadata (merge metadata {:arm arm-name})
+                           :results  {}})]
+    (.mkdirs (io/file out-dir))
+    (log! (str "longbench/arm-start arm=" arm-name
+               " run-id=" run-id
                " questions=" total
-               (when (> concurrency 1) (str " concurrency=" concurrency))
-               (when (pos? min-delay-ms) (str " min-delay=" min-delay-ms "ms"))
-               (when (:max-questions budget) (str " max-questions=" (:max-questions budget)))))
+               (when (> concurrency 1) (str " concurrency=" concurrency))))
     (let [stop-reason (run-pipeline! invoke-llm questions checkpoint
                                      {:cp-path cp-path :jsonl-path jsonl-path
                                       :total total :budget budget
-                                      :concurrency concurrency :min-delay-ms min-delay-ms})]
-      (finalize-run questions checkpoint cp-path run-id start-ms stop-reason))))
+                                      :concurrency concurrency
+                                      :min-delay-ms min-delay-ms
+                                      :arm-runner arm-runner})
+          result      (finalize-run questions checkpoint cp-path
+                                    run-id start-ms stop-reason)]
+      (log! (str "longbench/arm-complete arm=" arm-name
+                 " accuracy=" (when-let [o (:overall (:aggregate result))]
+                                (format "%.1f" o)) "%"
+                 " cost=$" (format "%.4f"
+                                   (double (get-in result [:total-usage :cost-usd] 0.0)))))
+      (assoc result :arm-name arm-name :output-dir out-dir))))
 
-;; --- Resume ---
+(defn- write-experiment-summary!
+  "Write experiment summary EDN to the output directory."
+  [output-dir experiment-name summary]
+  (let [dir  (io/file output-dir experiment-name)
+        path (io/file dir "summary.edn")]
+    (.mkdirs dir)
+    (spit path (pr-str summary))))
 
-(defn run-longbench-resume!
-  "Resume a LongBench v2 benchmark from checkpoint.
-   Skips already-completed questions, runs remaining."
-  [invoke-llm prior-checkpoint & {:keys [checkpoint-dir budget concurrency min-delay-ms]
-                                  :or   {checkpoint-dir "data/longbench/runs"
-                                         budget         {}
-                                         concurrency    3
-                                         min-delay-ms   0}}]
-  (let [questions     (load-code-repo-questions)
-        total         (count questions)
-        concurrency   (max 1 (min 20 concurrency))
-        min-delay-ms  (max 0 min-delay-ms)
-        run-id        (:run-id prior-checkpoint)
-        cp-path       (str (io/file checkpoint-dir (str run-id ".edn")))
-        jsonl-path    (result-jsonl-path run-id)
-        completed-ids (set (keys (:results prior-checkpoint)))
-        remaining     (filterv (comp not completed-ids :_id) questions)
-        start-ms      (System/currentTimeMillis)
-        checkpoint    (atom prior-checkpoint)]
-    (log! (str "longbench/run-start run-id=" run-id
-               " questions=" total
-               " resume-from=" (count completed-ids) "/" total
-               " remaining=" (count remaining)
-               (when (> concurrency 1) (str " concurrency=" concurrency))))
-    (let [stop-reason (run-pipeline! invoke-llm remaining checkpoint
-                                     {:cp-path cp-path :jsonl-path jsonl-path
-                                      :total total :budget budget
-                                      :concurrency concurrency :min-delay-ms min-delay-ms})]
-      (finalize-run questions checkpoint cp-path run-id start-ms stop-reason))))
+(defn generate-experiment-report
+  "Generate a markdown report string from experiment results."
+  [{:keys [metadata arm-results]}]
+  (let [header (str "# Experiment: " (:experiment metadata) "\n\n"
+                    "- Git SHA: " (or (:git-sha metadata) "unknown") "\n"
+                    "- Config hash: " (:config-hash metadata) "\n"
+                    "- Dataset hash: " (subs (or (:dataset-hash metadata) "") 0
+                                             (min 16 (count (or (:dataset-hash metadata) "")))) "\n"
+                    "- Model: " (get-in metadata [:model :model-id]) "\n"
+                    "- Provider: " (name (get-in metadata [:model :provider-kw])) "\n"
+                    "- Date: " (:started-at metadata) "\n")]
+    (str header "\n"
+         (str/join "\n"
+                   (for [{:keys [arm-name aggregate total-usage]} arm-results]
+                     (let [fmt (fn [v] (if v (format "%.1f%%" (double v)) "n/a"))]
+                       (str "## Arm: " arm-name "\n\n"
+                            "| Metric | Value |\n"
+                            "|--------|-------|\n"
+                            "| Overall | " (fmt (:overall aggregate)) " |\n"
+                            "| Easy | " (fmt (:easy aggregate)) " |\n"
+                            "| Hard | " (fmt (:hard aggregate)) " |\n"
+                            "| Short | " (fmt (:short aggregate)) " |\n"
+                            "| Medium | " (fmt (:medium aggregate)) " |\n"
+                            "| Long | " (fmt (:long aggregate)) " |\n"
+                            "| Questions | " (:total aggregate) " |\n"
+                            "| Cost | $" (format "%.4f"
+                                                 (double (get total-usage :cost-usd 0.0)))
+                            " |\n")))))))
 
-;; --- Results loading ---
-
-(defn load-results
-  "Load per-question results from JSONL file. Returns vec of maps."
-  [run-id]
-  (let [path (result-jsonl-path run-id)
-        f    (io/file path)]
-    (when (.exists f)
-      (->> (str/split-lines (slurp f))
-           (remove str/blank?)
-           (mapv #(json/read-str % :key-fn keyword))))))
-
-(defn find-latest-run
-  "Find the most recent run ID from checkpoint files."
-  []
-  (bench/find-checkpoint "data/longbench/runs" "latest"))
+(defn run-experiment!
+  "Run a complete experiment from config. Returns experiment result map."
+  [config]
+  (let [config       (resolve-config-defaults config)
+        {:keys [error]} (validate-experiment-config config)]
+    (when error (throw (ex-info error {:config config})))
+    (let [cfg-hash    (config-hash config)
+          model-cfg   (resolve-model-config (:model config))
+          dataset-path (ensure-dataset! (:dataset/path config))
+          questions    (load-code-repo-questions)
+          invoke-llm   (llm/make-invoke-fn (:provider-kw model-cfg)
+                                           {:model       (:model-id model-cfg)
+                                            :temperature 0.1
+                                            :max-tokens  128})
+          metadata     (build-experiment-metadata config cfg-hash
+                                                  dataset-path model-cfg)
+          repeats      (get-in config [:execution :repeats] 1)]
+      (when (= :claude-cli (:provider-kw model-cfg))
+        (log! "longbench/param-deviation provider=claude-cli temperature=default max_tokens=default"))
+      (log! (str "longbench/experiment-start"
+                 " experiment=" (:experiment/name config)
+                 " arms=" (count (:arms config))
+                 " questions=" (count questions)
+                 " repeats=" repeats))
+      (let [arm-results (vec (for [arm     (:arms config)
+                                   rep     (range repeats)]
+                               (do (when (> repeats 1)
+                                     (log! (str "longbench/repeat " (inc rep) "/" repeats)))
+                                   (run-experiment-arm! invoke-llm questions
+                                                        arm config metadata))))
+            summary     {:metadata    metadata
+                         :config-hash cfg-hash
+                         :arm-results (mapv #(select-keys % [:arm-name :aggregate
+                                                             :total-usage :run-id
+                                                             :stop-reason :output-dir])
+                                            arm-results)}
+            report      (generate-experiment-report summary)]
+        (write-experiment-summary! (:output/dir config)
+                                   (:experiment/name config) summary)
+        (log!)
+        (log! report)
+        (log! "longbench/experiment-complete")
+        summary))))

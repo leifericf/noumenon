@@ -212,25 +212,11 @@
    :initial {:subcommand "benchmark"}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
-(def ^:private longbench-run-command-spec
-  {:flags (vec (concat [{:flag "--model" :key :model :parse :string
-                         :desc "Model alias (e.g. sonnet, haiku, opus)"
-                         :error-missing :missing-model-value}
-                        {:flag "--provider" :key :provider :parse :string
-                         :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
-                         :valid all-valid-providers
-                         :error-invalid :invalid-provider
-                         :error-missing :missing-provider-value}]
-                       concurrency-flags
-                       budget-flags
-                       [resume-flag]))
-   :initial {:subcommand "longbench" :longbench-command "run"}})
-
-(def ^:private longbench-results-command-spec
-  {:flags [{:flag "--detail" :key :detail :parse :bool
-            :desc "Show per-question detail table"}]
-   :initial {:subcommand "longbench" :longbench-command "results"}
-   :positionals {:required 0 :error nil :keys [:run-id]}})
+(def ^:private longbench-experiment-command-spec
+  {:flags [{:flag "--config" :key :config :parse :string
+            :desc "Path to experiment config EDN file"
+            :error-missing :missing-config-value}]
+   :initial {:subcommand "longbench" :longbench-command "experiment"}})
 
 (def ^:private agent-command-spec
   {:flags [{:flag "-q" :key :question :parse :string
@@ -317,15 +303,12 @@
                 :summary "Start MCP server (JSON-RPC over stdio)"
                 :usage "serve [options]"}
    "longbench" {:spec {:subcommands
-                       {"download" {:summary "Download LongBench v2 dataset"}
-                        "run"      {:spec longbench-run-command-spec
-                                    :summary "Run LongBench v2 benchmark"
-                                    :usage "longbench run [options]"}
-                        "results"  {:spec longbench-results-command-spec
-                                    :summary "Show results for a run"
-                                    :usage "longbench results [options] [run-id]"}}}
-                :summary "Run LongBench v2 standard benchmark"
-                :usage "longbench <download|run|results> [options]"}})
+                       {"download"   {:summary "Download LongBench v2 dataset"}
+                        "experiment" {:spec longbench-experiment-command-spec
+                                      :summary "Run a config-driven experiment"
+                                      :usage "longbench experiment --config <path>"}}}
+                :summary "LongBench v2 experiment framework"
+                :usage "longbench <download|experiment> [options]"}})
 
 (def ^:private command-order
   ["import" "analyze" "postprocess" "sync" "watch" "query" "status" "databases" "agent" "serve" "benchmark" "longbench"])
@@ -371,17 +354,12 @@
                  (mapv (fn [[name {:keys [summary]}]]
                          (format "  %-12s %s" name summary))
                        subs)
-                 (let [run-spec (get-in subs ["run" :spec])
-                       res-spec (get-in subs ["results" :spec])]
-                   (concat
-                    (when (seq (:flags run-spec))
-                      [""
-                       "Run options:"
-                       (format-flags (:flags run-spec))])
-                    (when (seq (:flags res-spec))
-                      [""
-                       "Results options:"
-                       (format-flags (:flags res-spec))])))))
+                 (mapcat (fn [[sub-name {:keys [spec]}]]
+                           (when (seq (:flags spec))
+                             [""
+                              (str (str/capitalize sub-name) " options:")
+                              (format-flags (:flags spec))]))
+                         subs)))
       ;; Normal subcommand
       (str/join "\n"
                 (cond-> [(str summary)
@@ -494,15 +472,15 @@
             (assoc :skip-raw true :skip-judge true)
             (dissoc :fast))))))
 
-(defn parse-longbench-run-args [args]
+(defn parse-longbench-experiment-args [args]
   (if (contains-help? args)
     {:help "longbench"}
-    (parse-command longbench-run-command-spec args)))
-
-(defn parse-longbench-results-args [args]
-  (if (contains-help? args)
-    {:help "longbench"}
-    (parse-command longbench-results-command-spec args)))
+    (let [result (parse-command longbench-experiment-command-spec args)]
+      (if (:error result)
+        result
+        (if-not (:config result)
+          {:error :missing-config-value}
+          result)))))
 
 (defn parse-longbench-args [args]
   (cond
@@ -515,9 +493,8 @@
     :else
     (let [[sub & rest-args] args]
       (case sub
-        "download" {:subcommand "longbench" :longbench-command "download"}
-        "run"      (parse-longbench-run-args rest-args)
-        "results"  (parse-longbench-results-args rest-args)
+        "download"   {:subcommand "longbench" :longbench-command "download"}
+        "experiment" (parse-longbench-experiment-args rest-args)
         {:error :longbench-unknown-subcommand
          :subcommand "longbench"
          :longbench-command sub}))))

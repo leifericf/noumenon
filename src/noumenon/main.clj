@@ -501,129 +501,36 @@
 
 ;; --- LongBench ---
 
-(defn- do-longbench-run
-  [{:keys [resume max-questions stop-after max-cost model provider concurrency min-delay]}]
-  (try
-    (let [provider-kw    (llm/provider->kw (or provider llm/default-provider))
-          model-id       (llm/model-alias->id (or model llm/default-model-alias))
-          checkpoint-dir "data/longbench/runs"
-          invoke-llm     (llm/make-invoke-fn provider-kw
-                                             {:model       model-id
-                                              :temperature 0.1
-                                              :max-tokens  128})
-          budget         {:max-questions max-questions
-                          :stop-after-ms (when stop-after (* stop-after 1000))
-                          :max-cost-usd  max-cost}]
-      (when (= :claude-cli provider-kw)
-        (log! "longbench/param-deviation provider=claude-cli temperature=default max_tokens=default"))
-      (if resume
-        (let [cp-path (bench/find-checkpoint checkpoint-dir
-                                             (if (string? resume) resume "latest"))]
-          (if-not cp-path
-            (do (print-error! (if (= "latest" resume)
-                                "No checkpoint files found"
-                                (str "Checkpoint not found: " resume)))
-                {:exit 1})
-            (let [cp (try (bench/checkpoint-read cp-path)
-                          (catch Exception e
-                            (print-error! (str "Failed to parse checkpoint: "
-                                               (.getMessage e)))
-                            nil))]
-              (if-not cp
-                {:exit 1}
-                (do (longbench/run-longbench-resume! invoke-llm cp
-                                                     :checkpoint-dir checkpoint-dir
-                                                     :budget budget
-                                                     :concurrency (or concurrency 3)
-                                                     :min-delay-ms (or min-delay 0))
-                    {:exit 0})))))
-        (do
-          (longbench/run-longbench! invoke-llm
-                                    :checkpoint-dir checkpoint-dir
-                                    :budget budget
-                                    :concurrency (or concurrency 3)
-                                    :min-delay-ms (or min-delay 0))
-          {:exit 0})))
-    (catch clojure.lang.ExceptionInfo e
-      (let [data (ex-data e)]
-        (if (#{429 500 502 503} (:status data))
-          (do (print-error! (str "API error: " (.getMessage e)))
-              {:exit 2})
-          (do (print-error! (.getMessage e))
-              {:exit 1}))))
-    (catch Exception e
-      (print-error! (.getMessage e))
-      (log! (str "Resume with: " cli/program-name " longbench run --resume"))
-      {:exit 2})))
-
-(defn- print-longbench-detail!
-  [results]
-  (let [id-width (max 2 (apply max (map (comp count str :_id) results)))
-        id-fmt   (str "%-" id-width "s")]
-    (log!)
-    (log! (format (str "  " id-fmt "  %-5s %-5s  %s")
-                  "ID" "Pred" "Truth" "Correct?"))
-    (log! (format (str "  " id-fmt "  %-5s %-5s  %s")
-                  (apply str (repeat id-width "-"))
-                  "----" "-----" "--------"))
-    (doseq [r results]
-      (log! (format (str "  " id-fmt "  %-5s %-5s  %s")
-                    (:_id r)
-                    (or (:pred r) "nil")
-                    (:answer r)
-                    (if (:judge r) "yes" "no"))))))
-
-(defn- do-longbench-results
-  [{:keys [run-id detail]}]
-  (let [rid (or run-id
-                (when-let [cp (longbench/find-latest-run)]
-                  (-> (java.io.File. ^String cp) .getName
-                      (str/replace #"\.edn$" ""))))]
-    (cond
-      (not rid)
-      (do (print-error! "No runs found.") {:exit 1})
-
-      :else
-      (if-let [results (longbench/load-results rid)]
-        (let [agg (longbench/aggregate-results
-                   (mapv (fn [r] {:prediction (:pred r) :answer (:answer r)
-                                  :difficulty (:difficulty r) :length (:length r)})
-                         results))
-              fmt (fn [v] (if v (format "%5.1f%%" (double v)) "  n/a "))]
-          (log! (str "Run: " rid))
-          (log! (str "Questions: " (:total agg)))
-          (log!)
-          (log! "Accuracy (%) by difficulty and length:")
-          (log! (format "  %6s  %6s  %6s  %6s  %6s  %6s"
-                        "Score" "Easy" "Hard" "Short" "Medium" "Long"))
-          (log! (format "  %6s  %6s  %6s  %6s  %6s  %6s"
-                        "------" "------" "------" "------" "------" "------"))
-          (log! (format "  %s  %s  %s  %s  %s  %s"
-                        (fmt (:overall agg)) (fmt (:easy agg)) (fmt (:hard agg))
-                        (fmt (:short agg)) (fmt (:medium agg)) (fmt (:long agg))))
-          (when detail (print-longbench-detail! results))
-          {:exit 0})
-        (do (print-error! (str "No results found for run: " rid))
-            {:exit 1})))))
+(defn- do-longbench-experiment
+  [{:keys [config]}]
+  (when-not (.exists (io/file config))
+    (print-error! (str "Config file not found: " config))
+    (throw (ex-info "Config not found" {:path config})))
+  (let [cfg (longbench/load-experiment-config config)]
+    (longbench/run-experiment! cfg)
+    {:exit 0}))
 
 (defn do-longbench
   "Run the longbench subcommand. Returns {:exit n}."
   [{:keys [longbench-command] :as opts}]
   (case longbench-command
-    "download" (try
-                 (log! "Downloading LongBench dataset...")
-                 (longbench/download-dataset!)
-                 (log! "Download complete.")
-                 {:exit 0}
-                 (catch Exception e
-                   (print-error! (.getMessage e))
-                   {:exit 1}))
-    "run"      (do-longbench-run opts)
-    "results"  (try
-                 (do-longbench-results opts)
-                 (catch clojure.lang.ExceptionInfo e
-                   (print-error! (.getMessage e))
-                   {:exit 1}))))
+    "download"   (try
+                   (log! "Downloading LongBench dataset...")
+                   (longbench/download-dataset!)
+                   (log! "Download complete.")
+                   {:exit 0}
+                   (catch Exception e
+                     (print-error! (.getMessage e))
+                     {:exit 1}))
+    "experiment" (try
+                   (do-longbench-experiment opts)
+                   (catch clojure.lang.ExceptionInfo e
+                     (let [data (ex-data e)]
+                       (if (#{429 500 502 503} (:status data))
+                         (do (print-error! (str "API error: " (.getMessage e)))
+                             {:exit 2})
+                         (do (print-error! (.getMessage e))
+                             {:exit 1})))))))
 
 ;; --- Error dispatch ---
 
@@ -651,9 +558,10 @@
    :missing-concurrency-value    "Missing value for --concurrency."
    :invalid-min-delay            #(str "Invalid --min-delay value: " (:value %) ". Must be >= 0.")
    :missing-min-delay-value      "Missing value for --min-delay."
-   :longbench-no-subcommand      "Missing longbench subcommand. Expected: download, run, or results."
+   :longbench-no-subcommand      "Missing longbench subcommand. Expected: download, experiment."
    :longbench-unknown-subcommand #(str "Unknown longbench subcommand: " (:longbench-command %)
-                                       ". Expected: download, run, or results.")
+                                       ". Expected: download, experiment.")
+   :missing-config-value         "Missing value for --config."
    :agent-missing-args           "Missing required arguments for agent command."
    :agent-missing-question        "Missing -q <question> argument."
    :invalid-max-iterations       #(str "Invalid --max-iterations value: " (:value %))
@@ -670,7 +578,8 @@
     :missing-param-value :invalid-param-value
     :invalid-concurrency :missing-concurrency-value
     :invalid-min-delay :missing-min-delay-value
-    :invalid-max-iterations :missing-max-iterations-value})
+    :invalid-max-iterations :missing-max-iterations-value
+    :missing-config-value})
 
 ;; --- Entry point ---
 

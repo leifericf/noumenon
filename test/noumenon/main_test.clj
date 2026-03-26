@@ -337,31 +337,20 @@
     (is (= 1 exit))
     (is (str/includes? stderr "Unknown longbench subcommand: frobnicate"))))
 
-(deftest longbench-run-unknown-flag
-  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run" "--verbose"])]
+(deftest longbench-run-rejected
+  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run"])]
     (is (= 1 exit))
-    (is (str/includes? stderr "Unknown option: --verbose"))))
+    (is (str/includes? stderr "Unknown longbench subcommand: run"))))
 
-(deftest longbench-run-invalid-max-questions
-  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run" "--max-questions" "abc"])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Invalid --max-questions"))))
-
-(deftest longbench-run-invalid-provider
-  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run" "--provider" "openai"])]
-    (is (= 1 exit))
-    (is (str/includes? stderr "Invalid --provider"))))
-
-(deftest longbench-run-glm-without-token
-  (when-not (System/getenv "NOUMENON_ZAI_TOKEN")
-    (let [{:keys [exit stderr]} (run-capturing ["longbench" "run"])]
-      (is (= 1 exit))
-      (is (str/includes? stderr "NOUMENON_ZAI_TOKEN")))))
-
-(deftest longbench-results-no-runs
+(deftest longbench-results-rejected
   (let [{:keys [exit stderr]} (run-capturing ["longbench" "results"])]
     (is (= 1 exit))
-    (is (str/includes? stderr "No runs found"))))
+    (is (str/includes? stderr "Unknown longbench subcommand: results"))))
+
+(deftest longbench-experiment-missing-config
+  (let [{:keys [exit stderr]} (run-capturing ["longbench" "experiment"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Missing value for --config"))))
 
 ;; --- Help and version ---
 
@@ -395,7 +384,7 @@
   (let [{:keys [exit stdout]} (run-capturing ["longbench" "--help"])]
     (is (= 0 exit))
     (is (str/includes? stdout "download"))
-    (is (str/includes? stdout "run"))))
+    (is (str/includes? stdout "experiment"))))
 
 (deftest version-flag
   (let [{:keys [exit stdout stderr]} (run-capturing ["--version"])]

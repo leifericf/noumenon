@@ -1,6 +1,7 @@
 (ns noumenon.longbench-test
   (:require [clojure.test :refer [deftest is testing]]
-            [noumenon.benchmark :as bench]
+            [noumenon.cli :as cli]
+            [noumenon.llm]
             [noumenon.longbench :as lb]))
 
 ;; --- Tier 0: Pure function tests ---
@@ -180,18 +181,135 @@
     (is (nil? (:overall agg)))
     (is (= 0 (:total agg)))))
 
+;; --- experiment config ---
+
+(def ^:private valid-config
+  {:experiment/name "test-experiment"
+   :arms [{:arm/name "pure-llm" :arm/type :pure-llm}]
+   :model {:provider "glm" :alias "sonnet"}})
+
+(deftest validate-experiment-config-valid
+  (is (= {:ok valid-config}
+         (lb/validate-experiment-config valid-config))))
+
+(deftest validate-experiment-config-missing-name
+  (is (:error (lb/validate-experiment-config (dissoc valid-config :experiment/name)))))
+
+(deftest validate-experiment-config-missing-arms
+  (is (:error (lb/validate-experiment-config (dissoc valid-config :arms)))))
+
+(deftest validate-experiment-config-empty-arms
+  (is (:error (lb/validate-experiment-config (assoc valid-config :arms [])))))
+
+(deftest validate-experiment-config-arm-missing-name
+  (is (:error (lb/validate-experiment-config
+               (assoc valid-config :arms [{:arm/type :pure-llm}])))))
+
+(deftest validate-experiment-config-arm-missing-type
+  (is (:error (lb/validate-experiment-config
+               (assoc valid-config :arms [{:arm/name "x"}])))))
+
+(deftest validate-experiment-config-missing-provider
+  (is (:error (lb/validate-experiment-config
+               (assoc valid-config :model {:alias "sonnet"})))))
+
+(deftest validate-experiment-config-missing-alias
+  (is (:error (lb/validate-experiment-config
+               (assoc valid-config :model {:provider "glm"})))))
+
+(deftest config-hash-deterministic
+  (is (= (lb/config-hash valid-config)
+         (lb/config-hash valid-config))))
+
+(deftest config-hash-ignores-output-dir
+  (is (= (lb/config-hash valid-config)
+         (lb/config-hash (assoc valid-config :output/dir "/tmp/other")))))
+
+(deftest config-hash-differs-for-different-config
+  (is (not= (lb/config-hash valid-config)
+            (lb/config-hash (assoc valid-config :experiment/name "other")))))
+
+(deftest resolve-config-defaults-fills-gaps
+  (let [resolved (lb/resolve-config-defaults valid-config)]
+    (is (= "data/longbench/data.json" (:dataset/path resolved)))
+    (is (= "Code Repository Understanding" (:dataset/domain resolved)))
+    (is (= 3 (get-in resolved [:execution :concurrency])))
+    (is (= 0 (get-in resolved [:execution :min-delay-ms])))
+    (is (= 1 (get-in resolved [:execution :repeats])))
+    (is (string? (:output/dir resolved)))))
+
+(deftest resolve-config-defaults-preserves-overrides
+  (let [config   (assoc valid-config
+                        :execution {:concurrency 10 :min-delay-ms 500}
+                        :output/dir "/custom/")
+        resolved (lb/resolve-config-defaults config)]
+    (is (= 10 (get-in resolved [:execution :concurrency])))
+    (is (= 500 (get-in resolved [:execution :min-delay-ms])))
+    (is (= 1 (get-in resolved [:execution :repeats])))
+    (is (= "/custom/" (:output/dir resolved)))))
+
+;; --- arm runner ---
+
+(def ^:private test-question
+  {:_id "q1" :domain "Code Repository Understanding"
+   :difficulty "easy" :length "short"
+   :question "What does foo do?"
+   :choice_A "A" :choice_B "B" :choice_C "C" :choice_D "D"
+   :answer "B" :context "def foo(): pass"})
+
+(deftest run-pure-llm-arm-correct-answer
+  (let [mock-llm (fn [_msgs]
+                   {:text  "The correct answer is (B)"
+                    :usage {:input-tokens 100 :output-tokens 10
+                            :cost-usd 0.001 :duration-ms 50}
+                    :model "mock"})
+        result   (lb/run-pure-llm-arm {:question test-question
+                                       :invoke-llm mock-llm})]
+    (is (= "B" (:prediction result)))
+    (is (string? (:response result)))
+    (is (map? (:usage result)))
+    (is (nat-int? (:timing-ms result)))))
+
+(deftest run-pure-llm-arm-nil-on-bad-response
+  (let [mock-llm (fn [_msgs]
+                   {:text "I'm not sure about this"
+                    :usage {:input-tokens 100 :output-tokens 10
+                            :cost-usd 0.001 :duration-ms 50}})
+        result   (lb/run-pure-llm-arm {:question test-question
+                                       :invoke-llm mock-llm})]
+    (is (nil? (:prediction result)))))
+
+(deftest run-pure-llm-arm-truncates-long-context
+  (let [long-ctx (apply str (repeat 250000 "abcd"))  ;; 1M chars > 200K tokens
+        question (assoc test-question :context long-ctx)
+        prompts  (atom [])
+        mock-llm (fn [msgs]
+                   (swap! prompts conj (get-in msgs [0 :content]))
+                   {:text  "The correct answer is (A)"
+                    :usage {:input-tokens 100 :output-tokens 10
+                            :cost-usd 0.001 :duration-ms 50}})
+        _result  (lb/run-pure-llm-arm {:question question :invoke-llm mock-llm})]
+    (is (< (count (first @prompts)) (count long-ctx)))))
+
+(deftest resolve-arm-runner-pure-llm
+  (is (= lb/run-pure-llm-arm (lb/resolve-arm-runner :pure-llm))))
+
+(deftest resolve-arm-runner-unknown-throws
+  (is (thrown? clojure.lang.ExceptionInfo (lb/resolve-arm-runner :unknown))))
+
 ;; --- Tier 1: Integration (mock LLM) ---
 
-(deftest run-longbench-with-mock-llm
-  (testing "run-longbench! with max-questions budget"
+;; --- Experiment orchestrator ---
+
+(deftest run-experiment-with-mock-llm
+  (testing "run-experiment! produces arm results, JSONL, checkpoint, and report"
     (let [call-count (atom 0)
-          mock-llm   (fn [_prompt]
+          mock-llm   (fn [_msgs]
                        (swap! call-count inc)
                        {:text  "The correct answer is (A)"
                         :usage {:input-tokens 100 :output-tokens 10
                                 :cost-usd 0.001 :duration-ms 50}
                         :model "mock"})
-          ;; Mock load-code-repo-questions to return 3 test questions
           test-qs    [{:_id "q1" :domain "Code Repository Understanding"
                        :difficulty "easy" :length "short"
                        :question "Q1?" :choice_A "A" :choice_B "B"
@@ -201,72 +319,87 @@
                        :difficulty "hard" :length "long"
                        :question "Q2?" :choice_A "A" :choice_B "B"
                        :choice_C "C" :choice_D "D" :answer "B"
-                       :context "code2"}
-                      {:_id "q3" :domain "Code Repository Understanding"
-                       :difficulty "easy" :length "medium"
-                       :question "Q3?" :choice_A "A" :choice_B "B"
-                       :choice_C "C" :choice_D "D" :answer "A"
-                       :context "code3"}]
+                       :context "code2"}]
           tmp-dir    (str (System/getProperty "java.io.tmpdir")
-                          "/longbench-test-" (System/currentTimeMillis))]
+                          "/longbench-experiment-" (System/currentTimeMillis))
+          config     {:experiment/name "test-exp"
+                      :arms [{:arm/name "pure-llm" :arm/type :pure-llm}]
+                      :model {:provider "glm" :alias "sonnet"}
+                      :budgets {:max-questions 2}
+                      :execution {:concurrency 1 :min-delay-ms 0 :repeats 1}
+                      :output/dir (str tmp-dir "/out/")}]
       (try
-        (with-redefs [lb/load-code-repo-questions (constantly test-qs)]
-          (let [result (lb/run-longbench! mock-llm
-                                          :checkpoint-dir tmp-dir
-                                          :budget {:max-questions 2}
-                                          :concurrency 1)]
-            ;; Should have called LLM exactly 2 times (budget limit)
-            (is (<= (count (:results result)) 2))
-            (is (some? (:aggregate result)))
-            (is (some? (:run-id result)))))
+        (with-redefs [lb/load-code-repo-questions    (constantly test-qs)
+                      lb/ensure-dataset!             (constantly "data/longbench/data.json")
+                      lb/build-experiment-metadata   (fn [config cfg-hash _ model-cfg]
+                                                       {:git-sha "test" :config-hash cfg-hash
+                                                        :dataset-hash "test" :model model-cfg
+                                                        :started-at (java.util.Date.)
+                                                        :experiment (:experiment/name config)})
+                      noumenon.llm/make-invoke-fn     (constantly mock-llm)]
+          (let [summary (lb/run-experiment! config)]
+            (testing "returns arm results"
+              (is (= 1 (count (:arm-results summary))))
+              (is (= "pure-llm" (:arm-name (first (:arm-results summary))))))
+            (testing "aggregate present"
+              (let [agg (:aggregate (first (:arm-results summary)))]
+                (is (some? (:overall agg)))
+                (is (= 2 (:total agg)))))
+            (testing "config hash recorded"
+              (is (string? (:config-hash summary))))
+            (testing "metadata present"
+              (is (= "test-exp" (get-in summary [:metadata :experiment]))))
+            (testing "summary file written"
+              (is (.exists (java.io.File.
+                            (str tmp-dir "/out/test-exp/summary.edn")))))))
         (finally
-          ;; Cleanup
           (doseq [f (reverse (file-seq (java.io.File. tmp-dir)))]
             (.delete f)))))))
 
-(deftest run-longbench-resume-skips-completed
-  (testing "resume skips already-completed questions, runs only remaining"
-    (let [call-count (atom 0)
-          mock-llm   (fn [_msgs]
-                       (swap! call-count inc)
-                       {:text  "The correct answer is (B)"
-                        :usage {:input-tokens 100 :output-tokens 10
-                                :cost-usd 0.001 :duration-ms 50}
-                        :model "mock"})
-          test-qs    [{:_id "q1" :domain "Code Repository Understanding"
-                       :difficulty "easy" :length "short"
-                       :question "Q1?" :choice_A "A" :choice_B "B"
-                       :choice_C "C" :choice_D "D" :answer "B"
-                       :context "code1"}
-                      {:_id "q2" :domain "Code Repository Understanding"
-                       :difficulty "hard" :length "long"
-                       :question "Q2?" :choice_A "A" :choice_B "B"
-                       :choice_C "C" :choice_D "D" :answer "A"
-                       :context "code2"}
-                      {:_id "q3" :domain "Code Repository Understanding"
-                       :difficulty "easy" :length "medium"
-                       :question "Q3?" :choice_A "A" :choice_B "B"
-                       :choice_C "C" :choice_D "D" :answer "B"
-                       :context "code3"}]
-          tmp-dir    (str (System/getProperty "java.io.tmpdir")
-                          "/longbench-resume-test-" (System/currentTimeMillis))
-          checkpoint {:run-id   (bench/generate-run-id)
-                      :metadata {:started-at (java.util.Date.)
-                                 :budget     {}}
-                      :results  {"q1" {:prediction "B" :correct true
-                                       :usage {:input-tokens 100 :output-tokens 10
-                                               :cost-usd 0.001 :duration-ms 50}}}}]
-      (try
-        (with-redefs [lb/load-code-repo-questions (constantly test-qs)]
-          (let [result (lb/run-longbench-resume! mock-llm checkpoint
-                                                 :checkpoint-dir tmp-dir
-                                                 :concurrency 1)]
-            (testing "LLM called only for remaining questions (q2, q3)"
-              (is (= 2 @call-count)))
-            (testing "all 3 questions in final results"
-              (is (= 3 (count (:results result)))))
-            (testing "aggregate covers all completed"
-              (is (= 3 (:total (:aggregate result)))))))
-        (finally
-          (doseq [f (reverse (file-seq (java.io.File. tmp-dir)))]
-            (.delete f)))))))
+(deftest generate-experiment-report-contains-sections
+  (let [summary {:metadata    {:experiment "test"
+                               :git-sha "abc123"
+                               :config-hash "def456"
+                               :dataset-hash "ghi789012345678"
+                               :model {:model-id "claude-sonnet" :provider-kw :glm}
+                               :started-at (java.util.Date.)}
+                 :arm-results [{:arm-name "pure-llm"
+                                :aggregate {:overall 50.0 :easy 100.0 :hard 0.0
+                                            :short 50.0 :medium nil :long nil
+                                            :total 2}
+                                :total-usage {:cost-usd 0.002}}]}
+        report  (lb/generate-experiment-report summary)]
+    (is (re-find #"test" report))
+    (is (re-find #"abc123" report))
+    (is (re-find #"pure-llm" report))
+    (is (re-find #"50\.0%" report))
+    (is (re-find #"Overall" report))))
+
+;; --- CLI parsing ---
+
+(deftest parse-longbench-experiment-with-config
+  (let [result (cli/parse-longbench-args ["experiment" "--config" "path/to/config.edn"])]
+    (is (= "longbench" (:subcommand result)))
+    (is (= "experiment" (:longbench-command result)))
+    (is (= "path/to/config.edn" (:config result)))))
+
+(deftest parse-longbench-experiment-missing-config
+  (let [result (cli/parse-longbench-args ["experiment"])]
+    (is (= :missing-config-value (:error result)))))
+
+(deftest parse-longbench-download-unchanged
+  (let [result (cli/parse-longbench-args ["download"])]
+    (is (= "longbench" (:subcommand result)))
+    (is (= "download" (:longbench-command result)))))
+
+(deftest parse-longbench-run-rejected
+  (let [result (cli/parse-longbench-args ["run"])]
+    (is (= :longbench-unknown-subcommand (:error result)))))
+
+(deftest parse-longbench-no-subcommand
+  (let [result (cli/parse-longbench-args [])]
+    (is (= :longbench-no-subcommand (:error result)))))
+
+(deftest parse-longbench-help
+  (let [result (cli/parse-longbench-args ["--help"])]
+    (is (= "longbench" (:help result)))))
