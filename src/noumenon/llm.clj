@@ -131,12 +131,13 @@
               (log! (str "WARNING: API returned HTTP 200 but no text content"
                          " (stop_reason=" (:stop_reason parsed)
                          " content=" (truncate (pr-str (:content parsed)) 200) ")")))
-            {:text  text
-             :usage {:input-tokens  in
-                     :output-tokens out
-                     :cost-usd      (estimate-cost (:model parsed) in out)
-                     :duration-ms   dur-ms}
-             :model (:model parsed)}))))))
+            {:text           text
+             :usage          {:input-tokens  in
+                              :output-tokens out
+                              :cost-usd      (estimate-cost (:model parsed) in out)
+                              :duration-ms   dur-ms}
+             :model          (:model parsed)
+             :resolved-model (:model parsed)}))))))
 
 (def ^:private cli-timeout-ms
   "Timeout in milliseconds for Claude CLI subprocess (5 minutes)."
