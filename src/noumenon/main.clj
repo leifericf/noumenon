@@ -7,6 +7,8 @@
             [noumenon.db :as db]
             [noumenon.files :as files]
             [noumenon.git :as git]
+            [noumenon.llm :as llm]
+            [noumenon.longbench :as longbench]
             [noumenon.query :as query]))
 
 ;; --- Helpers ---
@@ -97,6 +99,18 @@
             {:error :invalid-min-delay :value v}))
         {:error :missing-min-delay-value})
 
+      (= "--skip-raw" (first remaining))
+      (recur (rest remaining) (assoc opts :skip-raw true) positional)
+
+      (= "--skip-judge" (first remaining))
+      (recur (rest remaining) (assoc opts :skip-judge true) positional)
+
+      (= "--fast" (first remaining))
+      (recur (rest remaining) (assoc opts :skip-raw true :skip-judge true) positional)
+
+      (= "--canary" (first remaining))
+      (recur (rest remaining) (assoc opts :canary true) positional)
+
       (= "--db-dir" (first remaining))
       (if (second remaining)
         (recur (drop 2 remaining) (assoc opts :db-dir (second remaining)) positional)
@@ -108,14 +122,114 @@
       :else
       (recur (rest remaining) opts (conj positional (first remaining))))))
 
+(defn- parse-longbench-run-args
+  "Parse longbench run arguments."
+  [args]
+  (loop [remaining args
+         opts      {:subcommand "longbench" :longbench-command "run"}]
+    (if (empty? remaining)
+      opts
+      (let [[flag & more] remaining]
+        (case flag
+          "--resume"
+          (let [next-arg (first more)]
+            (if (or (nil? next-arg) (str/starts-with? next-arg "-"))
+              (recur more (assoc opts :resume "latest"))
+              (recur (rest more) (assoc opts :resume next-arg))))
+
+          "--max-questions"
+          (if-let [v (first more)]
+            (let [n (try (Integer/parseInt v) (catch Exception _ nil))]
+              (if (and n (pos? n))
+                (recur (rest more) (assoc opts :max-questions n))
+                {:error :invalid-max-questions :value v}))
+            {:error :missing-max-questions-value})
+
+          "--stop-after"
+          (if-let [v (first more)]
+            (let [n (try (Integer/parseInt v) (catch Exception _ nil))]
+              (if (and n (pos? n))
+                (recur (rest more) (assoc opts :stop-after n))
+                {:error :invalid-stop-after :value v}))
+            {:error :missing-stop-after-value})
+
+          "--max-cost"
+          (if-let [v (first more)]
+            (let [n (try (Double/parseDouble v) (catch Exception _ nil))]
+              (if (and n (pos? n))
+                (recur (rest more) (assoc opts :max-cost n))
+                {:error :invalid-max-cost :value v}))
+            {:error :missing-max-cost-value})
+
+          "--model"
+          (if (first more)
+            (recur (rest more) (assoc opts :model (first more)))
+            {:error :missing-model-value})
+
+          "--provider"
+          (if-let [v (first more)]
+            (if (#{"glm" "claude-api" "claude-cli"} v)
+              (recur (rest more) (assoc opts :provider v))
+              {:error :invalid-provider :value v})
+            {:error :missing-provider-value})
+
+          "--concurrency"
+          (if-let [v (first more)]
+            (let [n (try (Integer/parseInt v) (catch Exception _ nil))]
+              (if (and n (<= 1 n 20))
+                (recur (rest more) (assoc opts :concurrency n))
+                {:error :invalid-concurrency :value v}))
+            {:error :missing-concurrency-value})
+
+          "--min-delay"
+          (if-let [v (first more)]
+            (let [n (try (Integer/parseInt v) (catch Exception _ nil))]
+              (if (and n (>= n 0))
+                (recur (rest more) (assoc opts :min-delay n))
+                {:error :invalid-min-delay :value v}))
+            {:error :missing-min-delay-value})
+
+          ;; Unknown flag
+          (if (str/starts-with? flag "-")
+            {:error :unknown-flag :flag flag}
+            (recur more opts)))))))
+
+(defn- parse-longbench-results-args
+  "Parse longbench results arguments."
+  [args]
+  (loop [remaining args
+         opts      {:subcommand "longbench" :longbench-command "results"}]
+    (if (empty? remaining)
+      opts
+      (let [[flag & more] remaining]
+        (case flag
+          "--detail" (recur more (assoc opts :detail true))
+          (if (str/starts-with? flag "-")
+            {:error :unknown-flag :flag flag}
+            (recur more (assoc opts :run-id flag))))))))
+
+(defn- parse-longbench-args
+  "Parse longbench-specific CLI args."
+  [args]
+  (if (empty? args)
+    {:error :longbench-no-subcommand :subcommand "longbench"}
+    (let [[sub & rest-args] args]
+      (case sub
+        "download" {:subcommand "longbench" :longbench-command "download"}
+        "run"      (parse-longbench-run-args rest-args)
+        "results"  (parse-longbench-results-args rest-args)
+        {:error :longbench-unknown-subcommand :subcommand "longbench"
+         :longbench-command sub}))))
+
 (defn- parse-args
   "Parse CLI args into {:subcommand s, :repo-path p, :db-dir d} or {:error keyword}."
   [args]
   (if (empty? args)
     {:error :no-args}
     (let [[sub & rest-args] args]
-      (if (= "benchmark" sub)
-        (parse-benchmark-args rest-args)
+      (case sub
+        "benchmark" (parse-benchmark-args rest-args)
+        "longbench" (parse-longbench-args rest-args)
         (if-not (#{"import" "status" "analyze" "query"} sub)
           {:error :unknown-subcommand :subcommand sub}
           (loop [remaining rest-args
@@ -168,6 +282,7 @@
              "  query      Run a named Datalog query against the knowledge graph"
              "  status     Show import counts for a repository"
              "  benchmark  Run benchmark suite against a repository"
+             "  longbench  Run LongBench v2 standard benchmark"
              ""
              "Options:"
              "  --db-dir <dir>        Override default storage directory (default: data/datomic/)"
@@ -175,13 +290,35 @@
              "  --provider <name>     Provider: glm (default) or claude"
              ""
              "Benchmark options:"
+             "  --skip-raw            Omit raw-context condition (halves LLM calls)"
+             "  --skip-judge          Skip LLM judge stages (deterministic scores only)"
+             "  --fast                Sugar for --skip-raw --skip-judge"
+             "  --canary              Run q01+q02 first as canary; warn if both fail"
              "  --resume [run-id]     Resume from checkpoint (default: latest)"
              "  --max-questions <n>   Stop after n questions"
              "  --stop-after <secs>   Stop after n seconds"
              "  --max-cost <dollars>  Stop when session cost exceeds threshold"
              "  --judge-model <alias> Model alias for judge stages"
              "  --concurrency <n>    Parallel pair workers, 1-20 (default: 4)"
-             "  --min-delay <ms>     Min delay between LLM requests (default: 0)"]))
+             "  --min-delay <ms>     Min delay between LLM requests (default: 0)"
+             ""
+             "LongBench subcommands:"
+             "  longbench download              Download LongBench v2 dataset"
+             "  longbench run [options]          Run benchmark"
+             "  longbench results [run-id]       Show results"
+             ""
+             "LongBench run options:"
+             "  --resume [run-id]     Resume from checkpoint (default: latest)"
+             "  --max-questions <n>   Stop after n questions"
+             "  --stop-after <secs>   Stop after n seconds"
+             "  --max-cost <dollars>  Stop when session cost exceeds threshold"
+             "  --model <alias>       Model alias (e.g. sonnet, haiku, opus)"
+             "  --provider <name>     Provider: glm (default), claude-api, or claude-cli"
+             "  --concurrency <n>    Parallel workers, 1-20 (default: 4)"
+             "  --min-delay <ms>     Min delay between LLM requests (default: 0)"
+             ""
+             "LongBench results options:"
+             "  --detail              Show per-question detail table"]))
 
 (defn- provider-env
   "Build env var map for the given provider. Throws if GLM token is missing."
@@ -308,7 +445,7 @@
   "Run the benchmark subcommand. Returns {:exit n}.
    Nothing to stdout; progress/results to stderr. Exit 0 on success/budget, 1 on permanent error, 2 on transient error."
   [{:keys [repo-path resume max-questions stop-after max-cost model judge-model provider
-           concurrency min-delay] :as opts}]
+           concurrency min-delay skip-raw skip-judge canary] :as opts}]
   (if-let [err (validate-repo-path repo-path)]
     (do (print-error! err) {:exit 1})
     (try
@@ -324,7 +461,10 @@
             judge-llm      (make-invoke-llm (or judge-model model) env)
             budget         {:max-questions max-questions
                             :stop-after-ms (when stop-after (* stop-after 1000))
-                            :max-cost-usd  max-cost}]
+                            :max-cost-usd  max-cost}
+            mode           (cond-> {}
+                             skip-raw   (assoc :skip-raw true)
+                             skip-judge (assoc :skip-judge true))]
         (if-not (db-exists? db-dir db-name)
           (do (print-error! (str "No database found for \"" db-name
                                  "\". Run `import` first."))
@@ -352,6 +492,7 @@
                                       :commit-sha         (bench/repo-head-sha repo-path)
                                       :question-set-hash  (bench/question-set-hash questions)
                                       :model-config       model-config
+                                      :mode               mode
                                       :rubric-hash        (bench/question-set-hash
                                                            (:judge-template rubric))
                                       :answer-prompt-hash (bench/question-set-hash
@@ -373,6 +514,8 @@
                                                   :checkpoint-dir checkpoint-dir
                                                   :resume-checkpoint cp
                                                   :budget budget
+                                                  :mode mode
+                                                  :canary canary
                                                   :concurrency (or concurrency 4)
                                                   :min-delay-ms (or min-delay 0))
                             {:exit 0}
@@ -389,6 +532,7 @@
                                       :model-config model-config
                                       :checkpoint-dir checkpoint-dir
                                       :budget budget
+                                      :mode mode
                                       :concurrency (or concurrency 4)
                                       :min-delay-ms (or min-delay 0))
                 {:exit 0}
@@ -401,6 +545,126 @@
       (catch clojure.lang.ExceptionInfo e
         (print-error! (.getMessage e))
         {:exit 1}))))
+
+(defn- model-alias->id
+  "Map model alias to full model ID for Anthropic API."
+  [alias]
+  (case alias
+    "sonnet"  "claude-sonnet-4-6-20250514"
+    "haiku"   "claude-haiku-4-5-20251001"
+    "opus"    "claude-opus-4-6-20250514"
+    alias))
+
+(defn- do-longbench-run
+  "Run the longbench run subcommand."
+  [{:keys [resume max-questions stop-after max-cost model provider concurrency min-delay]}]
+  (try
+    (let [provider-kw    (keyword (or provider "glm"))
+          model-id       (model-alias->id (or model "sonnet"))
+          checkpoint-dir "data/longbench/runs"
+          invoke-llm     (llm/make-invoke-fn provider-kw
+                                             {:model       model-id
+                                              :temperature 0.1
+                                              :max-tokens  128})
+          budget         {:max-questions max-questions
+                          :stop-after-ms (when stop-after (* stop-after 1000))
+                          :max-cost-usd  max-cost}]
+      (when (= :claude-cli provider-kw)
+        (binding [*out* *err*]
+          (println "longbench/param-deviation provider=claude-cli temperature=default max_tokens=default")))
+      (if resume
+        (let [cp-path (bench/find-checkpoint checkpoint-dir
+                                             (if (string? resume) resume "latest"))]
+          (if-not cp-path
+            (do (print-error! (if (= "latest" resume)
+                                "No checkpoint files found"
+                                (str "Checkpoint not found: " resume)))
+                {:exit 1})
+            (let [cp (bench/checkpoint-read cp-path)]
+              (longbench/run-longbench-resume! invoke-llm cp
+                                               :checkpoint-dir checkpoint-dir
+                                               :budget budget
+                                               :concurrency (or concurrency 4)
+                                               :min-delay-ms (or min-delay 0))
+              {:exit 0})))
+        (do
+          (longbench/run-longbench! invoke-llm
+                                    :checkpoint-dir checkpoint-dir
+                                    :budget budget
+                                    :concurrency (or concurrency 4)
+                                    :min-delay-ms (or min-delay 0))
+          {:exit 0})))
+    (catch clojure.lang.ExceptionInfo e
+      (let [data (ex-data e)]
+        (if (#{429 500 502 503} (:status data))
+          (do (binding [*out* *err*]
+                (println (str "longbench/api-error " (.getMessage e))))
+              {:exit 2})
+          (do (print-error! (.getMessage e))
+              {:exit 1}))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println (str "longbench/error " (.getMessage e)))
+        (println "Resume with: clj -M:run longbench run --resume"))
+      {:exit 2})))
+
+(defn- do-longbench-results
+  "Show results from a longbench run."
+  [{:keys [run-id detail]}]
+  (let [rid      (or run-id
+                     (when-let [cp (longbench/find-latest-run)]
+                       (-> (java.io.File. ^String cp) .getName
+                           (str/replace #"\.edn$" ""))))
+        _        (when-not rid
+                   (print-error! "No runs found.")
+                   (throw (ex-info "No runs found" {})))
+        results  (longbench/load-results rid)]
+    (if-not results
+      (do (print-error! (str "No results found for run: " rid))
+          {:exit 1})
+      (let [agg (longbench/aggregate-results
+                 (mapv (fn [r] {:prediction (:pred r) :answer (:answer r)
+                                :difficulty (:difficulty r) :length (:length r)})
+                       results))
+            fmt (fn [v] (if v (format "%5.1f" (double v)) "  n/a"))]
+        (println (str "Run: " rid))
+        (println (str "Questions: " (:total agg)))
+        (println)
+        (println "  Overall  Easy   Hard   Short  Med    Long")
+        (println (str "  " (fmt (:overall agg))
+                      "  " (fmt (:easy agg))
+                      "  " (fmt (:hard agg))
+                      "  " (fmt (:short agg))
+                      "  " (fmt (:medium agg))
+                      "  " (fmt (:long agg))))
+        (when detail
+          (println)
+          (println "  ID                 Pred  Truth  Correct?")
+          (println "  ---                ----  -----  --------")
+          (doseq [r results]
+            (println (format "  %-20s %-5s %-5s  %s"
+                             (:_id r)
+                             (or (:pred r) "nil")
+                             (:answer r)
+                             (if (:judge r) "yes" "no")))))
+        {:exit 0}))))
+
+(defn do-longbench
+  "Run the longbench subcommand. Returns {:exit n}."
+  [{:keys [longbench-command] :as opts}]
+  (case longbench-command
+    "download" (try
+                 (longbench/download-dataset!)
+                 {:exit 0}
+                 (catch Exception e
+                   (print-error! (.getMessage e))
+                   {:exit 1}))
+    "run"      (do-longbench-run opts)
+    "results"  (try
+                 (do-longbench-results opts)
+                 (catch clojure.lang.ExceptionInfo e
+                   (print-error! (.getMessage e))
+                   {:exit 1}))))
 
 ;; --- Entry point ---
 
@@ -497,14 +761,25 @@
       (do (print-error! "Missing value for --min-delay.")
           {:exit 1})
 
+      :longbench-no-subcommand
+      (do (print-error! "Missing longbench subcommand. Usage: longbench <download|run|results>")
+          {:exit 1})
+
+      :longbench-unknown-subcommand
+      (do (print-error! (str "Unknown longbench subcommand: " (:longbench-command parsed)
+                             ". Usage: longbench <download|run|results>"))
+          {:exit 1})
+
       ;; no error — dispatch subcommand
       (let [result (case (:subcommand parsed)
                      "import"    (do-import parsed)
                      "analyze"   (do-analyze parsed)
                      "query"     (do-query parsed)
                      "status"    (do-status parsed)
-                     "benchmark" (do-benchmark parsed))]
-        (when (and (:result result) (not= "benchmark" (:subcommand parsed)))
+                     "benchmark" (do-benchmark parsed)
+                     "longbench" (do-longbench parsed))]
+        (when (and (:result result)
+                   (not (#{"benchmark" "longbench"} (:subcommand parsed))))
           (prn (:result result)))
         result))))
 

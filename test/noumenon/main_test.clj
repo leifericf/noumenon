@@ -289,3 +289,41 @@
   (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--min-delay"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Missing value for --min-delay"))))
+
+;; --- Tier 0: LongBench CLI arg parsing ---
+
+(deftest longbench-no-subcommand
+  (let [{:keys [exit stderr]} (run-capturing ["longbench"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Missing longbench subcommand"))))
+
+(deftest longbench-unknown-subcommand
+  (let [{:keys [exit stderr]} (run-capturing ["longbench" "frobnicate"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Unknown longbench subcommand: frobnicate"))))
+
+(deftest longbench-run-unknown-flag
+  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run" "--verbose"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Unknown option: --verbose"))))
+
+(deftest longbench-run-invalid-max-questions
+  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run" "--max-questions" "abc"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Invalid --max-questions"))))
+
+(deftest longbench-run-invalid-provider
+  (let [{:keys [exit stderr]} (run-capturing ["longbench" "run" "--provider" "openai"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "Invalid --provider"))))
+
+(deftest longbench-run-glm-without-token
+  (when-not (System/getenv "NOUMENON_ZAI_TOKEN")
+    (let [{:keys [exit stderr]} (run-capturing ["longbench" "run"])]
+      (is (= 1 exit))
+      (is (str/includes? stderr "NOUMENON_ZAI_TOKEN")))))
+
+(deftest longbench-results-no-runs
+  (let [{:keys [exit stderr]} (run-capturing ["longbench" "results"])]
+    (is (= 1 exit))
+    (is (str/includes? stderr "No runs found"))))

@@ -2,7 +2,8 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
-            [noumenon.benchmark :as bench]))
+            [noumenon.benchmark :as bench]
+            [noumenon.query :as query]))
 
 ;; --- Tier 0: Pure function tests ---
 
@@ -926,4 +927,316 @@
         (finally
           (doseq [d [dir1 dir2]
                   f (reverse (file-seq (io/file d)))]
+            (.delete f)))))))
+
+;; --- Tier 0: Deterministic scoring ---
+
+(deftest deterministic-score-q01-correct
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["ring/core.clj" :complex]
+                        ["ring/handler.clj" :very-complex]
+                        ["ring/util.clj" :trivial]]})]
+    (let [q      {:id :q01 :query-name "files-by-complexity" :scoring :deterministic}
+          answer "The complex files are ring/core.clj and ring/handler.clj."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :correct (:score result))))))
+
+(deftest deterministic-score-q01-partial
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["ring/core.clj" :complex]
+                        ["ring/handler.clj" :very-complex]
+                        ["ring/util.clj" :trivial]]})]
+    (let [q      {:id :q01 :query-name "files-by-complexity" :scoring :deterministic}
+          answer "The complex file is ring/core.clj."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :partial (:score result))))))
+
+(deftest deterministic-score-q01-wrong
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["ring/core.clj" :complex]
+                        ["ring/handler.clj" :very-complex]
+                        ["ring/adapter.clj" :complex]
+                        ["ring/util.clj" :trivial]]})]
+    (let [q      {:id :q01 :query-name "files-by-complexity" :scoring :deterministic}
+          answer "I don't know which files are complex."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :wrong (:score result))))))
+
+(deftest deterministic-score-q02-correct
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["ring/middleware/params.clj" :middleware]
+                        ["ring/core.clj" :core]]})]
+    (let [q      {:id :q02 :query-name "files-by-layer" :scoring :deterministic}
+          answer "ring/middleware/params.clj is classified as middleware."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :correct (:score result))))))
+
+(deftest deterministic-score-q02-wrong
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["ring/middleware/params.clj" :middleware]
+                        ["ring/core.clj" :core]]})]
+    (let [q      {:id :q02 :query-name "files-by-layer" :scoring :deterministic}
+          answer "That file is in the utility layer."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :wrong (:score result))))))
+
+(deftest deterministic-score-q03-correct
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["Alice" "alice@test.com" 50]
+                        ["Bob" "bob@test.com" 30]
+                        ["Carol" "carol@test.com" 20]
+                        ["Dave" "dave@test.com" 5]]})]
+    (let [q      {:id :q03 :query-name "top-contributors" :scoring :deterministic}
+          answer "Top contributors: 1. Alice (50 commits), 2. Bob (30 commits), 3. Carol (20 commits)."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :correct (:score result))))))
+
+(deftest deterministic-score-q03-partial
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["Alice" "alice@test.com" 50]
+                        ["Bob" "bob@test.com" 30]
+                        ["Carol" "carol@test.com" 20]]})]
+    (let [q      {:id :q03 :query-name "top-contributors" :scoring :deterministic}
+          answer "The top contributors are Alice and Bob."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :partial (:score result))))))
+
+(deftest deterministic-score-q03-wrong
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["Alice" "alice@test.com" 50]
+                        ["Bob" "bob@test.com" 30]
+                        ["Carol" "carol@test.com" 20]]})]
+    (let [q      {:id :q03 :query-name "top-contributors" :scoring :deterministic}
+          answer "The top contributor is Dave."
+          result (bench/deterministic-score q nil answer)]
+      (is (= :wrong (:score result))))))
+
+(deftest questions-edn-has-scoring-on-single-hop
+  (let [qs (bench/load-questions)]
+    (doseq [q qs]
+      (if (= :single-hop (:category q))
+        (is (= :deterministic (:scoring q))
+            (str (:id q) " should have :scoring :deterministic"))
+        (is (nil? (:scoring q))
+            (str (:id q) " should NOT have :scoring"))))))
+
+(deftest run-stage-deterministic-no-llm-call
+  (with-redefs [query/run-named-query
+                (fn [_db _qn]
+                  {:ok [["ring/core.clj" :complex]]})]
+    (let [q       {:id :q01 :question "?" :query-name "files-by-complexity"
+                   :scoring :deterministic :rubric "r" :category :single-hop}
+          stages  {[:q01 :query :answer] {:status :ok :result "ring/core.clj is complex"}}
+          llm-called (atom false)
+          mock-llm   (fn [_] (reset! llm-called true) {:text "" :usage bench/zero-usage})
+          result  (bench/run-stage [:q01 :query :judge] q {} nil nil stages mock-llm mock-llm)]
+      (is (false? @llm-called) "LLM should not be called for deterministic scoring")
+      (is (= :correct (get-in result [:result :score])))
+      (is (= 0 (get-in result [:usage :input-tokens]))))))
+
+;; --- Tier 0: Mode-aware stage keys ---
+
+(deftest mode-stage-keys-no-flags
+  (let [q {:id :q01 :scoring :deterministic}]
+    (is (= [[:q01 :query :answer] [:q01 :query :judge]
+            [:q01 :raw :answer] [:q01 :raw :judge]]
+           (bench/mode-stage-keys q {})))))
+
+(deftest mode-stage-keys-skip-raw
+  (let [q {:id :q01 :scoring :deterministic}]
+    (is (= [[:q01 :query :answer] [:q01 :query :judge]]
+           (bench/mode-stage-keys q {:skip-raw true})))))
+
+(deftest mode-stage-keys-skip-judge-deterministic
+  (let [q {:id :q01 :scoring :deterministic}]
+    (is (= [[:q01 :query :answer] [:q01 :query :judge]
+            [:q01 :raw :answer] [:q01 :raw :judge]]
+           (bench/mode-stage-keys q {:skip-judge true}))
+        "Deterministic questions keep judge stages even with --skip-judge")))
+
+(deftest mode-stage-keys-skip-judge-llm
+  (let [q {:id :q07}]
+    (is (= [[:q07 :query :answer] [:q07 :raw :answer]]
+           (bench/mode-stage-keys q {:skip-judge true}))
+        "Non-deterministic questions lose judge stages with --skip-judge")))
+
+(deftest mode-stage-keys-fast
+  (let [q-det {:id :q01 :scoring :deterministic}
+        q-llm {:id :q07}
+        mode  {:skip-raw true :skip-judge true}]
+    (is (= [[:q01 :query :answer] [:q01 :query :judge]]
+           (bench/mode-stage-keys q-det mode)))
+    (is (= [[:q07 :query :answer]]
+           (bench/mode-stage-keys q-llm mode)))))
+
+(deftest all-stage-keys-with-mode
+  (let [qs [{:id :q01 :scoring :deterministic} {:id :q07}]
+        mode {:skip-raw true :skip-judge true}]
+    (is (= [[:q01 :query :answer] [:q01 :query :judge] [:q07 :query :answer]]
+           (bench/all-stage-keys qs mode)))))
+
+(deftest aggregate-scores-canonical-true
+  (let [results [{:query-score :correct :raw-score :correct :category :test}]
+        agg     (bench/aggregate-scores results)]
+    (is (true? (:canonical agg)))))
+
+(deftest aggregate-scores-canonical-false-with-skip-raw
+  (let [results [{:query-score :correct :category :test}]
+        agg     (bench/aggregate-scores results {:skip-raw true})]
+    (is (false? (:canonical agg)))
+    (is (nil? (:raw-mean agg)))))
+
+(deftest aggregate-scores-skip-judge-no-scored
+  (let [results [{:query-score :wrong :category :test}]
+        agg     (bench/aggregate-scores results {:skip-judge true})]
+    (is (false? (:canonical agg)))))
+
+(deftest validate-resume-mode-mismatch
+  (let [cp  {:metadata {:repo-path "ring" :commit-sha "abc"
+                        :question-set-hash "def" :model-config "m1"
+                        :mode {:skip-raw true}}}
+        cfg {:repo-path "ring" :commit-sha "abc"
+             :question-set-hash "def" :model-config "m1"
+             :mode {}}
+        result (bench/validate-resume-compatibility cp cfg)]
+    (is (contains? result :mismatches))
+    (is (some #(= :mode (:field %)) (:mismatches result)))))
+
+(deftest validate-resume-mode-match
+  (let [cp  {:metadata {:repo-path "ring" :commit-sha "abc"
+                        :question-set-hash "def" :model-config "m1"
+                        :mode {:skip-raw true}}}
+        cfg {:repo-path "ring" :commit-sha "abc"
+             :question-set-hash "def" :model-config "m1"
+             :mode {:skip-raw true}}]
+    (is (= {:ok true} (bench/validate-resume-compatibility cp cfg)))))
+
+;; --- Tier 1: Integration with --fast ---
+
+(deftest fast-mode-only-query-answers-and-deterministic-judges
+  (with-redefs [bench/load-questions (fn [] [{:id :q01 :question "Q1?" :category :single-hop
+                                              :query-name "files-by-complexity" :rubric "r1"
+                                              :scoring :deterministic}
+                                             {:id :q07 :question "Q2?" :category :architectural
+                                              :query-name "test" :rubric "r2"}])
+                bench/query-context  (fn [_db _qn] "mock query context")
+                bench/raw-context    (fn [_rp] (throw (ex-info "Should not be called" {})))
+                bench/repo-head-sha  (fn [_rp] "abc123")
+                query/run-named-query (fn [_db _qn]
+                                        {:ok [["ring/core.clj" :complex]]})]
+    (let [dir   (str (io/file (System/getProperty "java.io.tmpdir")
+                              (str "bench-fast-" (System/currentTimeMillis))))
+          calls (atom 0)
+          counting-llm (fn [prompt]
+                         (swap! calls inc)
+                         {:text (if (str/includes? prompt "Score this answer")
+                                  (pr-str {:score :correct :reasoning "Mock"})
+                                  "ring/core.clj is complex")
+                          :usage bench/zero-usage})]
+      (try
+        (let [result (bench/run-benchmark! nil "." counting-llm
+                                           :checkpoint-dir dir
+                                           :mode {:skip-raw true :skip-judge true}
+                                           :concurrency 1)]
+          (testing "only query-answer stages invoke LLM"
+            (is (= 2 @calls) "2 answer calls (1 per question, query-only)"))
+          (testing "deterministic question scored"
+            (let [q01 (first (filter #(= :q01 (:id %)) (:results result)))]
+              (is (some? q01))
+              (is (= :correct (:query-score q01)))))
+          (testing "non-deterministic question not scored"
+            (let [q07 (first (filter #(= :q07 (:id %)) (:results result)))]
+              (is (some? q07) "q07 should appear with answer-only stages")
+              (is (= :wrong (:query-score q07)) "No judge → defaults to :wrong")))
+          (testing "aggregate is non-canonical"
+            (is (false? (get-in result [:aggregate :canonical]))))
+          (testing "checkpoint metadata has mode"
+            (let [cp (bench/checkpoint-read (:checkpoint-path result))]
+              (is (= {:skip-raw true :skip-judge true}
+                     (get-in cp [:metadata :mode]))))))
+        (finally
+          (doseq [f (reverse (file-seq (io/file dir)))]
+            (.delete f)))))))
+
+;; --- Tier 0: Canary evaluation ---
+
+(deftest canary-question-ids-are-q01-q02
+  (is (= #{:q01 :q02} bench/canary-question-ids)))
+
+(deftest canary-evaluate-pass
+  (let [results [{:id :q01 :query-score :correct}
+                 {:id :q02 :query-score :correct}]]
+    (is (= :pass (:status (bench/canary-evaluate results))))))
+
+(deftest canary-evaluate-pass-one-wrong
+  (let [results [{:id :q01 :query-score :wrong}
+                 {:id :q02 :query-score :correct}]]
+    (is (= :pass (:status (bench/canary-evaluate results)))
+        "Only warns when ALL canary questions are wrong")))
+
+(deftest canary-evaluate-warn
+  (let [results [{:id :q01 :query-score :wrong}
+                 {:id :q02 :query-score :wrong}]]
+    (is (= :warn (:status (bench/canary-evaluate results))))))
+
+;; --- Tier 1: Canary integration ---
+
+(deftest canary-runs-two-phase-execution
+  (with-redefs [bench/load-questions (fn [] [{:id :q01 :question "Q1?" :category :single-hop
+                                              :query-name "files-by-complexity" :rubric "r1"
+                                              :scoring :deterministic}
+                                             {:id :q02 :question "Q2?" :category :single-hop
+                                              :query-name "files-by-layer" :rubric "r2"
+                                              :scoring :deterministic}
+                                             {:id :q04 :question "Q3?" :category :multi-hop
+                                              :query-name "test" :rubric "r3"}])
+                bench/query-context  (fn [_db _qn] "mock query context")
+                bench/raw-context    (fn [_rp] "mock raw context")
+                bench/repo-head-sha  (fn [_rp] "abc123")
+                query/run-named-query (fn [_db qn]
+                                        (case qn
+                                          "files-by-complexity"
+                                          {:ok [["ring/core.clj" :complex]]}
+                                          "files-by-layer"
+                                          {:ok [["ring/middleware/params.clj" :middleware]]}
+                                          {:ok []}))]
+    (let [dir     (str (io/file (System/getProperty "java.io.tmpdir")
+                                (str "bench-canary-" (System/currentTimeMillis))))
+          order   (atom [])
+          mock-llm (fn [prompt]
+                     (let [qid (cond
+                                 (str/includes? prompt "Q1?") :q01
+                                 (str/includes? prompt "Q2?") :q02
+                                 (str/includes? prompt "Q3?") :q04
+                                 :else :unknown)]
+                       (swap! order conj qid))
+                     {:text (if (str/includes? prompt "Score this answer")
+                              (pr-str {:score :correct :reasoning "Mock"})
+                              "ring/core.clj is complex with middleware layer")
+                      :usage mock-usage})]
+      (try
+        (let [stderr-output (with-out-str
+                              (binding [*err* *out*]
+                                (bench/run-benchmark! nil "." mock-llm
+                                                      :checkpoint-dir dir
+                                                      :canary true
+                                                      :concurrency 1)))]
+          (testing "canary log messages present"
+            (is (str/includes? stderr-output "bench/canary-start"))
+            (is (or (str/includes? stderr-output "bench/canary-pass")
+                    (str/includes? stderr-output "bench/canary-warn"))))
+          (testing "canary questions processed before remaining"
+            (let [filtered (filterv #{:q01 :q02 :q04} @order)
+                  q04-idx  (.indexOf filtered :q04)]
+              (is (pos? q04-idx) "q04 should appear after canary questions"))))
+        (finally
+          (doseq [f (reverse (file-seq (io/file dir)))]
             (.delete f)))))))

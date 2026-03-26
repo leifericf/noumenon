@@ -3,18 +3,21 @@
   :question   "Which Ring source files are rated as 'complex' or 'very-complex'?"
   :category   :single-hop
   :query-name "files-by-complexity"
+  :scoring    :deterministic
   :rubric     "Must list all files with :complex or :very-complex rating. Partial credit for listing some."}
 
  {:id         :q02
   :question   "What architectural layer is ring/middleware/params.clj classified as?"
   :category   :single-hop
   :query-name "files-by-layer"
+  :scoring    :deterministic
   :rubric     "Must state the correct layer keyword for the specific file."}
 
  {:id         :q03
   :question   "Who are the top 3 contributors to Ring by commit count?"
   :category   :single-hop
   :query-name "top-contributors"
+  :scoring    :deterministic
   :rubric     "Must name the top 3 contributors in correct rank order with approximate counts."}
 
  ;; Multi-hop questions — require combining multiple facts
