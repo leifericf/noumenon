@@ -1,0 +1,10 @@
+{:name "co-changed-files"
+ :description "File pairs that were changed in the same commits, with count"
+ :query [:find ?p1 ?p2 (count ?commit)
+         :in $ %
+         :where
+         (co-changed ?f1 ?f2 ?commit)
+         [?f1 :file/path ?p1]
+         [?f2 :file/path ?p2]
+         [(< ?p1 ?p2)]]
+ :uses-rules true}

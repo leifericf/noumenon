@@ -5,7 +5,8 @@
             [noumenon.analyze :as analyze]
             [noumenon.db :as db]
             [noumenon.files :as files]
-            [noumenon.git :as git]))
+            [noumenon.git :as git]
+            [noumenon.query :as query]))
 
 ;; --- Helpers ---
 
@@ -26,26 +27,35 @@
   (if (empty? args)
     {:error :no-args}
     (let [[sub & rest-args] args]
-      (if-not (#{"import" "status" "analyze"} sub)
+      (if-not (#{"import" "status" "analyze" "query"} sub)
         {:error :unknown-subcommand :subcommand sub}
         (loop [remaining rest-args
-               opts {}]
+               opts {}
+               positional []]
           (cond
             (empty? remaining)
-            (if (:repo-path opts)
-              (assoc opts :subcommand sub)
-              {:error :no-repo-path :subcommand sub})
+            (if (= "query" sub)
+              (cond
+                (< (count positional) 2)
+                {:error :query-missing-args}
+                :else
+                (assoc opts :subcommand sub
+                       :query-name (first positional)
+                       :repo-path (second positional)))
+              (if (seq positional)
+                (assoc opts :subcommand sub :repo-path (first positional))
+                {:error :no-repo-path :subcommand sub}))
 
             (= "--db-dir" (first remaining))
             (if (second remaining)
-              (recur (drop 2 remaining) (assoc opts :db-dir (second remaining)))
+              (recur (drop 2 remaining) (assoc opts :db-dir (second remaining)) positional)
               {:error :missing-db-dir-value})
 
             (str/starts-with? (first remaining) "-")
             {:error :unknown-flag :flag (first remaining)}
 
             :else
-            (recur (rest remaining) (assoc opts :repo-path (first remaining)))))))))
+            (recur (rest remaining) opts (conj positional (first remaining)))))))))
 
 (def ^:private usage-text
   (str/join "\n"
@@ -54,6 +64,7 @@
              "Subcommands:"
              "  import   Import git history and file structure into Datomic"
              "  analyze  Enrich imported files with LLM-driven semantic analysis"
+             "  query    Run a named Datalog query against the knowledge graph"
              "  status   Show import counts for a repository"
              ""
              "Options:"
@@ -117,6 +128,24 @@
           {:exit   0
            :result result})))))
 
+(defn do-query
+  "Run the query subcommand. Returns {:exit n :result map-or-nil}."
+  [{:keys [repo-path query-name] :as opts}]
+  (if-let [err (validate-repo-path repo-path)]
+    (do (print-error! err) {:exit 1})
+    (let [db-dir  (resolve-db-dir opts)
+          db-name (derive-db-name repo-path)]
+      (if-not (db-exists? db-dir db-name)
+        (do (print-error! (str "No database found for \"" db-name
+                               "\". Run `import` first."))
+            {:exit 1})
+        (let [conn (db/connect-and-ensure-schema db-dir db-name)
+              db   (d/db conn)
+              {:keys [ok error]} (query/run-named-query db query-name)]
+          (if error
+            (do (print-error! error) {:exit 1})
+            {:exit 0 :result ok}))))))
+
 (defn do-status
   "Run the status subcommand. Returns {:exit n :result map-or-nil}."
   [{:keys [repo-path] :as opts}]
@@ -159,6 +188,10 @@
           (print-usage!)
           {:exit 1})
 
+      :query-missing-args
+      (do (print-error! "Usage: query <query-name> <repo-path>")
+          {:exit 1})
+
       :missing-db-dir-value
       (do (print-error! "Missing value for --db-dir.")
           (print-usage!)
@@ -173,6 +206,7 @@
       (let [result (case (:subcommand parsed)
                      "import"  (do-import parsed)
                      "analyze" (do-analyze parsed)
+                     "query"   (do-query parsed)
                      "status"  (do-status parsed))]
         (when (:result result)
           (prn (:result result)))

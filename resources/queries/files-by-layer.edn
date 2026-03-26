@@ -1,0 +1,7 @@
+{:name "files-by-layer"
+ :description "List analyzed files grouped by architectural layer"
+ :query [:find ?path ?layer
+         :where
+         [?e :file/path ?path]
+         [?e :arch/layer ?layer]]
+ :sort-by 1}

@@ -1,0 +1,8 @@
+{:name "top-contributors"
+ :description "Contributors ranked by number of commits authored"
+ :query [:find ?name ?email (count ?commit)
+         :where
+         [?commit :git/type :commit]
+         [?commit :commit/author ?person]
+         [?person :person/name ?name]
+         [?person :person/email ?email]]}

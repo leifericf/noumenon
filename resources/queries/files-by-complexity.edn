@@ -1,0 +1,7 @@
+{:name "files-by-complexity"
+ :description "List analyzed files grouped by complexity rating"
+ :query [:find ?path ?complexity
+         :where
+         [?e :file/path ?path]
+         [?e :sem/complexity ?complexity]]
+ :sort-by 1}

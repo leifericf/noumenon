@@ -1,0 +1,22 @@
+;; Reusable Datalog rules for the Noumenon knowledge graph.
+;; Usage: pass as :rules argument to d/q.
+
+[;; Transitive component dependency — follows :component/depends-on recursively
+ [(transitive-dep ?a ?b)
+  [?a :component/depends-on ?b]]
+ [(transitive-dep ?a ?b)
+  [?a :component/depends-on ?mid]
+  (transitive-dep ?mid ?b)]
+
+ ;; Directory ancestry — follows :dir/parent recursively
+ [(dir-ancestor ?child ?ancestor)
+  [?child :dir/parent ?ancestor]]
+ [(dir-ancestor ?child ?ancestor)
+  [?child :dir/parent ?mid]
+  (dir-ancestor ?mid ?ancestor)]
+
+ ;; Co-change: two files changed in the same commit
+ [(co-changed ?f1 ?f2 ?commit)
+  [?commit :commit/changed-files ?f1]
+  [?commit :commit/changed-files ?f2]
+  [(!= ?f1 ?f2)]]]
