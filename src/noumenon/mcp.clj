@@ -131,7 +131,9 @@
                                       "model" {:type "string"
                                                :description "Model alias (e.g. sonnet, haiku, opus)"}
                                       "concurrency" {:type "integer"
-                                                     :description "Number of concurrent LLM calls (default: 3, max: 20)"}})
+                                                     :description "Number of concurrent LLM calls (default: 3, max: 20)"}
+                                      "max_files" {:type "integer"
+                                                   :description "Stop after analyzing N files (useful for sampling)"}})
                   :required ["repo_path"]}}
    {:name "noumenon_postprocess"
     :description "Extract cross-file import graph deterministically. No LLM calls — uses language-specific parsers. Requires a prior import."
@@ -267,9 +269,11 @@
             invoke-llm  (llm/make-prompt-fn
                          (llm/make-invoke-fn provider-kw {:model model-id}))
             concurrency (min (or (args "concurrency") 3) 20)
+            max-files   (args "max_files")
             result      (analyze/analyze-repo! conn repo-path invoke-llm
-                                               {:model-id    model-id
-                                                :concurrency concurrency})]
+                                               (cond-> {:model-id    model-id
+                                                        :concurrency concurrency}
+                                                 max-files (assoc :max-files max-files)))]
         (tool-result (pr-str result))))))
 
 (defn- handle-postprocess [args defaults]

@@ -225,6 +225,7 @@ The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir
 **`analyze`** `<repo-path>`
 - `--model` — model alias (default: provider default)
 - `--provider` — `glm` (default), `claude-api`, `claude-cli`
+- `--max-files` — stop after analyzing N files (useful for sampling)
 - `--concurrency` — parallel workers, 1-20 (default: 3)
 - `--min-delay` — min ms between LLM requests (default: 0)
 - `--db-dir` — storage directory (default: `data/datomic/`)
@@ -443,7 +444,7 @@ You do not need extra skills, custom sub-agents, or special `CLAUDE.md` wiring j
 | Tool | Required params | Optional params | Description |
 |---|---|---|---|
 | `noumenon_import` | `repo_path` | | Import git history and files |
-| `noumenon_analyze` | `repo_path` | `provider`, `model`, `concurrency` (default: 3) | Run LLM semantic analysis |
+| `noumenon_analyze` | `repo_path` | `provider`, `model`, `concurrency` (default: 3), `max_files` | Run LLM semantic analysis |
 | `noumenon_postprocess` | `repo_path` | `concurrency` (default: 8) | Extract import graph (no LLM) |
 | `noumenon_sync` | `repo_path` | `analyze` (default: false) | Sync with latest git state |
 | `noumenon_ask` | `repo_path`, `question` | `provider`, `model`, `max_iterations` (default: 10) | Ask a question via iterative querying |

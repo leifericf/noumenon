@@ -106,7 +106,7 @@
 
 (defn do-analyze
   "Run the analyze subcommand. Returns {:exit n :result map-or-nil}."
-  [{:keys [repo-path model provider concurrency min-delay] :as opts}]
+  [{:keys [repo-path model provider concurrency min-delay max-files] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
@@ -122,9 +122,10 @@
                                (llm/make-invoke-fn provider-kw {:model model-id}))]
               {:exit   0
                :result (analyze/analyze-repo! conn repo-path invoke-llm
-                                              {:model-id     model-id
-                                               :concurrency  (or concurrency 3)
-                                               :min-delay-ms (or min-delay 0)})})))
+                                              (cond-> {:model-id     model-id
+                                                       :concurrency  (or concurrency 3)
+                                                       :min-delay-ms (or min-delay 0)}
+                                                max-files (assoc :max-files max-files)))})))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
           (when-let [help (cli/format-subcommand-help "analyze")]
@@ -536,7 +537,9 @@
    :invalid-max-iterations       #(str "Invalid --max-iterations value: " (:value %))
    :missing-max-iterations-value "Missing value for --max-iterations."
    :missing-param-value          "Missing value for --param. Use --param key=value."
-   :invalid-param-value          #(str "Invalid --param value: " (:value %) ". Expected key=value format.")})
+   :invalid-param-value          #(str "Invalid --param value: " (:value %) ". Expected key=value format.")
+   :invalid-max-files            #(str "Invalid --max-files value: " (:value %))
+   :missing-max-files-value      "Missing value for --max-files."})
 
 (def ^:private errors-with-global-usage
   #{:no-args})

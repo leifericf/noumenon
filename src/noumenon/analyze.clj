@@ -398,10 +398,11 @@
    `opts` may include :model-id, :concurrency, :min-delay-ms.
    Returns summary map with :total-usage."
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
-  ([conn repo-path invoke-llm {:keys [model-id concurrency min-delay-ms]
+  ([conn repo-path invoke-llm {:keys [model-id concurrency min-delay-ms max-files]
                                :or   {concurrency 3 min-delay-ms 0}}]
    (let [db            (d/db conn)
-         files         (files-needing-analysis db)
+         all-files     (files-needing-analysis db)
+         files         (if max-files (vec (take max-files all-files)) all-files)
          total         (count files)
          prompt-map    (load-prompt-template)
          analysis-opts {:prompt-template (:template prompt-map)

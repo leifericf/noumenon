@@ -104,6 +104,9 @@
          {:flag "--provider" :key :provider :parse :string
           :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
           :error-invalid :invalid-provider :error-missing :missing-provider-value}
+         {:flag "--max-files" :key :max-files :parse :pos-int
+          :desc "Stop after analyzing N files (useful for sampling)"
+          :error-invalid :invalid-max-files :error-missing :missing-max-files-value}
          db-dir-flag
          {:flag "--verbose" :key :verbose :parse :bool
           :desc "Log verbose output to stderr"}
