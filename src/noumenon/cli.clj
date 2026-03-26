@@ -204,16 +204,21 @@
                         {:flag "--judge-model" :key :judge-model :parse :string
                          :desc "Model alias for judge stages"
                          :error-missing :missing-judge-model-value}
+                        {:flag "--layers" :key :layers :parse :string
+                         :desc "Comma-separated layers to test: raw,import,enrich,full (default: raw,full)"
+                         :error-missing :missing-layers-value}
                         {:flag "--skip-raw" :key :skip-raw :parse :bool
-                         :desc "Omit raw-context condition (halves LLM calls)"}
+                         :desc "Omit raw-context condition (shorthand for --layers full)"}
                         {:flag "--skip-judge" :key :skip-judge :parse :bool
                          :desc "Skip LLM judge stages; use deterministic scoring where available"}
                         {:flag "--fast" :key :fast :parse :bool
-                         :desc "Deterministic questions only, query condition only (cheapest mode)"}
+                         :desc "Deterministic questions only, full layer only (cheapest mode)"}
                         {:flag "--full" :key :full :parse :bool
                          :desc "Run all questions including LLM-judged (default runs deterministic only)"}
                         {:flag "--canary" :key :canary :parse :bool
-                         :desc "Run q01+q02 first as canary; warn if both fail"}]))
+                         :desc "Run q01+q02 first as canary; warn if both fail"}
+                        {:flag "--report" :key :report :parse :bool
+                         :desc "Generate Markdown report alongside EDN checkpoint"}]))
    :initial {:subcommand "benchmark"}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
@@ -442,16 +447,21 @@
 (defn parse-benchmark-args [args]
   (if (contains-help? args)
     {:help "benchmark"}
-    (let [result (parse-command benchmark-command-spec args)]
+    (let [result (parse-command benchmark-command-spec args)
+          ;; Parse --layers "raw,full" into keyword vector
+          result (if-let [layers-str (:layers result)]
+                   (assoc result :layers (mapv keyword (str/split layers-str #",")))
+                   result)]
       (cond
         (:error result) result
-        ;; --fast: deterministic only + skip raw (cheapest mode)
+        ;; --fast: deterministic only, full layer only (cheapest mode)
         (:fast result)  (-> result
-                            (assoc :skip-raw true :skip-judge true :deterministic-only true)
+                            (assoc :skip-judge true :deterministic-only true
+                                   :layers [:full])
                             (dissoc :fast :full))
-        ;; --full: all questions, both conditions (most expensive)
+        ;; --full: all questions, default layers (most expensive)
         (:full result)  (dissoc result :full)
-        ;; Default: deterministic only, both conditions
+        ;; Default: deterministic only, default layers
         :else           (assoc result :deterministic-only true)))))
 
 (defn- validate-ask-question

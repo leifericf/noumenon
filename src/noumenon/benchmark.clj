@@ -34,16 +34,27 @@
   "Evaluate canary results. Takes a seq of result maps for canary questions.
    Returns {:status :pass/:warn :details [...]}."
   [canary-results]
-  (let [scores (mapv (fn [r] {:id (:id r) :score (:query-score r)}) canary-results)
+  (let [scores (mapv (fn [r] {:id (:id r) :score (:full-score r)}) canary-results)
         all-wrong? (every? (comp #{:wrong} :score) scores)]
     (if all-wrong?
       {:status :warn :details scores}
       {:status :pass :details scores})))
 
+;; --- Layers ---
+
+(def all-layers
+  "Ordered benchmark layers from least to most enriched."
+  [:raw :import :enrich :full])
+
+(def default-layers
+  "Default layers for backward-compatible runs."
+  [:raw :full])
+
 ;; --- Context assembly ---
 
 (defn query-context
-  "Build context string from a named query's results for the query-augmented condition."
+  "Build context string from a named query's results for the given condition.
+   Non-raw conditions query the KG; the layer determines which attributes are meaningful."
   [db query-name]
   (let [{:keys [ok error]} (query/run-named-query db query-name)]
     (if error
@@ -470,35 +481,49 @@
   [score-kw]
   (get score-values score-kw 0.0))
 
+(defn- resolve-layers
+  "Resolve layers from mode map, handling :skip-raw backward compat."
+  [mode]
+  (or (:layers mode)
+      (if (:skip-raw mode) [:full] default-layers)))
+
 (defn aggregate-scores
   "Compute aggregate statistics from a seq of result maps.
-   Each result has :query-score and optionally :raw-score as keywords.
+   Results have per-layer scores keyed as :<layer>-score.
    When mode is provided, sets :canonical flag."
   ([results] (aggregate-scores results nil))
   ([results mode]
-   (let [q-scores   (mapv #(score-value (:query-score %)) results)
-         has-raw?   (some :raw-score results)
-         r-scores   (when has-raw? (mapv #(score-value (:raw-score %)) results))
+   (let [layers     (resolve-layers (or mode {}))
          mean       (fn [xs] (if (seq xs) (/ (reduce + xs) (count xs)) 0.0))
+         layer-key  (fn [layer] (keyword (str (name layer) "-score")))
+         layer-mean (fn [layer rs]
+                      (mean (mapv #(score-value (get % (layer-key layer))) rs)))
          by-cat     (group-by :category results)
          det-rs     (filterv #(= :deterministic (:scoring %)) results)
          llm-rs     (filterv #(not= :deterministic (:scoring %)) results)
-         canonical? (not (or (:skip-raw mode) (:skip-judge mode)))]
-     (cond-> {:question-count      (count results)
-              :query-mean          (mean q-scores)
+         ;; Canonical only if all 4 layers and no skip flags
+         canonical? (and (= (set layers) (set all-layers))
+                         (not (:skip-judge mode)))
+         ;; Use :full layer for deterministic/llm-judged means (primary benchmark metric)
+         primary-layer (if (some #{:full} layers) :full (last layers))]
+     (reduce (fn [agg layer]
+               (assoc agg (keyword (str (name layer) "-mean"))
+                      (layer-mean layer results)))
+             {:question-count      (count results)
               :canonical           canonical?
               :deterministic-count (count det-rs)
-              :deterministic-mean  (mean (mapv #(score-value (:query-score %)) det-rs))
+              :deterministic-mean  (mean (mapv #(score-value (get % (layer-key primary-layer))) det-rs))
               :llm-judged-count    (count llm-rs)
-              :llm-judged-mean     (mean (mapv #(score-value (:query-score %)) llm-rs))
+              :llm-judged-mean     (mean (mapv #(score-value (get % (layer-key primary-layer))) llm-rs))
               :per-category        (into {}
                                          (map (fn [[cat rs]]
-                                                [cat (cond-> {:query-mean (mean (mapv #(score-value (:query-score %)) rs))
-                                                              :count      (count rs)}
-                                                       has-raw?
-                                                       (assoc :raw-mean (mean (mapv #(score-value (:raw-score %)) rs))))]))
+                                                [cat (reduce (fn [m layer]
+                                                               (assoc m (keyword (str (name layer) "-mean"))
+                                                                      (layer-mean layer rs)))
+                                                             {:count (count rs)}
+                                                             layers)]))
                                          by-cat)}
-       has-raw? (assoc :raw-mean (mean r-scores))))))
+             layers))))
 
 ;; --- Usage tracking ---
 
@@ -687,51 +712,50 @@
 ;; --- Stage execution ---
 
 (defn stage-keys
-  "Return the 4 ordered stage keys for a question: [id condition stage-type]."
-  [question]
-  (let [qid (:id question)]
-    [[qid :query :answer]
-     [qid :query :judge]
-     [qid :raw :answer]
-     [qid :raw :judge]]))
+  "Return ordered stage keys for a question across the given layers.
+   Each layer gets an :answer and :judge stage: [id layer stage-type]."
+  ([question] (stage-keys question default-layers))
+  ([question layers]
+   (let [qid (:id question)]
+     (vec (mapcat (fn [layer]
+                    [[qid layer :answer]
+                     [qid layer :judge]])
+                  layers)))))
 
 (defn mode-stage-keys
-  "Return stage keys for a question filtered by mode.
-   Mode map: {:skip-raw bool :skip-judge bool}.
+  "Return stage keys for a question filtered by mode and layers.
+   Mode map: {:skip-judge bool, :layers [...], :skip-raw bool}.
    When :skip-judge is true, deterministic judge stages are kept."
   [question mode]
-  (let [qid         (:id question)
-        skip-raw?   (:skip-raw mode)
-        skip-judge? (:skip-judge mode)
-        deterministic? (= :deterministic (:scoring question))]
-    (cond-> []
-      true                                  (conj [qid :query :answer])
-      (or (not skip-judge?) deterministic?) (conj [qid :query :judge])
-      (not skip-raw?)                       (conj [qid :raw :answer])
-      (and (not skip-raw?)
-           (or (not skip-judge?) deterministic?)) (conj [qid :raw :judge]))))
+  (let [qid            (:id question)
+        skip-judge?    (:skip-judge mode)
+        deterministic? (= :deterministic (:scoring question))
+        layers         (resolve-layers mode)]
+    (vec (mapcat (fn [layer]
+                   (cond-> [[qid layer :answer]]
+                     (or (not skip-judge?) deterministic?)
+                     (conj [qid layer :judge])))
+                 layers))))
 
 (defn all-stage-keys
   "Return all stage keys for all questions in execution order.
-   When mode is provided, filters stages by skip flags."
+   When mode is provided, filters stages by skip flags and layers."
   ([questions] (vec (mapcat stage-keys questions)))
   ([questions mode]
-   (if (or (:skip-raw mode) (:skip-judge mode))
-     (vec (mapcat #(mode-stage-keys % mode) questions))
-     (vec (mapcat stage-keys questions)))))
+   (vec (mapcat #(mode-stage-keys % mode) questions))))
 
 (defn- stage-prompt
   "Build the LLM prompt for a benchmark stage."
   [stage-key {:keys [question rubric-map db raw-ctx stages]}]
-  (let [[qid condition stage-type] stage-key
+  (let [[qid layer stage-type] stage-key
         q-text (:question question)]
-    (case [condition stage-type]
-      [:query :answer] (answer-prompt q-text (query-context db (:query-name question)))
-      [:query :judge]  (judge-prompt (:judge-template rubric-map) q-text (:rubric question)
-                                     (get-in stages [[qid :query :answer] :result]))
-      [:raw :answer]   (answer-prompt q-text raw-ctx)
-      [:raw :judge]    (judge-prompt (:judge-template rubric-map) q-text (:rubric question)
-                                     (get-in stages [[qid :raw :answer] :result])))))
+    (if (= :judge stage-type)
+      (judge-prompt (:judge-template rubric-map) q-text (:rubric question)
+                    (get-in stages [[qid layer :answer] :result]))
+      ;; :answer stage — context depends on layer
+      (if (= :raw layer)
+        (answer-prompt q-text raw-ctx)
+        (answer-prompt q-text (query-context db (:query-name question)))))))
 
 (defn run-stage
   "Execute a single benchmark stage. Returns {:status :ok :result ... :usage ... :completed-at ...}."
@@ -755,26 +779,28 @@
 
 (defn stages->results
   "Convert stages map to result seq. Only includes questions with all expected stages complete.
-   When mode is provided, adjusts expected stages accordingly."
+   Results include per-layer scores keyed as :<layer>-score, :<layer>-reasoning, :<layer>-answer."
   ([questions stages] (stages->results questions stages nil))
   ([questions stages mode]
-   (for [q questions
-         :let [qid       (:id q)
-               exp-keys  (if mode (mode-stage-keys q mode) (stage-keys q))]
-         :when (every? #(contains? stages %) exp-keys)
-         :let [q-judge (get-in stages [[qid :query :judge] :result])
-               r-judge (get-in stages [[qid :raw :judge] :result])]]
-     (cond-> {:id              (:id q)
-              :category        (:category q)
-              :scoring         (:scoring q)
-              :query-name      (:query-name q)
-              :query-answer    (get-in stages [[qid :query :answer] :result])
-              :query-score     (or (:score q-judge) :wrong)
-              :query-reasoning (:reasoning q-judge)}
-       (not (:skip-raw mode))
-       (assoc :raw-answer   (get-in stages [[qid :raw :answer] :result])
-              :raw-score    (or (:score r-judge) :wrong)
-              :raw-reasoning (:reasoning r-judge))))))
+   (let [layers (resolve-layers (or mode {}))]
+     (for [q questions
+           :let [qid      (:id q)
+                 exp-keys (if mode (mode-stage-keys q mode) (stage-keys q layers))]
+           :when (every? #(contains? stages %) exp-keys)]
+       (reduce (fn [result layer]
+                 (let [judge  (get-in stages [[qid layer :judge] :result])
+                       answer (get-in stages [[qid layer :answer] :result])]
+                   (cond-> result
+                     answer (assoc (keyword (str (name layer) "-answer")) answer)
+                     true   (assoc (keyword (str (name layer) "-score"))
+                                   (or (:score judge) :wrong)
+                                   (keyword (str (name layer) "-reasoning"))
+                                   (:reasoning judge)))))
+               {:id         (:id q)
+                :category   (:category q)
+                :scoring    (:scoring q)
+                :query-name (:query-name q)}
+               layers)))))
 
 ;; --- Rate limiting ---
 
@@ -926,25 +952,31 @@
            budget         {}
            concurrency    3
            min-delay-ms   0}} invoke-llm]
-  {:checkpoint-dir checkpoint-dir
-   :budget         budget
-   :judge-llm      (or judge-llm invoke-llm)
-   :model-config   (or model-config {:provider "claude"})
-   :concurrency    (max 1 (min 20 concurrency))
-   :min-delay-ms   (max 0 min-delay-ms)
-   :mode           (or mode {})})
+  (let [mode (or mode {})
+        ;; Backward compat: translate :skip-raw into layers
+        mode (if (and (:skip-raw mode) (not (:layers mode)))
+               (assoc mode :layers [:full])
+               mode)
+        ;; Ensure layers is set
+        mode (if (:layers mode) mode (assoc mode :layers default-layers))]
+    {:checkpoint-dir checkpoint-dir
+     :budget         budget
+     :judge-llm      (or judge-llm invoke-llm)
+     :model-config   (or model-config {:provider "claude"})
+     :concurrency    (max 1 (min 20 concurrency))
+     :min-delay-ms   (max 0 min-delay-ms)
+     :mode           mode}))
 
 (defn- build-stage-plan
   [{:keys [questions mode initial-stages]}]
-  (let [all-stages     (all-stage-keys questions mode)
+  (let [layers         (resolve-layers mode)
+        all-stages     (all-stage-keys questions mode)
         total          (count all-stages)
-        skip-raw?      (:skip-raw mode)
         has-remaining? (some #(not (contains? initial-stages %)) all-stages)]
     {:all-stages all-stages
      :total total
-     :skip-raw? skip-raw?
      :has-remaining? has-remaining?
-     :conditions (if skip-raw? [:query] [:query :raw])}))
+     :layers layers}))
 
 (defn- build-run-metadata
   [{:keys [repo-path questions rubric-map model-config mode budget resume-checkpoint run-id]}]
@@ -960,11 +992,11 @@
 
 (defn- run-canary-phases!
   "Run canary questions first, evaluate, then run remaining questions."
-  [questions conditions shared checkpoint stop-flag concurrency mode run-id]
+  [questions layers shared checkpoint stop-flag concurrency mode run-id]
   (let [canary-qs    (filterv (comp canary-question-ids :id) questions)
         remaining-qs (filterv (comp not canary-question-ids :id) questions)
-        canary-pairs (for [q canary-qs, condition conditions] [(:id q) condition q])
-        rest-pairs   (for [q remaining-qs, condition conditions] [(:id q) condition q])]
+        canary-pairs (for [q canary-qs, layer layers] [(:id q) layer q])
+        rest-pairs   (for [q remaining-qs, layer layers] [(:id q) layer q])]
     (log! (str "bench/canary-start run-id=" run-id
                " questions=" (count canary-qs)))
     (run-pairs! canary-pairs shared concurrency)
@@ -990,20 +1022,24 @@
         total-ms    (- (System/currentTimeMillis) start-ms)]
     (swap! checkpoint assoc :aggregate agg :total-usage total-usage)
     (checkpoint-write cp-path @checkpoint)
-    (log! (str "bench/run-complete run-id=" run-id
-               " questions=" (:question-count agg)
-               " query-mean=" (format "%.2f" (double (:query-mean agg)))
-               (when (:raw-mean agg)
-                 (str " raw-mean=" (format "%.2f" (double (:raw-mean agg)))))
-               " deterministic=" (format "%.2f" (double (:deterministic-mean agg)))
-               "(" (:deterministic-count agg) ")"
-               " llm-judged=" (format "%.2f" (double (:llm-judged-mean agg)))
-               "(" (:llm-judged-count agg) ")"
-               " tokens=" (:input-tokens total-usage) "/" (:output-tokens total-usage)
-               " cost=$" (format "%.4f" (double (:cost-usd total-usage 0.0)))
-               " duration=" total-ms "ms"
-               (when-not (:canonical agg) " mode=non-canonical")
-               (when stop-reason (str " stopped-by=" (name stop-reason)))))
+    (let [layers (or (:layers mode) default-layers)
+          layer-means (str/join " "
+                                (keep (fn [layer]
+                                        (when-let [m (get agg (keyword (str (name layer) "-mean")))]
+                                          (str (name layer) "=" (format "%.2f" (double m)))))
+                                      layers))]
+      (log! (str "bench/run-complete run-id=" run-id
+                 " questions=" (:question-count agg)
+                 " " layer-means
+                 " deterministic=" (format "%.2f" (double (:deterministic-mean agg)))
+                 "(" (:deterministic-count agg) ")"
+                 " llm-judged=" (format "%.2f" (double (:llm-judged-mean agg)))
+                 "(" (:llm-judged-count agg) ")"
+                 " tokens=" (:input-tokens total-usage) "/" (:output-tokens total-usage)
+                 " cost=$" (format "%.4f" (double (:cost-usd total-usage 0.0)))
+                 " duration=" total-ms "ms"
+                 (when-not (:canonical agg) " mode=non-canonical")
+                 (when stop-reason (str " stopped-by=" (name stop-reason))))))
     (when stop-reason
       (log! (str "Resume with: " cli/program-name " benchmark " repo-path " --resume")))
     {:results         results
@@ -1035,13 +1071,14 @@
         error-atom     (atom nil)
         rate-gate      (atom 0)
         initial-stages (if resuming? (:stages resume-checkpoint) {})
-        {:keys [total has-remaining? skip-raw? conditions]}
+        {:keys [total has-remaining? layers]}
         (build-stage-plan {:questions questions :mode mode :initial-stages initial-stages})
         ;; Compute exact stage count for max-questions budget check
         max-question-stages
         (when-let [mq (:max-questions budget)]
           (count (all-stage-keys (take mq questions) mode)))
-        raw-ctx        (when (and has-remaining? (not skip-raw?)) (raw-context repo-path))
+        has-raw?       (some #{:raw} layers)
+        raw-ctx        (when (and has-remaining? has-raw?) (raw-context repo-path))
         checkpoint     (atom (make-initial-checkpoint
                               (build-run-metadata
                                {:resume-checkpoint resume-checkpoint
@@ -1052,7 +1089,7 @@
                                 :model-config model-config
                                 :mode mode
                                 :budget budget})))
-        pairs          (for [q questions, condition conditions] [(:id q) condition q])
+        pairs          (for [q questions, layer layers] [(:id q) layer q])
         shared         {:rubric-map rubric-map :db db :raw-ctx raw-ctx
                         :checkpoint checkpoint :cp-path cp-path
                         :invoke-llm invoke-llm :judge-llm judge-llm
@@ -1072,7 +1109,7 @@
                (when (:stop-after-ms budget) (str " stop-after=" (:stop-after-ms budget) "ms"))))
     (log-cost-estimate! total model-config)
     (if canary
-      (run-canary-phases! questions conditions shared checkpoint stop-flag concurrency mode run-id)
+      (run-canary-phases! questions layers shared checkpoint stop-flag concurrency mode run-id)
       (run-pairs! pairs shared concurrency))
     (finalize-benchmark! {:questions questions :checkpoint checkpoint :cp-path cp-path
                           :run-id run-id :start-ms start-ms :mode mode

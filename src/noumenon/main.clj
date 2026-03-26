@@ -432,7 +432,8 @@
 (defn do-benchmark
   "Run the benchmark subcommand. Returns {:exit n}."
   [{:keys [resume max-questions stop-after max-cost model judge-model provider
-           concurrency min-delay skip-raw skip-judge deterministic-only canary] :as opts}]
+           concurrency min-delay skip-raw skip-judge deterministic-only canary
+           layers report] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
@@ -455,6 +456,7 @@
                                                    :stop-after-ms (when stop-after (* stop-after 1000))
                                                    :max-cost-usd  max-cost}
                                   :mode           (cond-> {}
+                                                    layers             (assoc :layers layers)
                                                     skip-raw           (assoc :skip-raw true)
                                                     skip-judge         (assoc :skip-judge true)
                                                     deterministic-only (assoc :deterministic-only true))

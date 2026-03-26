@@ -79,27 +79,27 @@
   (is (= 0.0 (bench/score-value :unknown))))
 
 (deftest aggregate-scores-basic
-  (let [results [{:query-score :correct :raw-score :partial :category :single-hop}
-                 {:query-score :partial :raw-score :wrong   :category :single-hop}
-                 {:query-score :correct :raw-score :correct :category :multi-hop}]
+  (let [results [{:full-score :correct :raw-score :partial :category :single-hop}
+                 {:full-score :partial :raw-score :wrong   :category :single-hop}
+                 {:full-score :correct :raw-score :correct :category :multi-hop}]
         agg     (bench/aggregate-scores results)]
     (is (= 3 (:question-count agg)))
-    (is (> (:query-mean agg) (:raw-mean agg)))
+    (is (> (:full-mean agg) (:raw-mean agg)))
     (is (contains? (:per-category agg) :single-hop))
     (is (contains? (:per-category agg) :multi-hop))))
 
 (deftest aggregate-scores-empty
   (let [agg (bench/aggregate-scores [])]
     (is (= 0 (:question-count agg)))
-    (is (= 0.0 (:query-mean agg)))))
+    (is (= 0.0 (:full-mean agg)))))
 
 (deftest aggregate-scores-partial-results
-  (let [results [{:query-score :correct :raw-score :partial :category :single-hop}
-                 {:query-score :correct :raw-score :correct :category :multi-hop}
-                 {:query-score :partial :raw-score :wrong   :category :single-hop}]
+  (let [results [{:full-score :correct :raw-score :partial :category :single-hop}
+                 {:full-score :correct :raw-score :correct :category :multi-hop}
+                 {:full-score :partial :raw-score :wrong   :category :single-hop}]
         agg     (bench/aggregate-scores results)]
     (is (= 3 (:question-count agg)))
-    (is (< (abs (- (:query-mean agg) (/ 5.0 6))) 0.001))
+    (is (< (abs (- (:full-mean agg) (/ 5.0 6))) 0.001))
     (is (= 0.5 (:raw-mean agg)))))
 
 (deftest answer-prompt-includes-context
@@ -180,8 +180,8 @@
         path (str (io/file dir "test.edn"))
         cp   {:run-id   valid-run-id
               :metadata {:repo-path "test" :commit-sha "abc"}
-              :stages   {[:q01 :query :answer] {:status :ok :result "answer" :completed-at (java.util.Date.)}
-                         [:q01 :query :judge]  {:status :ok :result {:score :correct :reasoning "good"}
+              :stages   {[:q01 :full :answer] {:status :ok :result "answer" :completed-at (java.util.Date.)}
+                         [:q01 :full :judge]  {:status :ok :result {:score :correct :reasoning "good"}
                                                 :completed-at (java.util.Date.)}}
               :aggregate nil}]
     (try
@@ -191,8 +191,8 @@
       (let [loaded (bench/checkpoint-read path)]
         (is (= valid-run-id (:run-id loaded)))
         (is (= 2 (count (:stages loaded))))
-        (is (= "answer" (get-in loaded [:stages [:q01 :query :answer] :result])))
-        (is (= :correct (get-in loaded [:stages [:q01 :query :judge] :result :score]))))
+        (is (= "answer" (get-in loaded [:stages [:q01 :full :answer] :result])))
+        (is (= :correct (get-in loaded [:stages [:q01 :full :judge] :result :score]))))
       (finally
         (doseq [f (reverse (file-seq dir))]
           (.delete f))))))
@@ -218,7 +218,7 @@
                               (bench/checkpoint-read path))))
       (testing "checkpoint with invalid judge score rejects"
         (spit path (pr-str {:run-id valid-run-id :stages
-                            {[:q01 :query :judge]
+                            {[:q01 :full :judge]
                              {:status :ok :result {:score :evil :reasoning "hacked"}}}}))
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid judge score"
                               (bench/checkpoint-read path))))
@@ -250,7 +250,7 @@
       ;; N futures each add a unique stage and write checkpoint
       (let [futures (mapv (fn [i]
                             (future
-                              (let [stage-key [(keyword (str "q" i)) :query :answer]]
+                              (let [stage-key [(keyword (str "q" i)) :full :answer]]
                                 (swap! cp assoc-in [:stages stage-key]
                                        {:status :ok :result (str "answer-" i)})
                                 (bench/checkpoint-write-latest! path cp))))
@@ -262,7 +262,7 @@
         (is (= n (count (:stages loaded)))
             (str "Expected " n " stages, got " (count (:stages loaded))))
         (doseq [i (range n)]
-          (let [stage-key [(keyword (str "q" i)) :query :answer]]
+          (let [stage-key [(keyword (str "q" i)) :full :answer]]
             (is (contains? (:stages loaded) stage-key)
                 (str "Missing stage " stage-key)))))
       (finally
@@ -273,10 +273,10 @@
   (let [q    {:id :q01 :question "?" :category :single-hop :query-name "test" :rubric "r"}
         keys (bench/stage-keys q)]
     (is (= 4 (count keys)))
-    (is (= [[:q01 :query :answer]
-            [:q01 :query :judge]
-            [:q01 :raw :answer]
-            [:q01 :raw :judge]]
+    (is (= [[:q01 :raw :answer]
+            [:q01 :raw :judge]
+            [:q01 :full :answer]
+            [:q01 :full :judge]]
            keys))))
 
 (deftest all-stage-keys-ordering
@@ -288,34 +288,34 @@
 
 (deftest stages->results-complete-question
   (let [qs     [{:id :q01 :category :single-hop :query-name "test"}]
-        stages {[:q01 :query :answer] {:status :ok :result "qa"}
-                [:q01 :query :judge]  {:status :ok :result {:score :correct :reasoning "good"}}
+        stages {[:q01 :full :answer] {:status :ok :result "qa"}
+                [:q01 :full :judge]  {:status :ok :result {:score :correct :reasoning "good"}}
                 [:q01 :raw :answer]   {:status :ok :result "ra"}
                 [:q01 :raw :judge]    {:status :ok :result {:score :partial :reasoning "ok"}}}
         results (vec (bench/stages->results qs stages))]
     (is (= 1 (count results)))
     (is (= :q01 (:id (first results))))
-    (is (= "qa" (:query-answer (first results))))
-    (is (= :correct (:query-score (first results))))
+    (is (= "qa" (:full-answer (first results))))
+    (is (= :correct (:full-score (first results))))
     (is (= "ra" (:raw-answer (first results))))
     (is (= :partial (:raw-score (first results))))))
 
 (deftest stages->results-incomplete-question-excluded
   (let [qs     [{:id :q01 :category :single-hop :query-name "test"}]
-        stages {[:q01 :query :answer] {:status :ok :result "qa"}
-                [:q01 :query :judge]  {:status :ok :result {:score :correct :reasoning "good"}}}
+        stages {[:q01 :full :answer] {:status :ok :result "qa"}
+                [:q01 :full :judge]  {:status :ok :result {:score :correct :reasoning "good"}}}
         results (vec (bench/stages->results qs stages))]
     (is (= 0 (count results)))))
 
 (deftest stages->results-nil-judge-defaults-to-wrong
   (let [qs     [{:id :q01 :category :single-hop :query-name "test"}]
-        stages {[:q01 :query :answer] {:status :ok :result "qa"}
-                [:q01 :query :judge]  {:status :ok :result nil}
+        stages {[:q01 :full :answer] {:status :ok :result "qa"}
+                [:q01 :full :judge]  {:status :ok :result nil}
                 [:q01 :raw :answer]   {:status :ok :result "ra"}
                 [:q01 :raw :judge]    {:status :ok :result nil}}
         results (vec (bench/stages->results qs stages))]
     (is (= 1 (count results)))
-    (is (= :wrong (:query-score (first results))))
+    (is (= :wrong (:full-score (first results))))
     (is (= :wrong (:raw-score (first results))))))
 
 ;; --- Tier 1: Integration tests with mock LLM + temp dirs ---
@@ -358,7 +358,7 @@
           (is (= 2 (count (:results result))))
           (is (= 2 (:question-count (:aggregate result)))))
         (testing "all scores correct (mock LLM)"
-          (is (every? #(= :correct (:query-score %)) (:results result)))
+          (is (every? #(= :correct (:full-score %)) (:results result)))
           (is (every? #(= :correct (:raw-score %)) (:results result))))
         (testing "checkpoint file exists and parses"
           (let [cp (bench/checkpoint-read (:checkpoint-path result))]
@@ -521,8 +521,8 @@
                             :model-config "claude-sonnet-4-20250514"
                             :started-at (java.util.Date.)
                             :budget {:max-questions nil :stop-after-ms nil}}
-                 :stages   {[:t01 :query :answer] {:status :ok :result "qa"}
-                            [:t01 :query :judge]  {:status :ok :result {:score :correct :reasoning "g"}}
+                 :stages   {[:t01 :full :answer] {:status :ok :result "qa"}
+                            [:t01 :full :judge]  {:status :ok :result {:score :correct :reasoning "g"}}
                             [:t01 :raw :answer]   {:status :ok :result "ra"}
                             [:t01 :raw :judge]    {:status :ok :result {:score :partial :reasoning "ok"}}}
                  :aggregate nil}
@@ -534,7 +534,7 @@
                                            :concurrency 1)]
           (is (= 0 @calls) "No LLM calls when all stages complete")
           (is (= 1 (count (:results result))))
-          (is (= :correct (:query-score (first (:results result)))))
+          (is (= :correct (:full-score (first (:results result)))))
           (is (= :partial (:raw-score (first (:results result))))))
         (finally
           (doseq [f (reverse (file-seq (io/file dir)))]
@@ -666,10 +666,10 @@
 ;; --- Tier 0: Usage tracking ---
 
 (deftest aggregate-usage-sums-stages
-  (let [stages {[:q01 :query :answer] {:status :ok :result "a"
+  (let [stages {[:q01 :full :answer] {:status :ok :result "a"
                                        :usage {:input-tokens 100 :output-tokens 50
                                                :cost-usd 0.01 :duration-ms 500}}
-                [:q01 :query :judge]  {:status :ok :result {:score :correct}
+                [:q01 :full :judge]  {:status :ok :result {:score :correct}
                                        :usage {:input-tokens 200 :output-tokens 30
                                                :cost-usd 0.02 :duration-ms 300}}}
         agg (bench/aggregate-usage stages)]
@@ -686,8 +686,8 @@
     (is (= 0 (:duration-ms agg)))))
 
 (deftest aggregate-usage-missing-usage-graceful
-  (let [stages {[:q01 :query :answer] {:status :ok :result "a"}
-                [:q01 :query :judge]  {:status :ok :result {:score :correct}
+  (let [stages {[:q01 :full :answer] {:status :ok :result "a"}
+                [:q01 :full :judge]  {:status :ok :result {:score :correct}
                                        :usage {:input-tokens 50 :output-tokens 20
                                                :cost-usd 0.005 :duration-ms 200}}}
         agg (bench/aggregate-usage stages)]
@@ -848,7 +848,7 @@
               (is (= 8 (count (:stages cp))) "2 questions × 4 stages")))
           (testing "correct aggregate scores"
             (is (= 2 (:question-count (:aggregate result))))
-            (is (every? #(= :correct (:query-score %)) (:results result)))
+            (is (every? #(= :correct (:full-score %)) (:results result)))
             (is (every? #(= :correct (:raw-score %)) (:results result))))
           (testing "run-id and checkpoint-path returned"
             (is (string? (:run-id result)))
@@ -1074,10 +1074,10 @@
                   {:ok [["ring/core.clj" :complex]]})]
     (let [q       {:id :q01 :question "?" :query-name "files-by-complexity"
                    :scoring :deterministic :rubric "r" :category :single-hop}
-          stages  {[:q01 :query :answer] {:status :ok :result "ring/core.clj is complex"}}
+          stages  {[:q01 :full :answer] {:status :ok :result "ring/core.clj is complex"}}
           llm-called (atom false)
           mock-llm   (fn [_] (reset! llm-called true) {:text "" :usage llm/zero-usage})
-          result  (bench/run-stage [:q01 :query :judge]
+          result  (bench/run-stage [:q01 :full :judge]
                                    {:question q :rubric-map {} :db nil :raw-ctx nil
                                     :stages stages :invoke-llm mock-llm :judge-llm mock-llm})]
       (is (false? @llm-called) "LLM should not be called for deterministic scoring")
@@ -1088,56 +1088,63 @@
 
 (deftest mode-stage-keys-no-flags
   (let [q {:id :q01 :scoring :deterministic}]
-    (is (= [[:q01 :query :answer] [:q01 :query :judge]
-            [:q01 :raw :answer] [:q01 :raw :judge]]
+    (is (= [[:q01 :raw :answer] [:q01 :raw :judge]
+            [:q01 :full :answer] [:q01 :full :judge]]
            (bench/mode-stage-keys q {})))))
 
 (deftest mode-stage-keys-skip-raw
   (let [q {:id :q01 :scoring :deterministic}]
-    (is (= [[:q01 :query :answer] [:q01 :query :judge]]
+    (is (= [[:q01 :full :answer] [:q01 :full :judge]]
            (bench/mode-stage-keys q {:skip-raw true})))))
 
 (deftest mode-stage-keys-skip-judge-deterministic
   (let [q {:id :q01 :scoring :deterministic}]
-    (is (= [[:q01 :query :answer] [:q01 :query :judge]
-            [:q01 :raw :answer] [:q01 :raw :judge]]
+    (is (= [[:q01 :raw :answer] [:q01 :raw :judge]
+            [:q01 :full :answer] [:q01 :full :judge]]
            (bench/mode-stage-keys q {:skip-judge true}))
         "Deterministic questions keep judge stages even with --skip-judge")))
 
 (deftest mode-stage-keys-skip-judge-llm
   (let [q {:id :q07}]
-    (is (= [[:q07 :query :answer] [:q07 :raw :answer]]
+    (is (= [[:q07 :raw :answer] [:q07 :full :answer]]
            (bench/mode-stage-keys q {:skip-judge true}))
         "Non-deterministic questions lose judge stages with --skip-judge")))
 
 (deftest mode-stage-keys-fast
   (let [q-det {:id :q01 :scoring :deterministic}
         q-llm {:id :q07}
-        mode  {:skip-raw true :skip-judge true}]
-    (is (= [[:q01 :query :answer] [:q01 :query :judge]]
+        mode  {:layers [:full] :skip-judge true}]
+    (is (= [[:q01 :full :answer] [:q01 :full :judge]]
            (bench/mode-stage-keys q-det mode)))
-    (is (= [[:q07 :query :answer]]
+    (is (= [[:q07 :full :answer]]
            (bench/mode-stage-keys q-llm mode)))))
 
 (deftest all-stage-keys-with-mode
   (let [qs [{:id :q01 :scoring :deterministic} {:id :q07}]
-        mode {:skip-raw true :skip-judge true}]
-    (is (= [[:q01 :query :answer] [:q01 :query :judge] [:q07 :query :answer]]
+        mode {:layers [:full] :skip-judge true}]
+    (is (= [[:q01 :full :answer] [:q01 :full :judge] [:q07 :full :answer]]
            (bench/all-stage-keys qs mode)))))
 
 (deftest aggregate-scores-canonical-true
-  (let [results [{:query-score :correct :raw-score :correct :category :test}]
-        agg     (bench/aggregate-scores results)]
+  (let [results [{:full-score :correct :raw-score :correct
+                  :import-score :correct :enrich-score :correct :category :test}]
+        agg     (bench/aggregate-scores results {:layers [:raw :import :enrich :full]})]
     (is (true? (:canonical agg)))))
 
+(deftest aggregate-scores-canonical-false-with-default-layers
+  (let [results [{:full-score :correct :raw-score :correct :category :test}]
+        agg     (bench/aggregate-scores results)]
+    (is (false? (:canonical agg))
+        "Default layers [:raw :full] is not canonical — all 4 layers required")))
+
 (deftest aggregate-scores-canonical-false-with-skip-raw
-  (let [results [{:query-score :correct :category :test}]
+  (let [results [{:full-score :correct :category :test}]
         agg     (bench/aggregate-scores results {:skip-raw true})]
     (is (false? (:canonical agg)))
     (is (nil? (:raw-mean agg)))))
 
 (deftest aggregate-scores-skip-judge-no-scored
-  (let [results [{:query-score :wrong :category :test}]
+  (let [results [{:full-score :wrong :category :test}]
         agg     (bench/aggregate-scores results {:skip-judge true})]
     (is (false? (:canonical agg)))))
 
@@ -1187,23 +1194,23 @@
       (try
         (let [result (bench/run-benchmark! nil "." counting-llm
                                            :checkpoint-dir dir
-                                           :mode {:skip-raw true :skip-judge true}
+                                           :mode {:layers [:full] :skip-judge true}
                                            :concurrency 1)]
-          (testing "only query-answer stages invoke LLM"
-            (is (= 2 @calls) "2 answer calls (1 per question, query-only)"))
+          (testing "only full-answer stages invoke LLM"
+            (is (= 2 @calls) "2 answer calls (1 per question, full-only)"))
           (testing "deterministic question scored"
             (let [q01 (first (filter #(= :q01 (:id %)) (:results result)))]
               (is (some? q01))
-              (is (= :correct (:query-score q01)))))
+              (is (= :correct (:full-score q01)))))
           (testing "non-deterministic question not scored"
             (let [q07 (first (filter #(= :q07 (:id %)) (:results result)))]
               (is (some? q07) "q07 should appear with answer-only stages")
-              (is (= :wrong (:query-score q07)) "No judge → defaults to :wrong")))
+              (is (= :wrong (:full-score q07)) "No judge → defaults to :wrong")))
           (testing "aggregate is non-canonical"
             (is (false? (get-in result [:aggregate :canonical]))))
           (testing "checkpoint metadata has mode"
             (let [cp (bench/checkpoint-read (:checkpoint-path result))]
-              (is (= {:skip-raw true :skip-judge true}
+              (is (= {:layers [:full] :skip-judge true}
                      (get-in cp [:metadata :mode]))))))
         (finally
           (doseq [f (reverse (file-seq (io/file dir)))]
@@ -1215,19 +1222,19 @@
   (is (= #{:q01 :q02} bench/canary-question-ids)))
 
 (deftest canary-evaluate-pass
-  (let [results [{:id :q01 :query-score :correct}
-                 {:id :q02 :query-score :correct}]]
+  (let [results [{:id :q01 :full-score :correct}
+                 {:id :q02 :full-score :correct}]]
     (is (= :pass (:status (bench/canary-evaluate results))))))
 
 (deftest canary-evaluate-pass-one-wrong
-  (let [results [{:id :q01 :query-score :wrong}
-                 {:id :q02 :query-score :correct}]]
+  (let [results [{:id :q01 :full-score :wrong}
+                 {:id :q02 :full-score :correct}]]
     (is (= :pass (:status (bench/canary-evaluate results)))
         "Only warns when ALL canary questions are wrong")))
 
 (deftest canary-evaluate-warn
-  (let [results [{:id :q01 :query-score :wrong}
-                 {:id :q02 :query-score :wrong}]]
+  (let [results [{:id :q01 :full-score :wrong}
+                 {:id :q02 :full-score :wrong}]]
     (is (= :warn (:status (bench/canary-evaluate results))))))
 
 ;; --- Tier 1: Canary integration ---
@@ -1314,7 +1321,7 @@
         mock-fn  (fn [_prompt]
                    {:text "Ring is a web library" :usage mock-usage :resolved-model "mock-v1"})
         result   (with-redefs [bench/query-context (fn [_db _qn] "mock context")]
-                   (bench/run-stage [:t01 :query :answer]
+                   (bench/run-stage [:t01 :full :answer]
                                     {:question q :rubric-map rubric :db nil :raw-ctx nil
                                      :stages {} :invoke-llm mock-fn :judge-llm mock-fn}))]
     (is (= :ok (:status result)))
@@ -1326,11 +1333,11 @@
   (let [q        {:id :t01 :question "What is Ring?" :query-name "files-by-complexity"
                   :rubric "Explain the library" :category :test}
         rubric   (bench/load-rubric)
-        stages   {[:t01 :query :answer] {:status :ok :result "Ring is a web library"}}
+        stages   {[:t01 :full :answer] {:status :ok :result "Ring is a web library"}}
         mock-fn  (fn [_prompt]
                    {:text (pr-str {:score :correct :reasoning "Good answer"})
                     :usage mock-usage :resolved-model "mock-v1"})
-        result   (bench/run-stage [:t01 :query :judge]
+        result   (bench/run-stage [:t01 :full :judge]
                                   {:question q :rubric-map rubric :db nil :raw-ctx nil
                                    :stages stages :invoke-llm mock-fn :judge-llm mock-fn})]
     (is (= :ok (:status result)))
@@ -1393,11 +1400,11 @@
 ;; --- Tier 0: Per-tier aggregation ---
 
 (deftest aggregate-scores-per-tier
-  (let [results [{:query-score :correct :raw-score :correct :category :single-hop
+  (let [results [{:full-score :correct :raw-score :correct :category :single-hop
                   :scoring :deterministic}
-                 {:query-score :partial :raw-score :wrong :category :single-hop
+                 {:full-score :partial :raw-score :wrong :category :single-hop
                   :scoring :deterministic}
-                 {:query-score :correct :raw-score :partial :category :multi-hop
+                 {:full-score :correct :raw-score :partial :category :multi-hop
                   :scoring nil}]
         agg     (bench/aggregate-scores results)]
     (is (= 2 (:deterministic-count agg)))
@@ -1420,8 +1427,8 @@
 
 (deftest stages->results-includes-scoring
   (let [qs     [{:id :q01 :category :single-hop :query-name "test" :scoring :deterministic}]
-        stages {[:q01 :query :answer] {:status :ok :result "qa"}
-                [:q01 :query :judge]  {:status :ok :result {:score :correct :reasoning "good"}}
+        stages {[:q01 :full :answer] {:status :ok :result "qa"}
+                [:q01 :full :judge]  {:status :ok :result {:score :correct :reasoning "good"}}
                 [:q01 :raw :answer]   {:status :ok :result "ra"}
                 [:q01 :raw :judge]    {:status :ok :result {:score :partial :reasoning "ok"}}}
         results (vec (bench/stages->results qs stages))]
