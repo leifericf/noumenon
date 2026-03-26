@@ -4,9 +4,11 @@
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.agent :as agent]
+            [noumenon.analyze :as analyze]
             [noumenon.db :as db]
             [noumenon.files :as files]
             [noumenon.git :as git]
+            [noumenon.imports :as imports]
             [noumenon.llm :as llm]
             [noumenon.query :as query]
             [noumenon.sync :as sync]
@@ -99,7 +101,7 @@
    {:name "noumenon_list_queries"
     :description "List available named Datalog queries"
     :inputSchema {:type "object" :properties {}}}
-   {:name "noumenon_schema"
+   {:name "noumenon_get_schema"
     :description "Get the database schema showing all attributes and their types. Requires a repo to have been imported first."
     :inputSchema {:type "object"
                   :properties repo-path-prop
@@ -119,7 +121,24 @@
                                       "provider" {:type "string" :description "LLM provider: glm, claude-api, or claude-cli (aliases: claude = claude-cli)"}
                                       "model" {:type "string" :description "Model alias (e.g. sonnet, haiku, opus)"}
                                       "max_iterations" {:type "integer" :description "Max query iterations (default: 10, max: 50)"}})
-                  :required ["question" "repo_path"]}}])
+                  :required ["question" "repo_path"]}}
+   {:name "noumenon_analyze"
+    :description "Run LLM analysis on repository files to enrich the knowledge graph with semantic metadata. Only analyzes files not yet analyzed. Requires a prior import."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"concurrency" {:type "integer"
+                                                     :description "Number of concurrent LLM calls (default: 3, max: 10)"}})
+                  :required ["repo_path"]}}
+   {:name "noumenon_postprocess"
+    :description "Extract cross-file import graph deterministically. No LLM calls — uses language-specific parsers. Requires a prior import."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"concurrency" {:type "integer"
+                                                     :description "Extraction concurrency (default: 8, max: 20)"}})
+                  :required ["repo_path"]}}
+   {:name "noumenon_list_databases"
+    :description "List all noumenon databases with entity counts, pipeline stages, and cost."
+    :inputSchema {:type "object" :properties {}}}])
 
 ;; --- Tool handlers ---
 
@@ -187,7 +206,7 @@
        (str/join "\n")
        tool-result))
 
-(defn- handle-schema [args defaults]
+(defn- handle-get-schema [args defaults]
   (with-conn args defaults
     (fn [{:keys [db]}]
       (tool-result (query/schema-summary db)))))
@@ -221,8 +240,8 @@
       (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
             model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
             invoke-fn   (llm/make-invoke-fn provider-kw {:model       model-id
-                                                              :temperature 0.3
-                                                              :max-tokens  4096})
+                                                         :temperature 0.3
+                                                         :max-tokens  4096})
             max-iter    (min (or (args "max_iterations") 10) 50)
             result      (agent/ask db (args "question")
                                    {:invoke-fn      invoke-fn
@@ -236,14 +255,45 @@
         (tool-result (or (:answer result)
                          (str "No answer found (status: " (name (:status result)) ")")))))))
 
+(defn- handle-analyze [args defaults]
+  (with-conn args defaults
+    (fn [{:keys [conn repo-path]}]
+      (let [provider-kw (llm/provider->kw (or (:provider defaults) llm/default-provider))
+            model-id    (llm/model-alias->id (or (:model defaults) llm/default-model-alias))
+            invoke-llm  (llm/make-prompt-fn
+                         (llm/make-invoke-fn provider-kw {:model model-id}))
+            concurrency (min (or (args "concurrency") 3) 10)
+            result      (analyze/analyze-repo! conn repo-path invoke-llm
+                                               {:model-id    model-id
+                                                :concurrency concurrency})]
+        (tool-result (pr-str result))))))
+
+(defn- handle-postprocess [args defaults]
+  (with-conn args defaults
+    (fn [{:keys [conn repo-path]}]
+      (let [concurrency (min (or (args "concurrency") 8) 20)
+            result      (imports/postprocess-repo! conn repo-path
+                                                   {:concurrency concurrency})]
+        (tool-result (pr-str result))))))
+
+(defn- handle-list-databases [_args defaults]
+  (let [db-dir (util/resolve-db-dir defaults)
+        names  (db/list-db-dirs db-dir)]
+    (if (seq names)
+      (tool-result (pr-str (mapv #(db/db-stats db-dir %) names)))
+      (tool-result "No databases found."))))
+
 (def ^:private tool-handlers
-  {"noumenon_import"       handle-import
-   "noumenon_status"       handle-status
-   "noumenon_query"        handle-query
-   "noumenon_list_queries" handle-list-queries
-   "noumenon_schema"       handle-schema
-   "noumenon_sync"         handle-sync
-   "noumenon_ask"          handle-ask})
+  {"noumenon_import"         handle-import
+   "noumenon_status"         handle-status
+   "noumenon_query"          handle-query
+   "noumenon_list_queries"   handle-list-queries
+   "noumenon_get_schema"     handle-get-schema
+   "noumenon_sync"           handle-sync
+   "noumenon_ask"            handle-ask
+   "noumenon_analyze"        handle-analyze
+   "noumenon_postprocess"    handle-postprocess
+   "noumenon_list_databases" handle-list-databases})
 
 ;; --- MCP method handlers ---
 

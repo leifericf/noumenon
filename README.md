@@ -37,7 +37,7 @@ And more complex questions such as:
 - A Datomic knowledge graph per imported repo name, with stable identities
 - Named EDN queries in `resources/queries/` for repeatable analysis
 - Deterministic import graph extraction (`postprocess`) for impact tracing
-- AI-powered `agent` mode that reasons by querying, not guessing
+- AI-powered `ask` mode that reasons by querying, not guessing
 - Benchmark flows (`benchmark`, `longbench`) to measure quality and cost
 
 ## Requirements
@@ -152,7 +152,8 @@ The MCP server also auto-syncs before queries when HEAD changes (disable with `-
 
 ```bash
 clj -M:run status /path/to/repo
-clj -M:run databases
+clj -M:run list-databases
+clj -M:run show-schema /path/to/repo
 clj -M:run query list
 clj -M:run query files-by-complexity /path/to/repo
 ```
@@ -160,7 +161,7 @@ clj -M:run query files-by-complexity /path/to/repo
 ### 5) Ask the graph a natural-language question
 
 ```bash
-clj -M:run agent -q "Which files are the biggest risk hotspots?" /path/to/repo
+clj -M:run ask -q "Which files are the biggest risk hotspots?" /path/to/repo
 ```
 
 ## Pipeline Overview
@@ -173,7 +174,7 @@ flowchart LR
   S[Sync / Watch\nIncremental refresh] -.->|detects changes| A
 
   C --> D[Query\nNamed Datalog queries]
-  C --> E[Agent\nIterative query + LLM reasoning]
+  C --> E[Ask\nIterative query + LLM reasoning]
   C --> F[Serve\nMCP tools for external agents]
 
   D --> G[Decisions\nRisk, ownership, hotspots, impact]
@@ -185,38 +186,118 @@ flowchart LR
 
 `postprocess` is optional but recommended when you want deterministic dependency and test-impact analysis. `sync` can replace the manual `import` + `postprocess` workflow and handles incremental updates.
 
-## CLI Overview
+## Command Reference
 
 ```bash
-clj -M:run <subcommand> [options]
+clj -M:run <command> [options]
 ```
 
-Run `clj -M:run --help` for global help, or `clj -M:run <subcommand> --help` for details.
+Run `clj -M:run --help` for global help, or `clj -M:run <command> --help` for details.
 
 `import` accepts either `<repo-path>` or a Git URL (auto-cloned to `data/repos/<name>/`). See [Using with Perforce](#using-with-perforce) for Helix Core repositories.
 
-| Subcommand | Purpose |
-|---|---|
-| `import` | Import Git history and file structure into Datomic |
-| `analyze` | Enrich files with LLM-generated semantic metadata |
-| `postprocess` | Extract deterministic cross-file import graph |
-| `sync` | Sync knowledge graph with latest git state |
-| `watch` | Watch a repository and auto-sync on new commits |
-| `query` | Run a named query (`query list` to enumerate) |
-| `status` | Show imported entity counts for a repo |
-| `databases` | List all databases or delete one |
-| `agent` | Ask repository questions via iterative query + LLM flow |
-| `serve` | Start MCP server (JSON-RPC over stdio) |
-| `benchmark` | Evaluate knowledge graph efficacy (40 questions, deterministic + LLM-judged) |
-| `longbench` | Run LongBench v2 workflow (`download`, `run`, `results`) |
+### Unified CLI and MCP interface
 
-Common flags:
+The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir`, `--provider`, and `--model` from the `serve` command flags.
 
-- `--provider <name>`: `glm`, `claude-api`, `claude-cli` (`claude` alias)
-- `--model <alias>`: e.g. `sonnet`, `haiku`, `opus`
-- `--db-dir <dir>`: override Datomic storage directory
-- `--max-cost <usd>`: stop when session cost exceeds threshold
-- `--verbose` / `-v`: verbose stderr logs
+| Command | CLI | MCP tool | Description |
+|---|---|---|---|
+| Import | `import <path>` | `noumenon_import` | Import git history and file structure |
+| Analyze | `analyze <path>` | `noumenon_analyze` | Enrich files with LLM semantic metadata |
+| Postprocess | `postprocess <path>` | `noumenon_postprocess` | Extract cross-file import graph (no LLM) |
+| Sync | `sync <path>` | `noumenon_sync` | Sync knowledge graph with latest git state |
+| Ask | `ask -q <question> <path>` | `noumenon_ask` | Ask a question using iterative Datalog querying |
+| Query | `query <name> <path>` | `noumenon_query` | Run a named Datalog query |
+| List queries | `query list` | `noumenon_list_queries` | List available named queries |
+| Show schema | `show-schema <path>` | `noumenon_get_schema` | Show database schema with all attributes |
+| Status | `status <path>` | `noumenon_status` | Show entity counts for a repository |
+| List databases | `list-databases` | `noumenon_list_databases` | List all databases with stats |
+| Watch | `watch <path>` | -- | Auto-sync on new commits (CLI-only) |
+| Serve | `serve` | -- | Start MCP server (CLI-only) |
+| Benchmark | `benchmark <path>` | -- | Evaluate knowledge graph efficacy (CLI-only) |
+| LongBench | `longbench <sub>` | -- | LongBench v2 experiments (CLI-only) |
+
+### CLI options by command
+
+**`import`** `<repo-path-or-url>`
+- `--db-dir` — storage directory (default: `data/datomic/`)
+
+**`analyze`** `<repo-path>`
+- `--model` — model alias (default: provider default)
+- `--provider` — `glm` (default), `claude-api`, `claude-cli`
+- `--concurrency` — parallel workers, 1-20 (default: 3)
+- `--min-delay` — min ms between LLM requests (default: 0)
+- `--db-dir` — storage directory (default: `data/datomic/`)
+- `-v` / `--verbose` — verbose stderr logs
+
+**`postprocess`** `<repo-path>`
+- `--concurrency` — parallel workers, 1-20 (default: 8)
+- `--db-dir` — storage directory (default: `data/datomic/`)
+
+**`sync`** `<repo-path>`
+- `--analyze` — also run LLM analysis on changed files
+- `--model` — model alias (default: provider default)
+- `--provider` — `glm` (default), `claude-api`, `claude-cli`
+- `--concurrency` — parallel workers, 1-20 (default: 8)
+- `--db-dir` — storage directory (default: `data/datomic/`)
+
+**`ask`** `-q <question> <repo-path>`
+- `-q` / `--question` — question to ask (required)
+- `--model` — model alias (default: provider default)
+- `--provider` — `glm` (default), `claude-api`, `claude-cli`
+- `--max-iterations` — max query iterations (default: 10)
+- `--db-dir` — storage directory (default: `data/datomic/`)
+- `-v` / `--verbose` — verbose stderr logs
+
+**`query`** `<query-name> <repo-path>` or `query list`
+- `--param` — supply input as `key=value` (repeatable)
+- `--db-dir` — storage directory (default: `data/datomic/`)
+
+**`show-schema`** `<repo-path>`
+- `--db-dir` — storage directory (default: `data/datomic/`)
+
+**`status`** `<repo-path>`
+- `--db-dir` — storage directory (default: `data/datomic/`)
+
+**`list-databases`**
+- `--delete` — delete a database by name
+- `--db-dir` — storage directory (default: `data/datomic/`)
+
+**`watch`** `<repo-path>`
+- `--interval` — polling interval in seconds (default: 30)
+- `--analyze` — also run LLM analysis on changed files
+- `--model` — model alias (default: provider default)
+- `--provider` — `glm` (default), `claude-api`, `claude-cli`
+- `--concurrency` — parallel workers, 1-20 (default: 8)
+- `--db-dir` — storage directory (default: `data/datomic/`)
+
+**`serve`**
+- `--provider` — LLM provider for ask tool (default: `glm`)
+- `--model` — model alias for ask tool
+- `--no-auto-sync` — disable automatic sync before queries
+- `--db-dir` — storage directory (default: `data/datomic/`)
+
+**`benchmark`** `<repo-path>`
+- `--model` — model alias (default: provider default)
+- `--judge-model` — model alias for judge stages
+- `--provider` — `glm` (default), `claude-api`, `claude-cli`
+- `--concurrency` — parallel workers, 1-20 (default: 3)
+- `--min-delay` — min ms between LLM requests (default: 0)
+- `--max-cost` — stop when cost exceeds threshold in USD
+- `--max-questions` — stop after n questions
+- `--stop-after` — stop after n seconds
+- `--resume` — resume from checkpoint (default: latest)
+- `--skip-raw` — omit raw-context condition
+- `--skip-judge` — skip LLM judge stages
+- `--fast` — deterministic + query-only (cheapest)
+- `--full` — all questions including LLM-judged
+- `--canary` — run q01+q02 first as canary
+- `--db-dir` — storage directory (default: `data/datomic/`)
+
+**`longbench`** `<download|experiment>`
+- `--config` — path to experiment config EDN file (experiment only)
+
+Universal flags: `-h` / `--help`, `--version`
 
 ## Named Queries
 
@@ -359,13 +440,18 @@ You do not need extra skills, custom sub-agents, or special `CLAUDE.md` wiring j
 
 ### Exposed MCP tools
 
-- `noumenon_import`
-- `noumenon_status`
-- `noumenon_query`
-- `noumenon_list_queries`
-- `noumenon_schema`
-- `noumenon_sync`
-- `noumenon_ask`
+| Tool | Required params | Optional params | Description |
+|---|---|---|---|
+| `noumenon_import` | `repo_path` | | Import git history and files |
+| `noumenon_analyze` | `repo_path` | `concurrency` (default: 3) | Run LLM semantic analysis |
+| `noumenon_postprocess` | `repo_path` | `concurrency` (default: 8) | Extract import graph (no LLM) |
+| `noumenon_sync` | `repo_path` | `analyze` (default: false) | Sync with latest git state |
+| `noumenon_ask` | `repo_path`, `question` | `provider`, `model`, `max_iterations` (default: 10) | Ask a question via iterative querying |
+| `noumenon_query` | `repo_path`, `query_name` | `params` | Run a named Datalog query |
+| `noumenon_list_queries` | | | List available named queries |
+| `noumenon_get_schema` | `repo_path` | | Show database schema |
+| `noumenon_status` | `repo_path` | | Get entity counts |
+| `noumenon_list_databases` | | | List all databases with stats |
 
 ## Benchmarks
 

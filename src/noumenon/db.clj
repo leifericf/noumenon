@@ -1,5 +1,6 @@
 (ns noumenon.db
-  (:require [datomic.client.api :as d]
+  (:require [clojure.java.io :as io]
+            [datomic.client.api :as d]
             [noumenon.schema :as schema]))
 
 (defn create-client
@@ -31,3 +32,35 @@
   "Delete a database by name. Returns true if it existed."
   [client db-name]
   (d/delete-database client {:db-name db-name}))
+
+(defn list-db-dirs
+  "Return sorted seq of database names found in the storage dir."
+  [db-dir]
+  (some->> (io/file db-dir "noumenon") .listFiles
+           (filter #(.isDirectory %))
+           (sort-by #(.getName %))
+           (mapv #(.getName %))))
+
+(defn- tx-op-counts
+  "Return map of {:import n :analyze n :postprocess n} from tx metadata."
+  [db]
+  (->> (d/q '[:find ?op (count ?tx) :where [?tx :tx/op ?op]] db)
+       (into {})))
+
+(defn db-stats
+  "Connect to a DB and return stats map with counts, pipeline stages, and cost."
+  [db-dir db-name]
+  (try
+    (let [db     (d/db (connect-and-ensure-schema db-dir db-name))
+          latest (ffirst (d/q '[:find (max ?d) :where [_ :commit/committed-at ?d]] db))
+          cost   (or (ffirst (d/q '[:find (sum ?c) :where [_ :tx/cost-usd ?c]] db)) 0.0)
+          ops    (tx-op-counts db)]
+      {:name    db-name
+       :commits (count (d/q '[:find ?e :where [?e :git/type :commit]] db))
+       :files   (count (d/q '[:find ?e :where [?e :file/path _] [?e :file/size _]] db))
+       :dirs    (count (d/q '[:find ?e :where [?e :dir/path _]] db))
+       :latest  latest
+       :cost    cost
+       :ops     ops})
+    (catch Exception e
+      {:name db-name :error (.getMessage e)})))

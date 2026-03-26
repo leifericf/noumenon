@@ -375,8 +375,8 @@
     (is (str/includes? stdout "--skip-raw"))
     (is (str/blank? stderr))))
 
-(deftest agent-help
-  (let [{:keys [exit stdout]} (run-capturing ["agent" "--help"])]
+(deftest ask-help
+  (let [{:keys [exit stdout]} (run-capturing ["ask" "--help"])]
     (is (= 0 exit))
     (is (str/includes? stdout "--question"))
     (is (str/includes? stdout "Exit codes"))))
@@ -393,35 +393,35 @@
     (is (not (str/blank? stdout)))
     (is (str/blank? stderr))))
 
-;; --- Agent subcommand ---
+;; --- Ask subcommand ---
 
-(deftest agent-missing-question
-  (let [{:keys [exit stderr]} (run-capturing ["agent" repo-path])]
+(deftest ask-missing-question
+  (let [{:keys [exit stderr]} (run-capturing ["ask" repo-path])]
     (is (= 1 exit))
     (is (str/includes? stderr "Missing -q"))))
 
-(deftest agent-missing-repo-path
-  (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "some question"])]
+(deftest ask-missing-repo-path
+  (let [{:keys [exit stderr]} (run-capturing ["ask" "-q" "some question"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Missing"))))
 
-(deftest agent-invalid-max-iterations
-  (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "q" "--max-iterations" "abc" "/tmp"])]
+(deftest ask-invalid-max-iterations
+  (let [{:keys [exit stderr]} (run-capturing ["ask" "-q" "q" "--max-iterations" "abc" "/tmp"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Invalid --max-iterations"))))
 
-(deftest agent-missing-max-iterations-value
-  (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "q" "--max-iterations"])]
+(deftest ask-missing-max-iterations-value
+  (let [{:keys [exit stderr]} (run-capturing ["ask" "-q" "q" "--max-iterations"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Missing value for --max-iterations"))))
 
-(deftest agent-unknown-flag
-  (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "q" "--unknown" "/tmp"])]
+(deftest ask-unknown-flag
+  (let [{:keys [exit stderr]} (run-capturing ["ask" "-q" "q" "--unknown" "/tmp"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Unknown option"))))
 
-(deftest agent-no-database
-  (let [{:keys [exit stderr]} (run-capturing ["agent" "-q" "question" "/tmp/nonexistent-repo-xyz"])]
+(deftest ask-no-database
+  (let [{:keys [exit stderr]} (run-capturing ["ask" "-q" "question" "/tmp/nonexistent-repo-xyz"])]
     (is (= 1 exit))
     (is (str/includes? stderr "Path does not exist"))))
 

@@ -165,12 +165,12 @@
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
-(def ^:private databases-command-spec
+(def ^:private list-databases-command-spec
   {:flags [db-dir-flag
            {:flag "--delete" :key :delete :parse :string
             :desc "Delete a database by name"
             :error-missing :missing-delete-value}]
-   :initial {:subcommand "databases"}
+   :initial {:subcommand "list-databases"}
    :positionals {:required 0 :error nil :keys []}})
 
 (def ^:private analyze-command-spec
@@ -220,13 +220,13 @@
             :error-missing :missing-config-value}]
    :initial {:subcommand "longbench" :longbench-command "experiment"}})
 
-(def ^:private agent-command-spec
+(def ^:private ask-command-spec
   {:flags [{:flag "-q" :key :question :parse :string
             :desc "Alias for --question"
-            :error-missing :agent-missing-question}
+            :error-missing :ask-missing-question}
            {:flag "--question" :key :question :parse :string
             :desc "Question to ask about the repository"
-            :error-missing :agent-missing-question}
+            :error-missing :ask-missing-question}
            {:flag "--model" :key :model :parse :string
             :desc "Model alias (e.g. sonnet, haiku, opus)"
             :error-missing :missing-model-value}
@@ -245,7 +245,7 @@
            {:flag "--verbose" :key :verbose :parse :bool
             :desc "Log verbose output to stderr"}
            {:flag "-v" :key :verbose :parse :bool}]
-   :initial {:subcommand "agent"}
+   :initial {:subcommand "ask"}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
 ;; --- Command registry (drives help generation) ---
@@ -274,16 +274,19 @@
    "query"     {:spec query-command-spec
                 :summary "Run a named Datalog query against the knowledge graph"
                 :usage "query [options] <query-name> <repo-path>\n       query list"}
-   "status"    {:spec simple-command-spec
-                :summary "Show import counts for a repository"
-                :usage "status [options] <repo-path>"}
-   "databases" {:spec databases-command-spec
-                :summary "List all databases or delete one"
-                :usage "databases [--delete <name>] [options]"}
-   "agent"     {:spec agent-command-spec
-                :summary "Ask a question about a repository using AI-powered querying"
-                :usage "agent -q <question> [options] <repo-path>"
-                :epilog "Exit codes: 0 = answered, 1 = error, 2 = budget exhausted (no answer found)."}
+   "status"         {:spec simple-command-spec
+                     :summary "Show import counts for a repository"
+                     :usage "status [options] <repo-path>"}
+   "show-schema"    {:spec simple-command-spec
+                     :summary "Show the database schema with all attributes and types"
+                     :usage "show-schema [options] <repo-path>"}
+   "list-databases" {:spec list-databases-command-spec
+                     :summary "List all databases or delete one"
+                     :usage "list-databases [--delete <name>] [options]"}
+   "ask"            {:spec ask-command-spec
+                     :summary "Ask a question about a repository using AI-powered querying"
+                     :usage "ask -q <question> [options] <repo-path>"
+                     :epilog "Exit codes: 0 = answered, 1 = error, 2 = budget exhausted (no answer found)."}
    "benchmark" {:spec benchmark-command-spec
                 :summary "Evaluate knowledge graph efficacy against a repository"
                 :usage "benchmark [options] <repo-path>"
@@ -314,7 +317,7 @@
                 :usage "longbench <download|experiment> [options]"}})
 
 (def ^:private command-order
-  ["import" "analyze" "postprocess" "sync" "watch" "query" "status" "databases" "agent" "serve" "benchmark" "longbench"])
+  ["import" "analyze" "postprocess" "sync" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark" "longbench"])
 
 ;; --- Help text generation ---
 
@@ -334,7 +337,7 @@
               ""
               "Subcommands:"]
              (mapv (fn [cmd]
-                     (format "  %-12s %s" cmd (:summary (command-registry cmd))))
+                     (format "  %-16s %s" cmd (:summary (command-registry cmd))))
                    command-order)
              [""
               "Universal flags:"
@@ -507,20 +510,20 @@
          :subcommand "longbench"
          :longbench-command sub}))))
 
-(defn- validate-agent-question
-  "Ensure agent opts include :question. Returns opts or {:error ...}."
+(defn- validate-ask-question
+  "Ensure ask opts include :question. Returns opts or {:error ...}."
   [opts]
   (if (:question opts)
     opts
-    {:error :agent-missing-question}))
+    {:error :ask-missing-question}))
 
-(defn parse-agent-args [args]
+(defn parse-ask-args [args]
   (if (contains-help? args)
-    {:help "agent"}
-    (let [result (parse-command agent-command-spec args)]
+    {:help "ask"}
+    (let [result (parse-command ask-command-spec args)]
       (if (:error result)
         result
-        (validate-agent-question result)))))
+        (validate-ask-question result)))))
 
 (defn parse-simple-args
   "Parse args for import/status/analyze/query subcommands."
@@ -558,19 +561,19 @@
       :else
       (let [[sub & rest-args] args]
         (case sub
-          "benchmark" (parse-benchmark-args rest-args)
-          "longbench" (parse-longbench-args rest-args)
-          "agent"     (parse-agent-args rest-args)
-          "serve"     (if (contains-help? rest-args)
-                        {:help "serve"}
-                        (let [result (parse-command (get-in command-registry ["serve" :spec]) rest-args)]
-                          (if (:error result) result
-                              (assoc result :subcommand "serve"))))
-          "databases" (if (contains-help? rest-args)
-                        {:help "databases"}
-                        (let [result (parse-command databases-command-spec rest-args)]
-                          (if (:error result) result
-                              (assoc result :subcommand "databases"))))
-          (if (#{"import" "status" "analyze" "postprocess" "query" "sync" "watch"} sub)
+          "benchmark"      (parse-benchmark-args rest-args)
+          "longbench"      (parse-longbench-args rest-args)
+          "ask"            (parse-ask-args rest-args)
+          "serve"          (if (contains-help? rest-args)
+                             {:help "serve"}
+                             (let [result (parse-command (get-in command-registry ["serve" :spec]) rest-args)]
+                               (if (:error result) result
+                                   (assoc result :subcommand "serve"))))
+          "list-databases" (if (contains-help? rest-args)
+                             {:help "list-databases"}
+                             (let [result (parse-command list-databases-command-spec rest-args)]
+                               (if (:error result) result
+                                   (assoc result :subcommand "list-databases"))))
+          (if (#{"import" "status" "show-schema" "analyze" "postprocess" "query" "sync" "watch"} sub)
             (parse-simple-args sub rest-args)
             {:error :unknown-subcommand :subcommand sub}))))))
