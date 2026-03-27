@@ -94,13 +94,14 @@
                                       "anthropic-version"  "2023-06-01"}
                             :body    req-body
                             :timeout 300000})
-            retryable? (or error (retryable-status status))
-            last-attempt? (>= attempt *max-retries*)]
+            retryable?    (or error (retryable-status status))
+            last-attempt? (>= attempt *max-retries*)
+            retry!        (fn [msg]
+                            (log! (str "  Retry " attempt "/" *max-retries* ": " msg))
+                            (Thread/sleep (get *retry-delays-ms* (dec attempt) 4000)))]
         (cond
           (and error retryable? (not last-attempt?))
-          (do (log! (str "  Retry " attempt "/" *max-retries*
-                         ": " (.getMessage ^Exception error)))
-              (Thread/sleep (get *retry-delays-ms* (dec attempt) 4000))
+          (do (retry! (.getMessage ^Exception error))
               (recur (inc attempt)))
 
           error
@@ -108,15 +109,12 @@
                           {:error error :attempts attempt}))
 
           (and (not= 200 status) retryable? (not last-attempt?))
-          (do (log! (str "  Retry " attempt "/" *max-retries*
-                         ": HTTP " status))
-              (Thread/sleep (get *retry-delays-ms* (dec attempt) 4000))
+          (do (retry! (str "HTTP " status))
               (recur (inc attempt)))
 
           (not= 200 status)
-          (do (log! (str "API error response (HTTP " status ")"))
-              (throw (ex-info (str "API error: HTTP " status)
-                              {:status status :attempts attempt})))
+          (throw (ex-info (str "API error: HTTP " status)
+                          {:status status :attempts attempt}))
 
           :else
           (let [dur-ms  (- (System/currentTimeMillis) start-ms)
