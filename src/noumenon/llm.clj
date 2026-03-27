@@ -183,7 +183,7 @@
                              :cost-usd      (:total_cost_usd parsed 0.0)
                              :duration-ms   dur-ms}
             :resolved-model (:model parsed)})
-         (do (log! "Warning: Claude CLI returned non-JSON output, using raw text with zero usage")
+         (do (log! "WARNING: Claude CLI returned non-JSON output, using raw text with zero usage")
              {:text  out-str
               :usage (assoc zero-usage :duration-ms dur-ms)}))))))
 
