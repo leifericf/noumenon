@@ -376,7 +376,8 @@
   (let [db-dir (util/resolve-db-dir defaults)
         names  (db/list-db-dirs db-dir)]
     (if (seq names)
-      (let [stats (mapv #(db/db-stats db-dir %) names)]
+      (let [client (db/create-client db-dir)
+            stats  (mapv #(db/db-stats client %) names)]
         (tool-result
          (str/join "\n"
                    (map (fn [{:keys [name commits files dirs cost error]}]

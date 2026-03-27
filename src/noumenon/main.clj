@@ -346,7 +346,8 @@
       (let [names (db/list-db-dirs db-dir)]
         (if (empty? names)
           (do (log! (str "No databases found in " db-dir)) {:exit 0 :result []})
-          (let [stats (mapv #(db/db-stats db-dir %) names)]
+          (let [client (db/create-client db-dir)
+                stats  (mapv #(db/db-stats client %) names)]
             (doseq [s stats] (print-db-stats s))
             {:exit 0 :result stats}))))))
 

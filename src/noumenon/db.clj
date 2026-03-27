@@ -48,10 +48,13 @@
        (into {})))
 
 (defn db-stats
-  "Connect to a DB and return stats map with counts, pipeline stages, and cost."
-  [db-dir db-name]
+  "Get stats for a database. Pass a pre-created client to avoid creating
+   a new one per call when iterating over multiple databases."
+  [client db-name]
   (try
-    (let [db     (d/db (connect-and-ensure-schema db-dir db-name))
+    (let [conn   (d/connect client {:db-name db-name})
+          _      (schema/ensure-schema conn)
+          db     (d/db conn)
           latest (ffirst (d/q '[:find (max ?d) :where [_ :commit/committed-at ?d]] db))
           cost   (or (ffirst (d/q '[:find (sum ?c) :where [_ :tx/cost-usd ?c]] db)) 0.0)
           ops    (tx-op-counts db)]
