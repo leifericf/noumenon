@@ -1,44 +1,6 @@
 # Noumenon
 
-Noumenon is a Datomic-backed knowledge graph for codebase understanding.
-
-Instead of treating a repository as an opaque pile of files, Noumenon turns it into a living graph of relationships: commits, authors, files, code segments, architecture, and dependencies. It combines deterministic facts with semantic analysis so humans and agents can ask focused questions and get grounded answers fast. For AI agents, this enables surgical retrieval: fetch the exact entities and edges needed for a task instead of stuffing raw files into context windows, which can reduce token spend and avoid prompt bloat.
-
-## Why Noumenon
-
-Long-context prompting alone breaks down as repositories grow. Noumenon takes a different path: model the codebase as structured data you can query, audit, and reason over.
-
-That structure gives agents a precise retrieval strategy: query first, pull only relevant facts, then reason. The result is designed to improve signal per token and lower context-window waste.
-
-It blends three complementary layers:
-
-- Deterministic facts from Git + filesystem structure
-- Semantic annotations from model analysis
-- Query-first exploration via Datomic + Datalog
-
-That unlocks questions like:
-
-- Which files are complexity hotspots?
-- What files tend to co-change?
-- Who are the primary contributors in a subsystem?
-- What is the likely impact radius of a change?
-
-And more complex questions such as:
-
-- Which `:file/path` entities have both high `:commit/changed-files` frequency and `:sem/complexity` = `:very-complex`?
-- For a target `:file/path`, what transitive `:file/imports` edges and reverse importers (`:file/_imports`) define its blast radius?
-- Which `:code/file+name` segments are marked `:code/deprecated? true` but live in files with recent `:commit/committed-at` activity?
-- Where do `:file/imports` edges cross `:arch/layer` boundaries, and which `:arch/component` pairs are most coupled?
-- Which files combine `:code/safety-concerns`, low bus factor (few distinct `:commit/author`), and high fix-heavy history (`:commit/kind :fix`)?
-
-## What you get
-
-- A CLI-first workflow built for real repositories (`clj -M:run ...`)
-- A Datomic knowledge graph per imported repo name, with stable identities
-- Named EDN queries in `resources/queries/` for repeatable analysis
-- Deterministic import graph extraction (`enrich`) for impact tracing
-- AI-powered `ask` mode that reasons by querying, not guessing
-- A/B benchmark framework to measure knowledge graph efficacy and cost
+Datomic-backed knowledge graph for codebase understanding. See [noumenon.leifericf.com](https://noumenon.leifericf.com) for an overview.
 
 ## Requirements
 
@@ -89,7 +51,7 @@ java -jar target/noumenon-0.1.0.jar --version
 ```clojure
 {:aliases
  {:noumenon
-  {:extra-deps {io.github.leifericf/noumenon {:git/tag "v0.1.0" :git/sha "d97bdac"}}
+  {:extra-deps {io.github.leifericf/noumenon {:git/tag "v0.1.0" :git/sha "284ee79"}}
    :main-opts ["-m" "noumenon.main"]}}}
 ```
 
