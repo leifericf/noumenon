@@ -215,6 +215,14 @@
     (is (:result result))
     (is (re-find #"timed out" (:result result)))))
 
+(deftest dispatch-query-returns-oom-message
+  (let [db     (make-test-db)
+        result (with-redefs [d/q (fn [& _] (throw (OutOfMemoryError. "test")))]
+                 (agent/dispatch-tool db {:tool :query
+                                          :args {:query '[:find ?p :where [?e :file/path ?p]]}}))]
+    (is (:result result))
+    (is (re-find #"exhausted available memory" (:result result)))))
+
 (deftest dispatch-query-clamps-limit-to-max
   (let [db     (make-test-db)
         result (agent/dispatch-tool db {:tool :query

@@ -150,11 +150,14 @@
                                (catch Exception e
                                  (if (str/includes? (str (.getMessage e)) "arity")
                                    (d/q q db)
-                                   (throw e)))))
+                                   (throw e)))
+                               (catch OutOfMemoryError _
+                                 ::oom)))
               result (deref f query-timeout-ms ::timeout)]
-          (if (= result ::timeout)
-            (do (future-cancel f)
-                "Query timed out after 30 seconds. Simplify the query or add more constraints.")
+          (condp = result
+            ::timeout (do (future-cancel f)
+                          "Query timed out after 30 seconds. Simplify the query or add more constraints.")
+            ::oom     "Query exhausted available memory. Simplify the query or add more constraints."
             (let [taken  (vec (take (inc limit) result))
                   capped (take limit taken)]
               (str (pr-str (vec capped))

@@ -69,8 +69,7 @@ The following were re-examined for regressions or new vectors introduced by comm
 - **Fix Complexity:** Challenging
 - **Category:** Input Validation/Injection
 - **Area:** `agent.clj:139-147`
-- **Status:** Carried forward. `d/q` executes to completion before `take` truncates results. A cartesian-join query that passes `validate-query` can exhaust heap.
-- **Mitigation available:** Wrap `d/q` in a timed `future` with `deref` timeout (e.g., 30s), catching `TimeoutException` and returning a `"Query timed out"` result string.
+- **Status:** **FIXED.** Query already ran in a `future` with 30s `deref` timeout and `future-cancel` on timeout. Added `OutOfMemoryError` catch inside the future to gracefully handle heap exhaustion from cartesian-join queries.
 
 ### SEC-006: `git diff` missing `--` separator
 - **Severity:** Minor
@@ -121,7 +120,6 @@ The following were re-examined for regressions or new vectors introduced by comm
 
 | severity | priority | fix_complexity | category | area | summary | threat_scenario | evidence | suggested_mitigation |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Normal | Low | Challenging | Input Validation/Injection | agent.clj | Datalog query DoS via cartesian-join query | Agent receives a crafted question that causes the LLM to emit a cartesian-join Datalog query; `d/q` runs to OOM before `take` truncates | `agent.clj:139-147` — `d/q` runs before `(take (inc limit) result)`; `validate-query` does not bound query complexity | Wrap `d/q` in a timed `future`; deref with timeout (e.g., 30s); return "Query timed out" result on timeout |
 | Minor | Low | Trivial | Input Validation/Injection | mcp.clj | run_id fields lack length bound in MCP handlers | MCP caller passes multi-megabyte run_id string; excess memory allocated during Datomic query parameter handling | `mcp.clj:423` — no `validate-string-length!` before `(d/q ... db run-id)`; same for `mcp.clj:460-461` | Add `(validate-string-length! "run_id" run-id 256)` in `handle-benchmark-results` and both run_id fields in `handle-benchmark-compare` |
 | Minor | Very Low | Trivial | Input Validation/Injection | sync.clj | `git diff` missing `--` separator | If `valid-sha?` regex has edge-case bypass, a crafted SHA could be interpreted by git as a flag or refspec | `sync.clj:44-47` — `shell/sh "git" "-C" ... "diff" "--name-status" old-sha "HEAD"` — no `"--"` before `old-sha` | Insert `"--"` before `old-sha`: `(shell/sh "git" "-C" ... "diff" "--name-status" "--" old-sha "HEAD")` |
 | Minor | Very Low | Trivial | Monitoring/Detection/Response | llm.clj | API error body logged to stderr | Raw LLM API error body (up to 200 chars) written to stderr; could leak internal API error messages or partial response data | `llm.clj:117-119` — `(log! (str "API error response (HTTP " status "): " (truncate (str body) 200)))` | Log only the HTTP status code; omit the raw body, or log only a sanitized subset (e.g., error code field from parsed JSON) |
