@@ -78,6 +78,11 @@
    :arch/layer :arch/subsystem
    :prov/confidence])
 
+(defn- find-file-eid
+  "Look up a file entity ID by path. Returns nil if not found."
+  [db path]
+  (ffirst (d/q '[:find ?e :in $ ?p :where [?e :file/path ?p]] db path)))
+
 (defn- unwrap-ref
   "Extract raw entity ID from a pull ref map, or return v as-is for scalars."
   [v]
@@ -104,15 +109,13 @@
 
 (defn retract-stale!
   "Retract mutable attributes and code segments for modified/deleted files.
-   Returns count of files actually retracted."
+   Returns count of files actually retracted. Throws on transaction failure."
   [conn paths]
   (when (seq paths)
     (let [db      (d/db conn)
           results (->> paths
                        (keep (fn [path]
-                               (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
-                                                             :where [?e :file/path ?p]]
-                                                           db path))]
+                               (when-let [eid (find-file-eid db path)]
                                  (let [tx (into (retract-file-attrs db eid)
                                                 (retract-code-segments db eid))]
                                    (when (seq tx) tx)))))
@@ -123,15 +126,14 @@
       (count results))))
 
 (defn- retract-deleted-files!
-  "Retract entire file entities for deleted files. Returns count actually retracted."
+  "Retract entire file entities for deleted files. Returns count actually retracted.
+   Throws on transaction failure."
   [conn paths]
   (when (seq paths)
     (let [db      (d/db conn)
           results (->> paths
                        (keep (fn [path]
-                               (when-let [eid (ffirst (d/q '[:find ?e :in $ ?p
-                                                             :where [?e :file/path ?p]]
-                                                           db path))]
+                               (when-let [eid (find-file-eid db path)]
                                  (into (retract-code-segments db eid)
                                        [[:db/retractEntity eid]]))))
                        vec)
