@@ -294,3 +294,11 @@
   (testing "clone! rejects URLs with 127.x.x.x"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Blocked.*private"
                           (git/clone! "https://127.0.0.1/evil/repo.git" "/tmp/test-clone")))))
+
+(deftest blocked-address-detects-ipv4-mapped-ipv6
+  (testing "blocked-address? catches IPv4-mapped IPv6 loopback"
+    (let [addr (java.net.InetAddress/getByName "::ffff:127.0.0.1")]
+      (is (#'git/blocked-address? addr))))
+  (testing "blocked-address? catches IPv4-mapped IPv6 private"
+    (let [addr (java.net.InetAddress/getByName "::ffff:192.168.1.1")]
+      (is (#'git/blocked-address? addr)))))

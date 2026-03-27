@@ -43,6 +43,23 @@
   [ip-str]
   (some #(re-find % ip-str) blocked-ip-patterns))
 
+(defn- blocked-address?
+  "True if addr is private, loopback, or link-local. Handles IPv4-mapped IPv6 addresses
+   by re-canonicalizing to the underlying IPv4 address."
+  [^java.net.InetAddress addr]
+  (let [ip (.getHostAddress addr)]
+    (or (private-ip? ip)
+        (.isLoopbackAddress addr)
+        (.isLinkLocalAddress addr)
+        (.isSiteLocalAddress addr)
+        ;; IPv4-mapped IPv6 (::ffff:x.x.x.x): re-canonicalize to check IPv4 form
+        (when (instance? java.net.Inet6Address addr)
+          (let [canon (java.net.InetAddress/getByAddress (.getAddress addr))]
+            (or (.isLoopbackAddress canon)
+                (.isLinkLocalAddress canon)
+                (.isSiteLocalAddress canon)
+                (private-ip? (.getHostAddress canon))))))))
+
 (defn- validate-clone-url!
   "Validate that a Git URL does not resolve to a private/loopback address.
    Throws ex-info on blocked addresses."
@@ -51,13 +68,9 @@
     (try
       (let [addrs (java.net.InetAddress/getAllByName host)]
         (doseq [^java.net.InetAddress addr addrs]
-          (let [ip (.getHostAddress addr)]
-            (when (or (private-ip? ip)
-                      (.isLoopbackAddress addr)
-                      (.isLinkLocalAddress addr)
-                      (.isSiteLocalAddress addr))
-              (throw (ex-info (str "Blocked: URL resolves to private/loopback address")
-                              {:url url :host host :ip ip}))))))
+          (when (blocked-address? addr)
+            (throw (ex-info "Blocked: URL resolves to private/loopback address"
+                            {:url url :host host :ip (.getHostAddress addr)})))))
       (catch java.net.UnknownHostException _
         (throw (ex-info (str "Cannot resolve hostname: " host)
                         {:url url :host host}))))))
