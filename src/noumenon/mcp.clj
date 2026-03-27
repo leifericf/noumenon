@@ -512,7 +512,7 @@
                              (llm/make-invoke-fn provider-kw {:model model-id}))
                 layers      (validate-layers (args "layers"))
                 mode        (cond-> {} layers (assoc :layers layers))
-                r (bench/run-benchmark! db repo-path invoke-llm
+                r (bench/run-benchmark! (d/db conn) repo-path invoke-llm
                                         :conn conn :mode mode
                                         :budget {:max-questions (args "max_questions")}
                                         :report? (args "report")
@@ -569,10 +569,10 @@
         (catch clojure.lang.ExceptionInfo e
           (log! "tool/error" tool-name (.getMessage e))
           (tool-error (or (:user-message (ex-data e))
-                          "Internal error — check server logs.")))
+                          (str "Internal error: " (.getMessage e)))))
         (catch Exception e
           (log! "tool/error" tool-name (.getMessage e))
-          (tool-error "Internal error — check server logs.")))
+          (tool-error (str "Internal error: " (.getMessage e)))))
       (tool-error (str "Unknown tool: " tool-name)))))
 
 ;; --- Main loop ---
