@@ -489,7 +489,7 @@
 (defn- handle-digest [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [conn db repo-path]}]
+    (fn [{:keys [conn repo-path]}]
       (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
             model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
             repo-uri    (.getCanonicalPath (java.io.File. (str repo-path)))
@@ -507,7 +507,8 @@
             (swap! results assoc :analyze r)))
         ;; Benchmark
         (when-not (args "skip_benchmark")
-          (let [invoke-llm  (llm/make-prompt-fn
+          (let [db          (d/db conn)
+                invoke-llm  (llm/make-prompt-fn
                              (llm/make-invoke-fn provider-kw {:model model-id}))
                 layers      (validate-layers (args "layers"))
                 mode        (cond-> {} layers (assoc :layers layers))
