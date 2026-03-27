@@ -250,7 +250,7 @@
    :claude-api {:env-var  "ANTHROPIC_API_KEY"
                 :base-url "https://api.anthropic.com"}})
 
-(defn make-invoke-fn
+(defn make-messages-fn
   "Create an invoke function for the given provider.
    Returns (fn [messages] -> {:text :usage :model}) where messages is
    [{:role \"user\"/\"assistant\" :content string} ...].
@@ -283,7 +283,7 @@
       (fn [messages]
         (invoke-cli messages (when model {:model model}))))))
 
-(defn make-prompt-fn
+(defn wrap-as-prompt-fn
   "Wrap a messages-based invoke fn into a string-prompt fn.
    Returns (fn [prompt-string] -> {:text :usage :resolved-model})."
   [invoke-fn]
@@ -297,23 +297,23 @@
   {:provider-kw (provider->kw (or provider default-provider))
    :model-id    (model-alias->id (or model default-model-alias))})
 
-(defn make-invoke-fn-from-opts
+(defn make-messages-fn-from-opts
   "Build a messages-based invoke-fn from provider/model options.
    Returns {:invoke-fn fn, :model-id string, :provider-kw keyword}."
   [{:keys [temperature max-tokens] :as opts}]
   (let [{:keys [provider-kw model-id]} (resolve-opts opts)]
-    {:invoke-fn  (make-invoke-fn provider-kw
+    {:invoke-fn  (make-messages-fn provider-kw
                                  (cond-> {:model model-id}
                                    temperature (assoc :temperature temperature)
                                    max-tokens  (assoc :max-tokens max-tokens)))
      :model-id   model-id
      :provider-kw provider-kw}))
 
-(defn make-prompt-fn-from-opts
+(defn wrap-as-prompt-fn-from-opts
   "Build a prompt-fn (string->result) from provider/model options.
    Returns {:prompt-fn fn, :model-id string, :provider-kw keyword}."
   [opts]
-  (let [{:keys [invoke-fn] :as resolved} (make-invoke-fn-from-opts opts)]
+  (let [{:keys [invoke-fn] :as resolved} (make-messages-fn-from-opts opts)]
     (-> resolved
-        (assoc :prompt-fn (make-prompt-fn invoke-fn))
+        (assoc :prompt-fn (wrap-as-prompt-fn invoke-fn))
         (dissoc :invoke-fn))))

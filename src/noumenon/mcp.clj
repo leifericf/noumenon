@@ -294,7 +294,7 @@
           analyze? (args "analyze")
           opts     (if analyze?
                      (let [{:keys [prompt-fn model-id]}
-                           (llm/make-prompt-fn-from-opts
+                           (llm/wrap-as-prompt-fn-from-opts
                             {:provider (:provider defaults)
                              :model    (:model defaults)})]
                        {:concurrency 8
@@ -318,7 +318,7 @@
   (with-conn args defaults
     (fn [{:keys [db db-name]}]
       (let [{:keys [invoke-fn]}
-            (llm/make-invoke-fn-from-opts {:provider    (or (args "provider") (:provider defaults))
+            (llm/make-messages-fn-from-opts {:provider    (or (args "provider") (:provider defaults))
                                            :model       (or (args "model") (:model defaults))
                                            :temperature 0.3
                                            :max-tokens  4096})
@@ -343,7 +343,7 @@
   (with-conn args defaults
     (fn [{:keys [conn repo-path]}]
       (let [{:keys [prompt-fn model-id]}
-            (llm/make-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
+            (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                            :model    (or (args "model") (:model defaults))})
             concurrency (min (or (args "concurrency") 3) 20)
             max-files   (args "max_files")
@@ -392,7 +392,7 @@
   (with-conn args defaults
     (fn [{:keys [conn db repo-path]}]
       (let [{:keys [prompt-fn]}
-            (llm/make-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
+            (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                            :model    (or (args "model") (:model defaults))})
             layers      (validate-layers (args "layers"))
             mode        (cond-> {}
@@ -486,7 +486,7 @@
   (with-conn args defaults
     (fn [{:keys [conn repo-path]}]
       (let [{:keys [prompt-fn model-id]}
-            (llm/make-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
+            (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                            :model    (or (args "model") (:model defaults))})
             repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
             results  (atom {})]

@@ -157,7 +157,7 @@
 
 (defn- token-available?
   "Check if a token is available via env var OR .env file fallback,
-   matching the logic in llm/make-invoke-fn."
+   matching the logic in llm/make-messages-fn."
   [env-var]
   (or (System/getenv env-var)
       (let [env-file (java.io.File. ".env")]
@@ -166,26 +166,26 @@
                              (clojure.string/trim %))
                 (clojure.string/split-lines (slurp env-file)))))))
 
-(deftest make-invoke-fn-glm-requires-token
+(deftest make-messages-fn-glm-requires-token
   (testing "GLM provider throws when NOUMENON_ZAI_TOKEN is not set"
     ;; This test only runs when no token is available (env or .env file)
     (when-not (token-available? "NOUMENON_ZAI_TOKEN")
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
            #"NOUMENON_ZAI_TOKEN"
-           (llm/make-invoke-fn :glm {:model "m" :temperature 0.1 :max-tokens 128}))))))
+           (llm/make-messages-fn :glm {:model "m" :temperature 0.1 :max-tokens 128}))))))
 
-(deftest make-invoke-fn-claude-api-requires-key
+(deftest make-messages-fn-claude-api-requires-key
   (testing "claude-api provider throws when ANTHROPIC_API_KEY is not set"
     (when-not (token-available? "ANTHROPIC_API_KEY")
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
            #"ANTHROPIC_API_KEY"
-           (llm/make-invoke-fn :claude-api {:model "m" :temperature 0.1 :max-tokens 128}))))))
+           (llm/make-messages-fn :claude-api {:model "m" :temperature 0.1 :max-tokens 128}))))))
 
-(deftest make-invoke-fn-claude-cli-returns-fn
+(deftest make-messages-fn-claude-cli-returns-fn
   (testing "claude-cli provider returns a function"
-    (let [f (llm/make-invoke-fn :claude-cli {:model "haiku" :temperature 0.1 :max-tokens 128})]
+    (let [f (llm/make-messages-fn :claude-cli {:model "haiku" :temperature 0.1 :max-tokens 128})]
       (is (fn? f)))))
 
 ;; --- flatten-messages ---

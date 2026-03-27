@@ -114,7 +114,7 @@
           ctx
           (fn [{:keys [conn]}]
             (let [{:keys [prompt-fn model-id]}
-                  (llm/make-prompt-fn-from-opts {:provider provider :model model})
+                  (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})
                   result (analyze/analyze-repo! conn repo-path prompt-fn
                                                 (cond-> {:model-id     model-id
                                                          :concurrency  (or concurrency 3)
@@ -150,7 +150,7 @@
   [{:keys [analyze model provider concurrency]}]
   (if analyze
     (let [{:keys [prompt-fn model-id]}
-          (llm/make-prompt-fn-from-opts {:provider provider :model model})]
+          (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})]
       {:concurrency         (or concurrency 8)
        :analyze-concurrency (or concurrency 3)
        :analyze?            true
@@ -238,7 +238,7 @@
           ctx
           (fn [{:keys [db db-name]}]
             (let [{:keys [invoke-fn]}
-                  (llm/make-invoke-fn-from-opts {:provider    provider
+                  (llm/make-messages-fn-from-opts {:provider    provider
                                                  :model       model
                                                  :temperature 0.3
                                                  :max-tokens  4096})
@@ -441,9 +441,9 @@
           ctx
           (fn [{:keys [conn db]}]
             (let [checkpoint-dir "data/benchmarks/runs"
-                  answer-llm (:prompt-fn (llm/make-prompt-fn-from-opts
+                  answer-llm (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
                                           {:provider provider :model model}))
-                  judge-llm  (:prompt-fn (llm/make-prompt-fn-from-opts
+                  judge-llm  (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
                                           {:provider provider
                                            :model    (or judge-model model)}))
                   run-opts       {:judge-llm      judge-llm
@@ -482,7 +482,7 @@
         (let [conn      (db/connect-and-ensure-schema db-dir db-name)
               repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
               {:keys [prompt-fn model-id]}
-              (llm/make-prompt-fn-from-opts {:provider provider :model model})
+              (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})
               results   (atom {})
               t0        (System/currentTimeMillis)
               elapsed   #(str " (" (- (System/currentTimeMillis) %) " ms)")]
