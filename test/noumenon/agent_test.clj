@@ -174,6 +174,16 @@
   (is (agent/validate-query '[:find ?e :where [?e :file/path ?p] [(Thread/sleep 1000)]]))
   (is (agent/validate-query '[:find ?e :where [?e :file/path ?p] [(System/exit 0)]])))
 
+(deftest validate-query-rejects-unqualified-java-static-calls
+  (testing "blocks Runtime/getRuntime (no dot, uppercase namespace)"
+    (is (re-find #"Blocked symbol"
+                 (agent/validate-query '[:find ?e :where [(Runtime/getRuntime) ?r]]))))
+  (testing "blocks ProcessBuilder/new"
+    (is (re-find #"Blocked symbol"
+                 (agent/validate-query '[:find ?e :where [(ProcessBuilder/new "ls") ?p]]))))
+  (testing "allows lowercase-namespaced symbols (not Java classes)"
+    (is (nil? (agent/validate-query '[:find ?p :where [?e :file/path ?p] [(clojure.string/includes? ?p "src")]])))))
+
 (deftest validate-query-rejects-dot-interop
   (testing "blocks (. ClassName method) special form"
     (is (re-find #"Blocked dot-interop"

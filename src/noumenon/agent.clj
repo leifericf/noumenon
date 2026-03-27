@@ -26,11 +26,14 @@
     'binding 'Thread 'System 'Runtime 'ProcessBuilder})
 
 (defn- java-class-reference?
-  "True if sym looks like a Java class (contains a dot but is not on the allowlist)."
+  "True if sym looks like a Java class reference. Catches both dotted forms
+   (java.lang.Runtime) and static method calls (Runtime/getRuntime)."
   [sym]
   (and (symbol? sym)
        (not (allowed-predicates sym))
-       (str/includes? (str sym) ".")))
+       (or (str/includes? (str sym) ".")
+           (when-let [ns (namespace sym)]
+             (Character/isUpperCase (first ns))))))
 
 (defn- dot-interop-form?
   "True if form is a dot-interop list like (. Foo bar) or (.. Foo bar baz),
