@@ -165,7 +165,8 @@
         stored   (stored-head-sha db)
         current  (git/head-sha repo-path)]
     (if (and stored (= stored current))
-      (do (log! "Already up to date" (str "(HEAD " (subs current 0 7) ")"))
+      (do (when-not (:quiet? opts)
+            (log! "Already up to date" (str "(HEAD " (subs current 0 7) ")")))
           {:status :up-to-date :head-sha current :elapsed-ms 0})
       (let [fresh?  (or (nil? stored) (not (valid-sha? stored)))
             changes (when-not fresh? (changed-files repo-path stored))]

@@ -185,18 +185,22 @@
             interval-s (or interval 30)
             sync-opts  (build-sync-opts opts)]
         (log! (str "Watching " repo-path " (polling every " interval-s "s)"))
-        (loop [failures 0]
-          (let [failed? (try
-                          (sync/update-repo! conn repo-path repo-uri sync-opts)
-                          false
+        (loop [failures 0
+               last-had-changes? true]
+          (let [result  (try
+                          (sync/update-repo! conn repo-path repo-uri
+                                             (assoc sync-opts :quiet? (not last-had-changes?)))
                           (catch Exception e
                             (log! (str "Update error: " (.getMessage e)))
-                            true))
+                            ::error))
+                failed?      (= result ::error)
+                idle?        (and (not failed?) (= :up-to-date (:status result)))
+                had-changes? (and (not failed?) (not idle?))
                 new-failures (if failed? (inc failures) 0)]
             (when (and failed? (= new-failures 5))
               (log! (str "WARNING: 5 consecutive failures. Check database and repository.")))
             (Thread/sleep (* interval-s 1000 (if (>= new-failures 3) (min new-failures 10) 1)))
-            (recur new-failures)))))))
+            (recur new-failures (or had-changes? failed?))))))))
 
 (defn- do-query-list
   "List available named queries with descriptions."
