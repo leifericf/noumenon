@@ -320,39 +320,45 @@
     [(subs content 0 max-file-content-chars) true]
     [content false]))
 
+(defn- build-file-prompt
+  "Build the analysis prompt for a file, including import context."
+  [db repo-path file-path lang prompt-template]
+  (let [raw-content          (git-show repo-path file-path)
+        [content truncated?] (truncate-content raw-content)
+        {:keys [imports imported-by]} (format-import-context db file-path)]
+    {:prompt     (render-prompt prompt-template
+                                {:file-path    file-path
+                                 :lang         lang
+                                 :line-count   (count (str/split-lines content))
+                                 :content      content
+                                 :repo-name    (repo-name repo-path)
+                                 :imports      imports
+                                 :imported-by  imported-by})
+     :truncated? truncated?}))
+
+(defn- invoke-with-retry
+  "Invoke LLM and retry once on parse failure. Returns result map with merged usage."
+  [invoke-llm prompt truncated? path]
+  (let [invoke-once (fn []
+                      (let [{:keys [text usage resolved-model]} (invoke-llm prompt)]
+                        {:text text :usage usage :resolved-model resolved-model
+                         :analysis (parse-llm-response text) :truncated? truncated?}))
+        r1 (invoke-once)]
+    (if (:analysis r1)
+      r1
+      (do (log! (str "  Retrying " path " (unparseable response)..."))
+          (let [r2 (invoke-once)]
+            (update r2 :usage #(llm/sum-usage (:usage r1) %)))))))
+
 (defn analyze-file!
   "Analyze a single file. Returns {:status :ok/:parse-error/:error, :usage map-or-nil}.
-   Retries once on parse errors (unparseable LLM response).
-   When enriched data (`:file/imports`) is available, includes it as context."
+   Retries once on parse errors (unparseable LLM response)."
   [conn repo-path file-map {:keys [prompt-template prompt-hash-val invoke-llm]}]
-  (let [{:keys [file/path file/lang]} file-map
-        repo-name  (repo-name repo-path)
-        usage-atom (atom nil)]
+  (let [{:keys [file/path file/lang]} file-map]
     (try
-      (let [db                   (d/db conn)
-            raw-content          (git-show repo-path path)
-            [content truncated?] (truncate-content raw-content)
-            {:keys [imports imported-by]} (format-import-context db path)
-            prompt   (render-prompt prompt-template
-                                    {:file-path    path
-                                     :lang         lang
-                                     :line-count   (count (str/split-lines content))
-                                     :content      content
-                                     :repo-name    repo-name
-                                     :imports      imports
-                                     :imported-by  imported-by})
-            try-invoke (fn []
-                         (let [{:keys [text usage resolved-model]} (invoke-llm prompt)]
-                           (reset! usage-atom usage)
-                           {:text text :usage usage :resolved-model resolved-model
-                            :analysis (parse-llm-response text) :truncated? truncated?}))
-            result   (try-invoke)
-            result   (if (:analysis result)
-                       result
-                       (do (log! (str "Retrying " path " (unparseable response)..."))
-                           (let [r2 (try-invoke)]
-                             (update r2 :usage #(llm/sum-usage (:usage result) %)))))]
-        (reset! usage-atom (:usage result))
+      (let [{:keys [prompt truncated?]} (build-file-prompt (d/db conn) repo-path
+                                                            path lang prompt-template)
+            result (invoke-with-retry invoke-llm prompt truncated? path)]
         (if-let [analysis (:analysis result)]
           (let [tx-data (analysis->tx-data path analysis
                                            {:model-version   (or (:resolved-model result) "unknown")
@@ -365,7 +371,7 @@
               {:status :parse-error :usage (:usage result) :truncated? truncated?})))
       (catch Exception e
         (log! (str "  Error analyzing " path ": " (.getMessage e)))
-        {:status :error :usage @usage-atom}))))
+        {:status :error}))))
 
 (defn- format-eta
   "Format estimated time remaining as a human-readable string."
@@ -376,33 +382,34 @@
       (< secs 3600) (str (Math/round (/ secs 60.0)) "m")
       :else         (format "%.1fh" (/ secs 3600.0)))))
 
+(defn- update-stats
+  "Update stats atom with result of one file analysis. Returns new stats."
+  [stats-atom {:keys [status usage truncated? path dur]}]
+  (swap! stats-atom
+         (fn [s]
+           (cond-> (-> s
+                       (update :started (fnil inc 0))
+                       (update status (fnil inc 0))
+                       (update :elapsed-ms (fnil + 0) dur)
+                       (update :total-usage llm/sum-usage (or usage llm/zero-usage)))
+             (= :parse-error status) (update :parse-error-paths (fnil conj []) path)
+             truncated?              (update :truncated (fnil inc 0))))))
+
 (defn- analyze-one-file!
   "Analyze one file with progress logging. Updates stats-atom in place."
-  [conn repo-path analysis-opts total stats-atom [_idx file-map]]
+  [{:keys [conn repo-path analysis-opts total stats-atom]} [_idx file-map]]
   (let [start  (System/currentTimeMillis)
         result (analyze-file! conn repo-path file-map analysis-opts)
-        {:keys [status usage truncated?]} result
         dur    (- (System/currentTimeMillis) start)
         path   (:file/path file-map)
-        n      (swap! stats-atom
-                      (fn [s]
-                        (cond-> (-> s
-                                    (update :started (fnil inc 0))
-                                    (update status (fnil inc 0))
-                                    (update :elapsed-ms (fnil + 0) dur)
-                                    (update :total-usage llm/sum-usage (or usage llm/zero-usage)))
-                          (= :parse-error status)
-                          (update :parse-error-paths (fnil conj []) path)
-                          truncated?
-                          (update :truncated (fnil inc 0)))))]
+        n      (update-stats stats-atom (assoc result :path path :dur dur))]
     (log! (str "  [" (:started n) "/" total "] "
                path " "
                (format "%.1f" (/ dur 1000.0)) "s "
-               (name status)
-               (when usage
-                 (str " tokens=" (:input-tokens usage)
-                      "/" (:output-tokens usage)))))
-    (when truncated?
+               (name (:status result))
+               (when-let [u (:usage result)]
+                 (str " tokens=" (:input-tokens u) "/" (:output-tokens u)))))
+    (when (:truncated? result)
       (log! (str "WARNING: truncated " path)))))
 
 ;; Per-language averages from 2,396 files across 9 repos (2026-03-27).
@@ -454,6 +461,48 @@
                (format-tokens output) " output tokens"
                cost-str ", " est-time))))
 
+(def ^:private empty-analysis-result
+  {:files-analyzed 0 :files-skipped 0
+   :files-parse-errored 0 :files-errored 0
+   :elapsed-ms 0 :total-usage llm/zero-usage})
+
+(defn- build-rate-limiter
+  "Build a before-item fn that enforces min-delay-ms between starts."
+  [min-delay-ms]
+  (when (pos? min-delay-ms)
+    (let [next-allowed (atom 0)]
+      (fn [_]
+        (let [now  (System/currentTimeMillis)
+              slot (swap! next-allowed #(max (+ % min-delay-ms) now))
+              wait (- slot now)]
+          (when (pos? wait) (Thread/sleep wait)))))))
+
+(defn- format-analysis-summary
+  "Log and return the final analysis summary from stats."
+  [results elapsed]
+  (let [tu       (:total-usage results)
+        cost     (:cost-usd tu 0.0)
+        pe-paths (:parse-error-paths results [])]
+    (log! (str "Done. " (:ok results 0) " analyzed"
+               (when (pos? (:truncated results 0))
+                 (str ", " (:truncated results 0) " truncated"))
+               (when (pos? (:parse-error results 0))
+                 (str ", " (:parse-error results 0) " parse errors (re-run analyze to retry)"))
+               (when (pos? (:error results 0))
+                 (str ", " (:error results 0) " errors"))
+               ". tokens=" (:input-tokens tu) "/" (:output-tokens tu)
+               (when (pos? cost) (str " cost=" (format-cost cost)))
+               " (" (format-eta elapsed) ")"))
+    (when (seq pe-paths)
+      (log! (str "  Parse-errored files: " (str/join ", " pe-paths))))
+    {:files-analyzed      (:ok results 0)
+     :files-skipped       0
+     :files-parse-errored (:parse-error results 0)
+     :parse-error-paths   pe-paths
+     :files-errored       (:error results 0)
+     :elapsed-ms          elapsed
+     :total-usage         tu}))
+
 (defn analyze-repo!
   "Analyze all source files in repo-path that need analysis.
    `invoke-llm` is a function (prompt -> {:text string :usage map}) for testability.
@@ -462,68 +511,33 @@
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
   ([conn repo-path invoke-llm {:keys [model-id concurrency min-delay-ms max-files]
                                :or   {concurrency 3 min-delay-ms 0}}]
-   (let [db            (d/db conn)
-         all-files     (files-needing-analysis db)
+   (let [all-files     (files-needing-analysis (d/db conn))
          files         (if max-files (vec (take max-files all-files)) all-files)
          total         (count files)
          prompt-map    (load-prompt-template)
          analysis-opts {:prompt-template (:template prompt-map)
                         :prompt-hash-val (prompt-hash (:template prompt-map))
-                        :invoke-llm invoke-llm}
-         start-ms      (System/currentTimeMillis)]
+                        :invoke-llm invoke-llm}]
      (if (zero? total)
        (do (log! "All files already analyzed, nothing to do.")
-           {:files-analyzed 0 :files-skipped 0
-            :files-parse-errored 0 :files-errored 0
-            :elapsed-ms 0 :total-usage llm/zero-usage})
+           empty-analysis-result)
        (do
          (log! (str "Analyzing " total " files"
                     (when (> concurrency 1) (str " (concurrency=" concurrency ")"))
                     "..."))
          (estimate-banner files model-id)
-         (let [stats-atom  (atom {:ok 0 :parse-error 0 :error 0 :started 0
-                                  :elapsed-ms 0 :total-usage llm/zero-usage})
-               stop-flag   (atom nil)
-               error-atom  (atom nil)
-               items       (vec (map-indexed vector files))
-               before-fn   (when (pos? min-delay-ms)
-                             (let [next-allowed (atom 0)]
-                               (fn [_]
-                                 (let [now  (System/currentTimeMillis)
-                                       slot (swap! next-allowed
-                                                   #(max (+ % min-delay-ms) now))
-                                       wait (- slot now)]
-                                   (when (pos? wait) (Thread/sleep wait))))))]
+         (let [stats-atom (atom {:ok 0 :parse-error 0 :error 0 :started 0
+                                 :elapsed-ms 0 :total-usage llm/zero-usage})
+               ctx        {:conn conn :repo-path repo-path
+                           :analysis-opts analysis-opts
+                           :total total :stats-atom stats-atom}
+               start-ms   (System/currentTimeMillis)]
            (pipeline/run-concurrent!
-            items
-            {:concurrency    concurrency
-             :stop-flag      stop-flag
-             :error-atom     error-atom
-             :before-item!   before-fn
-             :process-item!  (fn [item]
-                               (analyze-one-file! conn repo-path analysis-opts
-                                                  total stats-atom item))})
-           (let [results    @stats-atom
-                 elapsed    (- (System/currentTimeMillis) start-ms)
-                 tu         (:total-usage results)
-                 cost       (:cost-usd tu 0.0)
-                 pe-paths   (:parse-error-paths results [])]
-             (log! (str "Done. " (:ok results 0) " analyzed"
-                        (when (pos? (:truncated results 0))
-                          (str ", " (:truncated results 0) " truncated"))
-                        (when (pos? (:parse-error results 0))
-                          (str ", " (:parse-error results 0) " parse errors (re-run analyze to retry)"))
-                        (when (pos? (:error results 0))
-                          (str ", " (:error results 0) " errors"))
-                        ". tokens=" (:input-tokens tu) "/" (:output-tokens tu)
-                        (when (pos? cost) (str " cost=" (format-cost cost)))
-                        " (" (format-eta elapsed) ")"))
-             (when (seq pe-paths)
-               (log! (str "  Parse-errored files: " (str/join ", " pe-paths))))
-             {:files-analyzed      (:ok results 0)
-              :files-skipped       0
-              :files-parse-errored (:parse-error results 0)
-              :parse-error-paths   pe-paths
-              :files-errored       (:error results 0)
-              :elapsed-ms          elapsed
-              :total-usage         tu})))))))
+            (vec (map-indexed vector files))
+            {:concurrency   concurrency
+             :stop-flag     (atom nil)
+             :error-atom    (atom nil)
+             :before-item!  (build-rate-limiter min-delay-ms)
+             :process-item! (partial analyze-one-file! ctx)})
+           (format-analysis-summary @stats-atom
+                                    (- (System/currentTimeMillis) start-ms))))))))
