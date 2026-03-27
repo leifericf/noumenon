@@ -15,7 +15,7 @@
   (when s
     (subs s 0 (min (count s) n))))
 
-(defn escape-template-vars
+(defn escape-double-mustache
   "Escape double-mustache `{{` in untrusted content to prevent template injection.
    Only handles `{{` — verify any new template syntax is also escaped at injection points."
   [s]

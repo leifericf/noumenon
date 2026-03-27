@@ -7,7 +7,7 @@
             [noumenon.files :as files]
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
-            [noumenon.util :as util :refer [escape-template-vars log! sha256-hex]])
+            [noumenon.util :as util :refer [escape-double-mustache log! sha256-hex]])
   (:import [java.util Date]))
 
 ;; --- Constants ---
@@ -91,7 +91,7 @@
    Content is escaped and wrapped in delimiters to prevent prompt injection."
   [template {:keys [file-path lang line-count content repo-name imports imported-by]}]
   (let [safe-content (str "<file-content>\n"
-                          (escape-template-vars content)
+                          (escape-double-mustache content)
                           "\n</file-content>")
         imports-section (if (str/blank? imports)
                           ""
@@ -100,12 +100,12 @@
                               ""
                               (str "\nFiles that depend on this file:\n" imported-by "\n"))]
     (-> template
-        (str/replace "{{file-path}}" (escape-template-vars (or file-path "")))
+        (str/replace "{{file-path}}" (escape-double-mustache (or file-path "")))
         (str/replace "{{lang}}" (name (or lang :unknown)))
         (str/replace "{{lang-name}}" (name (or lang :unknown)))
         (str/replace "{{line-count}}" (str (or line-count 0)))
         (str/replace "{{content}}" safe-content)
-        (str/replace "{{repo-name}}" (escape-template-vars (or repo-name "")))
+        (str/replace "{{repo-name}}" (escape-double-mustache (or repo-name "")))
         (str/replace "{{imports}}" imports-section)
         (str/replace "{{imported-by}}" imported-by-section))))
 

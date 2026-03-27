@@ -9,7 +9,7 @@
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
             [noumenon.query :as query]
-            [noumenon.util :refer [escape-template-vars log! sha256-hex]])
+            [noumenon.util :refer [escape-double-mustache log! sha256-hex]])
   (:import [java.nio.file Files StandardCopyOption]))
 
 ;; --- Loading ---
@@ -98,7 +98,7 @@
   (-> content
       (truncate-content max-file-content-chars)
       (str/replace "</file-content>" "&lt;/file-content&gt;")
-      escape-template-vars))
+      escape-double-mustache))
 
 (defn raw-context
   "Concatenate all source files from repo-path as context for the raw condition.
@@ -154,7 +154,7 @@
   (-> template
       (str/replace "{{question}}" question)
       (str/replace "{{rubric}}" rubric)
-      (str/replace "{{answer}}" (escape-template-vars (str answer)))))
+      (str/replace "{{answer}}" (escape-double-mustache (str answer)))))
 
 ;; --- Deterministic scoring ---
 

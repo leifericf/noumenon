@@ -138,7 +138,7 @@
                                                  :description "Also run LLM analysis on changed files (default: false)"}})
                   :required ["repo_path"]}}
    {:name "noumenon_ask"
-    :description "Ask a natural-language question about a repository. Uses an AI agent to run iterative Datalog queries against the knowledge graph. Requires prior import. Uses LLM API calls. For structured queries, prefer noumenon_query."
+    :description "Ask a natural-language question about a repository. Uses an AI agent to run iterative Datalog queries against the knowledge graph. Requires prior import — if the repository has not been imported yet, call noumenon_update first. Uses LLM API calls. For structured queries, prefer noumenon_query."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"question" {:type "string" :description "Question to ask about the repository"}
@@ -199,8 +199,8 @@
                   :properties (merge repo-path-prop
                                      {"provider" {:type "string" :description "LLM provider"}
                                       "model" {:type "string" :description "Model alias"}
-                                      "skip_import" {:type "boolean" :description "Skip import+enrich step (same as skip_enrich)"}
-                                      "skip_enrich" {:type "boolean" :description "Skip import+enrich step (same as skip_import)"}
+                                      "skip_import" {:type "boolean" :description "Skip the combined import+enrich step (alias for skip_enrich)"}
+                                      "skip_enrich" {:type "boolean" :description "Skip the combined import+enrich step (alias for skip_import)"}
                                       "skip_analyze" {:type "boolean" :description "Skip analyze step"}
                                       "skip_benchmark" {:type "boolean" :description "Skip benchmark step"}
                                       "max_questions" {:type "integer" :description "Benchmark: limit to N questions"}
@@ -253,9 +253,16 @@
         (tool-result (str commits " commits, " files " files, " dirs " directories." head))))))
 
 (defn- handle-query [args defaults]
+  (validate-string-length! "query_name" (args "query_name") 256)
   (with-conn args defaults
     (fn [{:keys [db]}]
-      (let [params (into {} (map (fn [[k v]] [(keyword k) v])) (args "params"))
+      (let [raw-params (args "params")
+            _          (when (> (count raw-params) 20)
+                         (throw (ex-info "Too many params"
+                                         {:user-message "params: max 20 entries"})))
+            _          (doseq [[k v] raw-params]
+                         (validate-string-length! (str "params." k) (str v) 1024))
+            params     (into {} (map (fn [[k v]] [(keyword k) v])) raw-params)
             result (query/run-named-query db (args "query_name") params)]
         (if (:ok result)
           (let [rows       (:ok result)
@@ -272,7 +279,9 @@
   (->> (query/list-query-names)
        (keep (fn [n]
                (when-let [q (query/load-named-query n)]
-                 (str n " — " (:description q "no description")))))
+                 (str n " — " (:description q "no description")
+                      (when (seq (:inputs q))
+                        (str " [requires params: " (str/join ", " (map name (:inputs q))) "]"))))))
        (str/join "\n")
        tool-result))
 
@@ -319,9 +328,9 @@
     (fn [{:keys [db db-name]}]
       (let [{:keys [invoke-fn]}
             (llm/make-messages-fn-from-opts {:provider    (or (args "provider") (:provider defaults))
-                                           :model       (or (args "model") (:model defaults))
-                                           :temperature 0.3
-                                           :max-tokens  4096})
+                                             :model       (or (args "model") (:model defaults))
+                                             :temperature 0.3
+                                             :max-tokens  4096})
             max-iter    (min (or (args "max_iterations") 10) 50)
             result      (agent/ask db (args "question")
                                    {:invoke-fn      invoke-fn
@@ -333,7 +342,9 @@
                    " iterations=" (:iterations usage)
                    " tokens=" (+ (:input-tokens usage 0) (:output-tokens usage 0))))
         (if (= :budget-exhausted (:status result))
-          (tool-error (str "Budget exhausted after " max-iter " iterations. "
+          (tool-error (str "Budget exhausted after " max-iter " iterations"
+                           " (" (:input-tokens usage 0) " in / "
+                           (:output-tokens usage 0) " out tokens). "
                            "Try increasing max_iterations or narrowing the question."))
           (tool-result (or (:answer result)
                            (str "No answer found (status: " (name (:status result)) ")"))))))))
@@ -344,7 +355,7 @@
     (fn [{:keys [conn repo-path]}]
       (let [{:keys [prompt-fn model-id]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                           :model    (or (args "model") (:model defaults))})
+                                              :model    (or (args "model") (:model defaults))})
             concurrency (min (or (args "concurrency") 3) 20)
             max-files   (args "max_files")
             result      (analyze/analyze-repo! conn repo-path prompt-fn
@@ -357,8 +368,8 @@
                             (str ", " (:files-parse-errored result 0) " parse errors"))
                           (when (pos? (:files-errored result 0))
                             (str ", " (:files-errored result 0) " errors"))
-                          ". Tokens: " (get-in result [:total-usage :input-tokens] 0)
-                          "/" (get-in result [:total-usage :output-tokens] 0)
+                          ". " (get-in result [:total-usage :input-tokens] 0)
+                          " in / " (get-in result [:total-usage :output-tokens] 0) " out tokens"
                           (when-let [c (get-in result [:total-usage :cost-usd])]
                             (when (pos? c) (str " ($" (format "%.2f" c) ")")))))))))
 
@@ -394,7 +405,7 @@
     (fn [{:keys [conn db repo-path]}]
       (let [{:keys [prompt-fn]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                           :model    (or (args "model") (:model defaults))})
+                                              :model    (or (args "model") (:model defaults))})
             layers      (validate-layers (args "layers"))
             mode        (cond-> {}
                           layers (assoc :layers layers))
@@ -488,7 +499,7 @@
     (fn [{:keys [conn repo-path]}]
       (let [{:keys [prompt-fn model-id]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                           :model    (or (args "model") (:model defaults))})
+                                              :model    (or (args "model") (:model defaults))})
             repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
             results  (atom {})]
         ;; Import + Enrich
@@ -565,7 +576,7 @@
                           (str "Internal error: " (.getMessage e)))))
         (catch Exception e
           (log! "tool/error" tool-name (.getMessage e))
-          (tool-error (str "Internal error: " (.getMessage e)))))
+          (tool-error "An unexpected internal error occurred.")))
       (tool-error (str "Unknown tool: " tool-name)))))
 
 ;; --- Main loop ---
