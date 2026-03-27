@@ -36,8 +36,7 @@
   "Resolve the database storage directory from an options map.
    Uses :db-dir if present, otherwise defaults to data/datomic/ relative to cwd."
   [opts]
-  (or (:db-dir opts)
-      (str (.getAbsolutePath (io/file default-db-dir)))))
+  (str (.getAbsolutePath (io/file (or (:db-dir opts) default-db-dir)))))
 
 (defn validate-repo-path
   "Validate that repo-path exists, is a directory, and contains .git.
