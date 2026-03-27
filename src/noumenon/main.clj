@@ -382,6 +382,27 @@
       (log! (str "Resume with: " cli/program-name " benchmark " repo-path " --resume"))
       {:exit 2})))
 
+(def ^:private compat-field-labels
+  {:repo-path          "Repository path"
+   :commit-sha         "Git HEAD commit"
+   :question-set-hash  "Question set"
+   :model-config       "Model configuration"
+   :mode               "Run mode"
+   :rubric-hash        "Rubric"
+   :answer-prompt-hash "Answer prompt"})
+
+(defn- format-compat-error
+  "Format a checkpoint compatibility error message."
+  [mismatches]
+  (str "Incompatible checkpoint. The benchmark configuration has changed "
+       "since this checkpoint was created. Start a fresh run without --resume.\n"
+       "Mismatched fields:\n"
+       (str/join "\n"
+                 (map #(str "  " (get compat-field-labels (:field %) (name (:field %)))
+                            ": checkpoint=" (:checkpoint %)
+                            " current=" (:current %))
+                      mismatches))))
+
 (defn- do-benchmark-resume
   "Handle --resume path for benchmark. Returns {:exit n}."
   [checkpoint-dir resume db repo-path answer-llm run-opts]
@@ -414,33 +435,42 @@
       {:exit 1}
 
       (not (:ok compat))
-      (let [field-labels {:repo-path          "Repository path"
-                          :commit-sha         "Git HEAD commit"
-                          :question-set-hash  "Question set"
-                          :model-config       "Model configuration"
-                          :mode               "Run mode"
-                          :rubric-hash        "Rubric"
-                          :answer-prompt-hash "Answer prompt"}]
-        (print-error!
-         (str "Incompatible checkpoint. The benchmark configuration has changed "
-              "since this checkpoint was created. Start a fresh run without --resume.\n"
-              "Mismatched fields:\n"
-              (str/join "\n"
-                        (map #(str "  " (get field-labels (:field %) (name (:field %)))
-                                   ": checkpoint=" (:checkpoint %)
-                                   " current=" (:current %))
-                             (:mismatches compat)))))
-        {:exit 1})
+      (do (print-error! (format-compat-error (:mismatches compat)))
+          {:exit 1})
 
       :else
       (run-benchmark-impl! db repo-path answer-llm
                            (assoc run-opts :resume-checkpoint cp)))))
 
+(defn- build-benchmark-opts
+  "Build the run-opts map for benchmark from CLI flags."
+  [{:keys [max-questions stop-after max-cost model judge-model provider
+           concurrency min-delay skip-raw skip-judge deterministic-only
+           canary layers report]}
+   conn]
+  {:judge-llm      (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
+                                 {:provider provider
+                                  :model    (or judge-model model)}))
+   :model-config   {:model model :judge-model (or judge-model model)
+                    :provider provider}
+   :checkpoint-dir "data/benchmarks/runs"
+   :budget         {:max-questions max-questions
+                    :stop-after-ms (when stop-after (* stop-after 1000))
+                    :max-cost-usd  max-cost}
+   :mode           (cond-> {}
+                     layers             (assoc :layers layers)
+                     skip-raw           (assoc :skip-raw true)
+                     skip-judge         (assoc :skip-judge true)
+                     deterministic-only (assoc :deterministic-only true))
+   :canary         canary
+   :concurrency    concurrency
+   :min-delay      min-delay
+   :conn           conn
+   :report?        report})
+
 (defn do-benchmark
   "Run the benchmark subcommand. Returns {:exit n}."
-  [{:keys [resume max-questions stop-after max-cost model judge-model provider
-           concurrency min-delay skip-raw skip-judge deterministic-only canary
-           layers report] :as opts}]
+  [{:keys [resume model provider] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
@@ -448,35 +478,25 @@
         (with-existing-db
           ctx
           (fn [{:keys [conn db]}]
-            (let [checkpoint-dir "data/benchmarks/runs"
-                  answer-llm (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
-                                          {:provider provider :model model}))
-                  judge-llm  (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
-                                          {:provider provider
-                                           :model    (or judge-model model)}))
-                  run-opts       {:judge-llm      judge-llm
-                                  :model-config   {:model model :judge-model (or judge-model model)
-                                                   :provider provider}
-                                  :checkpoint-dir checkpoint-dir
-                                  :budget         {:max-questions max-questions
-                                                   :stop-after-ms (when stop-after (* stop-after 1000))
-                                                   :max-cost-usd  max-cost}
-                                  :mode           (cond-> {}
-                                                    layers             (assoc :layers layers)
-                                                    skip-raw           (assoc :skip-raw true)
-                                                    skip-judge         (assoc :skip-judge true)
-                                                    deterministic-only (assoc :deterministic-only true))
-                                  :canary         canary
-                                  :concurrency    concurrency
-                                  :min-delay      min-delay
-                                  :conn           conn
-                                  :report?        report}]
+            (let [answer-llm (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
+                                           {:provider provider :model model}))
+                  run-opts   (build-benchmark-opts opts conn)]
               (if resume
-                (do-benchmark-resume checkpoint-dir resume db (:repo-path opts) answer-llm run-opts)
+                (do-benchmark-resume "data/benchmarks/runs" resume db
+                                     (:repo-path opts) answer-llm run-opts)
                 (run-benchmark-impl! db (:repo-path opts) answer-llm run-opts)))))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
           {:exit 1})))))
+
+(defn- run-digest-step!
+  "Run one digest step with timing. Stores result in results atom under key."
+  [results step-key label run-fn]
+  (log! (str "digest: " label "..."))
+  (let [start (System/currentTimeMillis)
+        r     (run-fn)]
+    (log! (str "digest: " label " done (" (- (System/currentTimeMillis) start) " ms)"))
+    (swap! results assoc step-key r)))
 
 (defn do-digest
   "Run the full pipeline: import → enrich → analyze → benchmark.
@@ -494,41 +514,28 @@
               (when needs-llm
                 (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model}))
               results   (atom {})
-              t0        (System/currentTimeMillis)
-              elapsed   #(str " (" (- (System/currentTimeMillis) %) " ms)")]
-          ;; Step 1: Import + Enrich (combined via update-repo!)
+              t0        (System/currentTimeMillis)]
           (when-not (and skip-import skip-enrich)
-            (log! "digest: import + enrich...")
-            (let [start (System/currentTimeMillis)
-                  r     (sync/update-repo! conn repo-path repo-uri
-                                           {:concurrency (or concurrency 8)})]
-              (log! (str "digest: import + enrich done" (elapsed start)))
-              (swap! results assoc :update r)))
-          ;; Step 2: Analyze
+            (run-digest-step! results :update "import + enrich"
+                              #(sync/update-repo! conn repo-path repo-uri
+                                                  {:concurrency (or concurrency 8)})))
           (when-not skip-analyze
-            (log! "digest: analyze...")
-            (let [start (System/currentTimeMillis)
-                  r     (analyze/analyze-repo! conn repo-path prompt-fn
-                                               {:model-id model-id
-                                                :concurrency (or concurrency 3)})]
-              (log! (str "digest: analyze done" (elapsed start)))
-              (swap! results assoc :analyze r)))
-          ;; Step 3: Benchmark
+            (run-digest-step! results :analyze "analyze"
+                              #(analyze/analyze-repo! conn repo-path prompt-fn
+                                                      {:model-id model-id
+                                                       :concurrency (or concurrency 3)})))
           (when-not skip-benchmark
-            (log! "digest: benchmark...")
-            (let [start (System/currentTimeMillis)
-                  db    (d/db conn)
-                  mode  (cond-> {} layers (assoc :layers layers))
-                  r     (bench/run-benchmark! db repo-path prompt-fn
-                                              :conn conn
-                                              :mode mode
-                                              :budget {:max-questions max-questions}
-                                              :report? report
-                                              :concurrency (or concurrency 3))]
-              (log! (str "digest: benchmark done" (elapsed start)))
-              (swap! results assoc :benchmark
-                     (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
-          (log! (str "digest: complete" (elapsed t0)))
+            (run-digest-step! results :benchmark "benchmark"
+                              #(let [db   (d/db conn)
+                                     mode (cond-> {} layers (assoc :layers layers))]
+                                 (select-keys
+                                  (bench/run-benchmark! db repo-path prompt-fn
+                                                        :conn conn :mode mode
+                                                        :budget {:max-questions max-questions}
+                                                        :report? report
+                                                        :concurrency (or concurrency 3))
+                                  [:run-id :aggregate :stop-reason :report-path]))))
+          (log! (str "digest: complete (" (- (System/currentTimeMillis) t0) " ms)"))
           {:exit 0 :result @results})
         (catch Exception e
           (print-error! (.getMessage e))
