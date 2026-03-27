@@ -46,29 +46,51 @@
 (def ^:private all-valid-providers
   #{"glm" "claude" "claude-api" "claude-cli"})
 
-;; --- Shared flag specs ---
+;; --- Reusable flag atoms ---
 
-(def ^:private common-flags
-  [{:flag "--model" :key :model :parse :string
-    :desc "Model alias (e.g. sonnet, haiku, opus)"
-    :error-missing :missing-model-value}
-   {:flag "--provider" :key :provider :parse :string
-    :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
-    :error-invalid :invalid-provider :error-missing :missing-provider-value}
-   {:flag "--max-cost" :key :max-cost :parse :pos-double
-    :desc "Stop when session cost exceeds threshold (dollars)"
-    :error-invalid :invalid-max-cost :error-missing :missing-max-cost-value}
-   {:flag "--db-dir" :key :db-dir :parse :string
-    :desc "Override storage directory (default: data/datomic/)"
-    :error-missing :missing-db-dir-value}
-   {:flag "--verbose" :key :verbose :parse :bool
+(def ^:private db-dir-flag
+  {:flag "--db-dir" :key :db-dir :parse :string
+   :desc "Override storage directory (default: data/datomic/)"
+   :error-missing :missing-db-dir-value})
+
+(def ^:private model-flag
+  {:flag "--model" :key :model :parse :string
+   :desc "Model alias (e.g. sonnet, haiku, opus)"
+   :error-missing :missing-model-value})
+
+(def ^:private provider-flag
+  {:flag "--provider" :key :provider :parse :string
+   :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
+   :error-invalid :invalid-provider :error-missing :missing-provider-value})
+
+(def ^:private verbose-flags
+  [{:flag "--verbose" :key :verbose :parse :bool
     :desc "Log verbose output to stderr"}
    {:flag "-v" :key :verbose :parse :bool}])
 
+(def ^:private concurrency-flag
+  {:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
+   :desc "Parallel workers, 1-20 (default varies: analyze=3, others=8)"
+   :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value})
+
+(def ^:private max-cost-flag
+  {:flag "--max-cost" :key :max-cost :parse :pos-double
+   :desc "Stop when session cost exceeds threshold (dollars)"
+   :error-invalid :invalid-max-cost :error-missing :missing-max-cost-value})
+
+(def ^:private max-files-flag
+  {:flag "--max-files" :key :max-files :parse :pos-int
+   :desc "Stop after analyzing N files (useful for sampling)"
+   :error-invalid :invalid-max-files :error-missing :missing-max-files-value})
+
+;; --- Composed flag sets ---
+
+(def ^:private common-flags
+  (vec (concat [model-flag provider-flag max-cost-flag db-dir-flag]
+               verbose-flags)))
+
 (def ^:private concurrency-flags
-  [{:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
-    :desc "Parallel workers, 1-20 (default varies: analyze=3, others=8)"
-    :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value}
+  [concurrency-flag
    {:flag "--min-delay" :key :min-delay :parse :non-neg-int
     :desc "Min delay between LLM requests in ms (default: 0)"
     :error-invalid :invalid-min-delay :error-missing :missing-min-delay-value}])
@@ -89,29 +111,10 @@
   [specs valid-set]
   (mapv #(if (= "--provider" (:flag %)) (assoc % :valid valid-set) %) specs))
 
-;; --- Narrowly scoped flag sets ---
-
-(def ^:private db-dir-flag
-  {:flag "--db-dir" :key :db-dir :parse :string
-   :desc "Override storage directory (default: data/datomic/)"
-   :error-missing :missing-db-dir-value})
-
 (def ^:private analyze-flags
-  (vec (concat
-        [{:flag "--model" :key :model :parse :string
-          :desc "Model alias (e.g. sonnet, haiku, opus)"
-          :error-missing :missing-model-value}
-         {:flag "--provider" :key :provider :parse :string
-          :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
-          :error-invalid :invalid-provider :error-missing :missing-provider-value}
-         {:flag "--max-files" :key :max-files :parse :pos-int
-          :desc "Stop after analyzing N files (useful for sampling)"
-          :error-invalid :invalid-max-files :error-missing :missing-max-files-value}
-         db-dir-flag
-         {:flag "--verbose" :key :verbose :parse :bool
-          :desc "Log verbose output to stderr"}
-         {:flag "-v" :key :verbose :parse :bool}]
-        concurrency-flags)))
+  (vec (concat [model-flag (assoc provider-flag :valid all-valid-providers)
+                max-files-flag db-dir-flag]
+               verbose-flags concurrency-flags)))
 
 ;; --- Declarative command specs ---
 
@@ -121,29 +124,16 @@
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
 (def ^:private enrich-command-spec
-  {:flags [db-dir-flag
-           {:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
-            :desc "Parallel workers, 1-20 (default: 8)"
-            :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value}]
+  {:flags [db-dir-flag concurrency-flag]
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
 (def ^:private update-command-spec
-  {:flags (vec (concat
-                [{:flag "--analyze" :key :analyze :parse :bool
-                  :desc "Also run LLM analysis on changed files"}
-                 {:flag "--model" :key :model :parse :string
-                  :desc "Model alias (e.g. sonnet, haiku, opus)"
-                  :error-missing :missing-model-value}
-                 {:flag "--provider" :key :provider :parse :string
-                  :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
-                  :valid all-valid-providers
-                  :error-invalid :invalid-provider
-                  :error-missing :missing-provider-value}
-                 db-dir-flag
-                 {:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
-                  :desc "Parallel workers, 1-20 (default: 8)"
-                  :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value}]))
+  {:flags [{:flag "--analyze" :key :analyze :parse :bool
+            :desc "Also run LLM analysis on changed files"}
+           model-flag
+           (assoc provider-flag :valid all-valid-providers)
+           db-dir-flag concurrency-flag]
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
@@ -153,18 +143,9 @@
             :error-invalid :invalid-interval :error-missing :missing-interval-value}
            {:flag "--analyze" :key :analyze :parse :bool
             :desc "Also run LLM analysis on changed files"}
-           {:flag "--model" :key :model :parse :string
-            :desc "Model alias (e.g. sonnet, haiku, opus)"
-            :error-missing :missing-model-value}
-           {:flag "--provider" :key :provider :parse :string
-            :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
-            :valid all-valid-providers
-            :error-invalid :invalid-provider
-            :error-missing :missing-provider-value}
-           db-dir-flag
-           {:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
-            :desc "Parallel workers, 1-20 (default: 8)"
-            :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value}]
+           model-flag
+           (assoc provider-flag :valid all-valid-providers)
+           db-dir-flag concurrency-flag]
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
@@ -223,30 +204,21 @@
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
 (def ^:private ask-command-spec
-  {:flags [{:flag "-q" :key :question :parse :string
-            :desc "Question to ask (place before <repo-path>)"
-            :error-missing :ask-missing-question}
-           {:flag "--question" :key :question :parse :string
-            :desc "Question to ask about the repository (place before <repo-path>)"
-            :error-missing :ask-missing-question}
-           {:flag "--model" :key :model :parse :string
-            :desc "Model alias (e.g. sonnet, haiku, opus)"
-            :error-missing :missing-model-value}
-           {:flag "--provider" :key :provider :parse :string
-            :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
-            :valid all-valid-providers
-            :error-invalid :invalid-provider
-            :error-missing :missing-provider-value}
-           {:flag "--max-iterations" :key :max-iterations :parse :pos-int
-            :desc "Max query iterations (default: 10)"
-            :error-invalid :invalid-max-iterations
-            :error-missing :missing-max-iterations-value}
-           {:flag "--db-dir" :key :db-dir :parse :string
-            :desc "Override storage directory (default: data/datomic/)"
-            :error-missing :missing-db-dir-value}
-           {:flag "--verbose" :key :verbose :parse :bool
-            :desc "Log verbose output to stderr"}
-           {:flag "-v" :key :verbose :parse :bool}]
+  {:flags (vec (concat
+                [{:flag "-q" :key :question :parse :string
+                  :desc "Question to ask (place before <repo-path>)"
+                  :error-missing :ask-missing-question}
+                 {:flag "--question" :key :question :parse :string
+                  :desc "Question to ask about the repository (place before <repo-path>)"
+                  :error-missing :ask-missing-question}
+                 model-flag
+                 (assoc provider-flag :valid all-valid-providers)
+                 {:flag "--max-iterations" :key :max-iterations :parse :pos-int
+                  :desc "Max query iterations (default: 10)"
+                  :error-invalid :invalid-max-iterations
+                  :error-missing :missing-max-iterations-value}
+                 db-dir-flag]
+                verbose-flags))
    :initial {:subcommand "ask"}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
