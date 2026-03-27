@@ -30,6 +30,9 @@
    "cpp"    :cpp
    "hpp"    :cpp
    "cs"     :csharp
+   "csproj" :msbuild-project
+   "vcxproj" :msbuild-project
+   "sln"    :msbuild-solution
    "swift"  :swift
    "kt"     :kotlin
    "scala"  :scala

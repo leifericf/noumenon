@@ -201,6 +201,95 @@
     (testing "returns nil for external include"
       (is (nil? (imports/resolve-import :erlang "kernel/include/file.hrl" "src/my_server.erl" paths))))))
 
+;; --- C# extraction ---
+
+(deftest extract-imports-csharp-test
+  (testing "extracts using directives"
+    (let [src "using System;\nusing MyApp.Models;\nusing MyApp.Services;"
+          result (imports/extract-imports :csharp src)]
+      (is (= #{"System" "MyApp.Models" "MyApp.Services"} (set result)))))
+
+  (testing "extracts global usings"
+    (let [result (imports/extract-imports :csharp "global using System.Linq;")]
+      (is (some #{"System.Linq"} result))))
+
+  (testing "extracts using static"
+    (let [result (imports/extract-imports :csharp "using static System.Math;")]
+      (is (some #{"System.Math"} result))))
+
+  (testing "ignores using dispose pattern"
+    (is (empty? (imports/extract-imports :csharp "using (var stream = new FileStream()) {}"))))
+
+  (testing "returns empty for empty string"
+    (is (empty? (imports/extract-imports :csharp "")))))
+
+;; --- C# resolution ---
+
+(deftest resolve-import-csharp-test
+  (let [paths #{"src/MyApp/Models/User.cs" "src/MyApp/Services/UserService.cs"}]
+    (testing "resolves internal namespace"
+      (is (= "src/MyApp/Models/User.cs"
+             (imports/resolve-import :csharp "MyApp.Models.User" "src/MyApp/Program.cs" paths))))
+    (testing "returns nil for System namespace"
+      (is (nil? (imports/resolve-import :csharp "System.IO" "src/MyApp/Program.cs" paths))))
+    (testing "returns nil for Microsoft namespace"
+      (is (nil? (imports/resolve-import :csharp "Microsoft.Extensions.DI" "src/Program.cs" paths))))))
+
+;; --- MSBuild project extraction ---
+
+(deftest extract-imports-msbuild-project-test
+  (testing "extracts ProjectReference"
+    (let [src "<ItemGroup>\n  <ProjectReference Include=\"..\\Other\\Other.csproj\" />\n</ItemGroup>"
+          result (imports/extract-imports :msbuild-project src)]
+      (is (= ["..\\Other\\Other.csproj"] result))))
+
+  (testing "extracts ClInclude and ClCompile"
+    (let [src "<ClCompile Include=\"src\\main.cpp\" />\n<ClInclude Include=\"include\\util.h\" />"
+          result (imports/extract-imports :msbuild-project src)]
+      (is (= #{"src\\main.cpp" "include\\util.h"} (set result)))))
+
+  (testing "returns empty for no references"
+    (is (empty? (imports/extract-imports :msbuild-project "<Project></Project>")))))
+
+;; --- MSBuild project resolution ---
+
+(deftest resolve-import-msbuild-project-test
+  (let [paths #{"src/MyApp/MyApp.csproj" "src/main.cpp" "include/util.h"}]
+    (testing "resolves ProjectReference with backslashes and .."
+      (is (= "src/MyApp/MyApp.csproj"
+             (imports/resolve-import :msbuild-project "..\\..\\src\\MyApp\\MyApp.csproj"
+                                     "test/MyApp.Tests/MyApp.Tests.csproj" paths))))
+    (testing "resolves ClCompile path"
+      (is (= "src/main.cpp"
+             (imports/resolve-import :msbuild-project "src\\main.cpp"
+                                     "MyProject.vcxproj" paths))))
+    (testing "returns nil for missing path"
+      (is (nil? (imports/resolve-import :msbuild-project "..\\Missing\\Missing.csproj"
+                                        "src/MyApp/MyApp.csproj" paths))))))
+
+;; --- MSBuild solution extraction ---
+
+(deftest extract-imports-msbuild-solution-test
+  (testing "extracts project entries"
+    (let [src "Project(\"{FAE04EC0}\") = \"MyApp\", \"src\\MyApp\\MyApp.csproj\", \"{GUID}\"\nEndProject\nProject(\"{FAE04EC0}\") = \"Tests\", \"test\\Tests\\Tests.csproj\", \"{GUID}\""
+          result (imports/extract-imports :msbuild-solution src)]
+      (is (= #{"src\\MyApp\\MyApp.csproj" "test\\Tests\\Tests.csproj"} (set result)))))
+
+  (testing "returns empty for no projects"
+    (is (empty? (imports/extract-imports :msbuild-solution "Global\nEndGlobal")))))
+
+;; --- MSBuild solution resolution ---
+
+(deftest resolve-import-msbuild-solution-test
+  (let [paths #{"src/MyApp/MyApp.csproj" "test/Tests/Tests.csproj"}]
+    (testing "resolves project path from sln"
+      (is (= "src/MyApp/MyApp.csproj"
+             (imports/resolve-import :msbuild-solution "src\\MyApp\\MyApp.csproj"
+                                     "MySolution.sln" paths))))
+    (testing "returns nil for missing project"
+      (is (nil? (imports/resolve-import :msbuild-solution "missing\\Missing.csproj"
+                                        "MySolution.sln" paths))))))
+
 ;; --- Default method ---
 
 (deftest extract-imports-default-test
@@ -290,3 +379,46 @@
                                     "src/my_server.erl" paths)]
     (testing "my_server includes my_header"
       (is (= ["include/my_header.hrl"] result)))))
+
+(deftest enrich-fixture-csharp-test
+  (let [paths #{"src/MyApp/Program.cs" "src/MyApp/Models/User.cs"
+                "src/MyApp/Services/UserService.cs"}
+        read-fixture (fn [path] (slurp (str "test-fixtures/csharp/" path)))
+        result-prog (imports/enrich-file :csharp (read-fixture "src/MyApp/Program.cs")
+                                         "src/MyApp/Program.cs" paths)
+        result-user (imports/enrich-file :csharp (read-fixture "src/MyApp/Models/User.cs")
+                                         "src/MyApp/Models/User.cs" paths)
+        result-svc  (imports/enrich-file :csharp (read-fixture "src/MyApp/Services/UserService.cs")
+                                         "src/MyApp/Services/UserService.cs" paths)]
+    (testing "Program imports Models and Services (via suffix match)"
+      (is (pos? (count result-prog))))
+    (testing "User.cs imports Services (via suffix match)"
+      (is (pos? (count result-user))))
+    (testing "UserService imports Models (via suffix match)"
+      (is (pos? (count result-svc))))
+    (testing "System namespace not resolved"
+      (is (not (some #(re-matches #".*System.*" %) result-prog))))))
+
+(deftest enrich-fixture-msbuild-test
+  (let [paths #{"src/MyApp/MyApp.csproj" "test/MyApp.Tests/MyApp.Tests.csproj"}
+        read-fixture (fn [path] (slurp (str "test-fixtures/csharp/" path)))
+        result-sln   (imports/enrich-file :msbuild-solution
+                                          (read-fixture "MyApp.sln")
+                                          "MyApp.sln" paths)
+        result-tests (imports/enrich-file :msbuild-project
+                                          (read-fixture "test/MyApp.Tests/MyApp.Tests.csproj")
+                                          "test/MyApp.Tests/MyApp.Tests.csproj" paths)]
+    (testing ".sln imports both .csproj files"
+      (is (= #{"src/MyApp/MyApp.csproj" "test/MyApp.Tests/MyApp.Tests.csproj"}
+             (set result-sln))))
+    (testing "Tests.csproj imports MyApp.csproj"
+      (is (= ["src/MyApp/MyApp.csproj"] result-tests)))))
+
+(deftest enrich-fixture-vcxproj-test
+  (let [paths #{"src/main.cpp" "src/util.cpp" "include/util.h" "MyProject.vcxproj"}
+        read-fixture (fn [path] (slurp (str "test-fixtures/cpp/" path)))
+        result (imports/enrich-file :msbuild-project
+                                    (read-fixture "MyProject.vcxproj")
+                                    "MyProject.vcxproj" paths)]
+    (testing ".vcxproj imports source and header files"
+      (is (= #{"src/main.cpp" "src/util.cpp" "include/util.h"} (set result))))))

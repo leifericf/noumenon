@@ -54,4 +54,9 @@
  {:lang     :erlang
   :name     "cowboy"
   :url      "https://github.com/ninenines/cowboy.git"
-  :notes    "Erlang HTTP server. Small-to-moderate size."}]
+  :notes    "Erlang HTTP server. Small-to-moderate size."}
+
+ {:lang     :csharp
+  :name     "Humanizer"
+  :url      "https://github.com/Humanizr/Humanizer.git"
+  :notes    "C# string manipulation library. Has .sln, multiple .csproj with ProjectReferences."}]

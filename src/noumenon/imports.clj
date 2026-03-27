@@ -374,6 +374,78 @@ end")
   (resolve-java-import import-name all-paths))
 
 ;; ---------------------------------------------------------------------------
+;; C# — using directives
+;; ---------------------------------------------------------------------------
+
+(defmethod extract-imports :csharp [_ text]
+  (->> (re-seq #"(?m)^\s*(?:global\s+)?using\s+(?:static\s+)?([\w.]+)\s*;" text)
+       (mapv second)))
+
+(defn- resolve-csharp-import
+  "Resolve a C# using directive to repo files. C# namespaces map to directories
+   or individual files, so we try: exact .cs match, then suffix .cs match, then
+   all .cs files under the namespace-as-directory."
+  [import-name all-paths]
+  (when-not (re-matches #"(?:System|Microsoft)\..*" import-name)
+    (let [as-path (str/replace import-name "." "/")
+          exact   (str as-path ".cs")
+          suffix  (str "/" as-path ".cs")
+          dir-pfx (str as-path "/")]
+      (or (all-paths exact)
+          (first (for [p all-paths :when (str/ends-with? p suffix)] p))
+          ;; Namespace → directory: find .cs files under that path
+          (first (for [p all-paths
+                       :when (and (str/ends-with? p ".cs")
+                                  (or (str/starts-with? p dir-pfx)
+                                      (let [idx (.indexOf ^String p (str "/" dir-pfx))]
+                                        (pos? idx))))]
+                   p))))))
+
+(defmethod resolve-import :csharp [_ import-name _source-path all-paths]
+  (resolve-csharp-import import-name all-paths))
+
+;; ---------------------------------------------------------------------------
+;; MSBuild — .csproj / .vcxproj project files
+;; ---------------------------------------------------------------------------
+
+(defn- normalize-msbuild-path
+  "Normalize an MSBuild Include path relative to the source file's directory."
+  [ref-path source-path]
+  (let [ref-path  (str/replace ref-path "\\" "/")
+        source-dir (str/join "/" (butlast (str/split source-path #"/")))]
+    (loop [parts (str/split (if (seq source-dir)
+                              (str source-dir "/" ref-path)
+                              ref-path)
+                            #"/")
+           acc []]
+      (if-let [part (first parts)]
+        (cond
+          (= ".." part) (recur (rest parts) (if (seq acc) (pop acc) acc))
+          (= "." part)  (recur (rest parts) acc)
+          :else         (recur (rest parts) (conj acc part)))
+        (str/join "/" acc)))))
+
+(defmethod extract-imports :msbuild-project [_ text]
+  (->> (re-seq #"(?i)<(?:ProjectReference|ClInclude|ClCompile)\s+Include=\"([^\"]+)\"" text)
+       (mapv second)))
+
+(defmethod resolve-import :msbuild-project [_ import-name source-path all-paths]
+  (let [resolved (normalize-msbuild-path import-name source-path)]
+    (all-paths resolved)))
+
+;; ---------------------------------------------------------------------------
+;; MSBuild — .sln solution files
+;; ---------------------------------------------------------------------------
+
+(defmethod extract-imports :msbuild-solution [_ text]
+  (->> (re-seq #"(?m)^Project\(.+?\)\s*=\s*\"[^\"]*\",\s*\"([^\"]+)\"" text)
+       (mapv second)))
+
+(defmethod resolve-import :msbuild-solution [_ import-name source-path all-paths]
+  (let [resolved (normalize-msbuild-path import-name source-path)]
+    (all-paths resolved)))
+
+;; ---------------------------------------------------------------------------
 ;; Pure core — enrich a single file
 ;; ---------------------------------------------------------------------------
 
