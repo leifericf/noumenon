@@ -57,14 +57,26 @@
 
 ;; --- Context assembly ---
 
+(def ^:private max-total-context-chars
+  "Maximum total characters for context passed to LLM. Prevents HTTP 413
+   on very large repos. ~800KB leaves room for prompt framing + question."
+  800000)
+
 (defn query-context
   "Build context string from a named query's results for the given condition.
-   Non-raw conditions query the KG; the layer determines which attributes are meaningful."
+   Non-raw conditions query the KG; the layer determines which attributes are meaningful.
+   Truncates output to max-total-context-chars for very large result sets."
   [db query-name]
   (let [{:keys [ok error]} (query/run-named-query db query-name)]
     (if error
       (str "Query error: " error)
-      (pr-str ok))))
+      (let [full (pr-str ok)]
+        (if (<= (count full) max-total-context-chars)
+          full
+          (do (log! (str "  query-context: truncating " query-name
+                         " from " (count full) " to " max-total-context-chars " chars"))
+              (str (subs full 0 max-total-context-chars)
+                   "\n;; [... truncated to fit API limits]")))))))
 
 ;; Trust boundary: file content is untrusted input included verbatim in LLM prompts.
 ;; Per-file truncation mitigates prompt-injection amplification from adversarial files.
@@ -89,28 +101,39 @@
 (defn raw-context
   "Concatenate all source files from repo-path as context for the raw condition.
    Reads files from git HEAD. File content is wrapped in delimiters, truncated,
-   and template variables are escaped to mitigate prompt injection."
+   and template variables are escaped to mitigate prompt injection.
+   Total output is capped at max-total-context-chars."
   [repo-path]
   (let [{:keys [exit out err]} (shell/sh "git" "-C" (str repo-path)
                                          "ls-tree" "-r" "--name-only" "HEAD")]
     (when (not= 0 exit)
       (throw (ex-info (str "git ls-tree failed: " (str/trim (or err "")))
                       {:exit exit})))
-    (->> (str/split-lines out)
-         (remove str/blank?)
-         (filter #(re-find #"\.(clj[cs]?|java)$" %))
-         (map (fn [path]
-                (let [{:keys [out]} (shell/sh "git" "-C" (str repo-path)
-                                              "show" (str "HEAD:" path))
-                      escaped-path (-> path
-                                       (str/replace "&" "&amp;")
-                                       (str/replace "\"" "&quot;")
-                                       (str/replace "<" "&lt;")
-                                       (str/replace ">" "&gt;"))]
-                  (str "<file-content path=\"" escaped-path "\">\n"
-                       (sanitize-file-content out)
-                       "\n</file-content>"))))
-         (str/join "\n"))))
+    (let [files (->> (str/split-lines out)
+                     (remove str/blank?)
+                     (filter #(re-find #"\.(clj[cs]?|java)$" %)))]
+      (loop [remaining files
+             parts     []
+             total     0]
+        (if (empty? remaining)
+          (str/join "\n" parts)
+          (let [path (first remaining)
+                {:keys [out]} (shell/sh "git" "-C" (str repo-path)
+                                        "show" (str "HEAD:" path))
+                escaped-path (-> path
+                                 (str/replace "&" "&amp;")
+                                 (str/replace "\"" "&quot;")
+                                 (str/replace "<" "&lt;")
+                                 (str/replace ">" "&gt;"))
+                part (str "<file-content path=\"" escaped-path "\">\n"
+                          (sanitize-file-content out)
+                          "\n</file-content>")
+                new-total (+ total (count part))]
+            (if (> new-total max-total-context-chars)
+              (do (log! (str "  raw-context: truncated at " (count parts) "/" (count files)
+                             " files (" total " chars)"))
+                  (str/join "\n" (conj parts "[... context truncated to fit API limits]")))
+              (recur (rest remaining) (conj parts part) new-total))))))))
 
 ;; --- Prompts ---
 
