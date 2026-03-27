@@ -43,7 +43,7 @@
         nil)
     (let [{:keys [exit out]}
           (shell/sh "git" "-C" (str repo-path)
-                    "diff" "--name-status" old-sha "HEAD")]
+                    "diff" "--name-status" "--" old-sha "HEAD")]
       (when (zero? exit)
         (->> (str/split-lines out)
              (remove str/blank?)
