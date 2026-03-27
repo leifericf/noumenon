@@ -590,57 +590,58 @@ end")
            :files-skipped 0 :files-errored 0 :batch []}
           results))
 
+(defn- partition-files-by-lang
+  "Split files into standard and C/C++ groups, filtering unavailable tool langs."
+  [all-files tools]
+  (let [c-langs    #{:c :cpp}
+        needs-tool #{:python :javascript :typescript :elixir :go}
+        c-files    (filter (comp c-langs :file/lang) all-files)
+        std-files  (->> (remove (comp c-langs :file/lang) all-files)
+                        (remove (fn [{:keys [file/lang]}]
+                                  (and (needs-tool lang)
+                                       (not (get-in tools [lang :available?]))))))]
+    {:std-files std-files :c-files c-files}))
+
+(defn- log-enrich-summary!
+  "Log the enrichment summary and skipped-tool warnings."
+  [{:keys [files-processed imports-resolved files-errored]} concurrency skipped-tools]
+  (log! (str "  Enriched " files-processed " files, "
+             imports-resolved " import edges resolved"
+             (when (> concurrency 1) (str " (concurrency=" concurrency ")"))
+             (when (pos? files-errored) (str ", " files-errored " errors"))))
+  (let [files-skipped (reduce + (map :file-count skipped-tools))]
+    (when (pos? files-skipped)
+      (log! (str "  Warning: " files-skipped " files skipped because "
+                 (str/join ", " (map (fn [{:keys [tool]}] (str tool " is not on PATH"))
+                                     skipped-tools))
+                 ". Install and re-run enrich to resolve their imports.")))
+    files-skipped))
+
 (defn enrich-repo!
   "Extract cross-file import graph deterministically and transact into Datomic.
-   Returns a summary map. `opts` may include :concurrency (default 8).
-   Enriches the knowledge graph with deterministic file-to-file import edges."
+   Returns a summary map. `opts` may include :concurrency (default 8)."
   ([conn repo-path] (enrich-repo! conn repo-path {}))
   ([conn repo-path {:keys [concurrency] :or {concurrency 8}}]
    (let [db        (d/db conn)
          all-files (files-with-lang db)
          all-paths (into #{} (map :file/path) all-files)
          tools     (probe-tools)
-         counts-by-lang (frequencies (map :file/lang all-files))
-         skipped-tools (log-tool-availability! tools counts-by-lang)
-         c-langs   #{:c :cpp}
-         c-files   (filter (comp c-langs :file/lang) all-files)
-         std-files (remove (comp c-langs :file/lang) all-files)
-         needs-tool #{:python :javascript :typescript :elixir :go}
-         std-files  (remove (fn [{:keys [file/lang]}]
-                              (and (needs-tool lang)
-                                   (not (get-in tools [lang :available?]))))
-                            std-files)
+         skipped-tools (log-tool-availability! tools (frequencies (map :file/lang all-files)))
+         {:keys [std-files c-files]} (partition-files-by-lang all-files tools)
          total     (+ (count std-files) (count c-files))
          _         (log! (str "  Extracting imports from " total " files"
-                              (when (> concurrency 1)
-                                (str " (concurrency=" concurrency ")"))
+                              (when (> concurrency 1) (str " (concurrency=" concurrency ")"))
                               "..."))
-         ;; Extract imports — parallel when concurrency > 1
          std-results (extract-all repo-path all-paths std-files concurrency)
          c-results   (when (and (seq c-files) (get-in tools [:c :available?]))
                        (extract-all-c repo-path all-paths c-files concurrency))
-         ;; Tally and transact (sequential batches)
-         all-results (into std-results c-results)
-         final       (tally-and-transact! conn all-results)
-         final       (update final :batch #(flush-batch! conn %))
-         ;; Always record that enrich ran (even if 0 edges found)
-         _           (when (zero? (:imports-resolved final))
-                       (d/transact conn {:tx-data [{:db/id "datomic.tx"
-                                                    :tx/op :enrich
-                                                    :tx/source :deterministic}]}))
-         {:keys [files-processed imports-resolved files-errored]} final
-         files-skipped (reduce + (map :file-count skipped-tools))]
-     (log! (str "  Enriched " files-processed " files, "
-                imports-resolved " import edges resolved"
-                (when (> concurrency 1)
-                  (str " (concurrency=" concurrency ")"))
-                (when (pos? files-errored)
-                  (str ", " files-errored " errors"))))
-     (when (pos? files-skipped)
-       (log! (str "  Warning: " files-skipped " files skipped because "
-                  (str/join ", " (map (fn [{:keys [tool]}] (str tool " is not on PATH"))
-                                      skipped-tools))
-                  ". Install and re-run enrich to resolve their imports.")))
-     (-> final
-         (dissoc :batch)
-         (assoc :files-skipped files-skipped :skipped-tools skipped-tools)))))
+         final       (-> (tally-and-transact! conn (into std-results c-results))
+                         (update :batch #(flush-batch! conn %)))]
+     (when (zero? (:imports-resolved final))
+       (d/transact conn {:tx-data [{:db/id "datomic.tx"
+                                    :tx/op :enrich
+                                    :tx/source :deterministic}]}))
+     (let [files-skipped (log-enrich-summary! final concurrency skipped-tools)]
+       (-> final
+           (dissoc :batch)
+           (assoc :files-skipped files-skipped :skipped-tools skipped-tools))))))

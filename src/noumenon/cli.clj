@@ -381,49 +381,54 @@
 (defn- flag-map [flags]
   (zipmap (map :flag flags) flags))
 
+(defn- parse-one-flag
+  "Parse a single flag from args. Returns {:opts updated-opts :remaining rest-args}
+   or {:error kw ...} on failure."
+  [spec opts more]
+  (case (:parse spec)
+    :bool
+    {:opts (assoc opts (:key spec) true) :remaining more}
+
+    :optional-string
+    (let [next-arg (first more)]
+      (if (or (nil? next-arg) (str/starts-with? next-arg "-"))
+        {:opts (assoc opts (:key spec) "latest") :remaining more}
+        {:opts (assoc opts (:key spec) next-arg) :remaining (rest more)}))
+
+    :kv-pair
+    (let [raw (first more)]
+      (if-not raw
+        {:error (:error-missing spec)}
+        (let [eq-idx (str/index-of raw "=")]
+          (if (or (nil? eq-idx) (zero? eq-idx))
+            {:error (:error-invalid spec) :value raw}
+            {:opts      (update opts (:key spec) assoc
+                                (subs raw 0 eq-idx) (subs raw (inc eq-idx)))
+             :remaining (rest more)}))))
+
+    ;; default: typed value
+    (let [raw (first more)]
+      (if-not raw
+        {:error (:error-missing spec)}
+        (let [{:keys [ok error value]} (parse-value spec raw)]
+          (cond
+            error                                       {:error error :value value}
+            (and (:valid spec) (not ((:valid spec) raw))) {:error (:error-invalid spec) :value raw}
+            :else {:opts (assoc opts (:key spec) ok) :remaining (rest more)}))))))
+
 (defn- parse-flags
   "Parse all flags in args. Returns [opts positional] or {:error ...}."
   [flags args initial]
   (let [lookup (flag-map flags)]
-    (loop [remaining args
-           opts initial
-           positional []]
+    (loop [remaining args, opts initial, positional []]
       (if (empty? remaining)
         [opts positional]
         (let [[arg & more] remaining]
           (if-let [spec (lookup arg)]
-            (case (:parse spec)
-              :bool
-              (recur more (assoc opts (:key spec) true) positional)
-
-              :optional-string
-              (let [next-arg (first more)]
-                (if (or (nil? next-arg) (str/starts-with? next-arg "-"))
-                  (recur more (assoc opts (:key spec) "latest") positional)
-                  (recur (rest more) (assoc opts (:key spec) next-arg) positional)))
-
-              :kv-pair
-              (let [raw (first more)]
-                (if-not raw
-                  {:error (:error-missing spec)}
-                  (let [eq-idx (str/index-of raw "=")]
-                    (if (or (nil? eq-idx) (zero? eq-idx))
-                      {:error (:error-invalid spec) :value raw}
-                      (let [k (subs raw 0 eq-idx)
-                            v (subs raw (inc eq-idx))]
-                        (recur (rest more)
-                               (update opts (:key spec) assoc k v)
-                               positional))))))
-
-              (let [raw (first more)]
-                (if-not raw
-                  {:error (:error-missing spec)}
-                  (let [{:keys [ok error value]} (parse-value spec raw)]
-                    (if error
-                      {:error error :value value}
-                      (if (and (:valid spec) (not ((:valid spec) raw)))
-                        {:error (:error-invalid spec) :value raw}
-                        (recur (rest more) (assoc opts (:key spec) ok) positional)))))))
+            (let [result (parse-one-flag spec opts more)]
+              (if (:error result)
+                result
+                (recur (:remaining result) (:opts result) positional)))
             (if (str/starts-with? arg "-")
               {:error :unknown-flag :flag arg}
               (recur more opts (conj positional arg)))))))))

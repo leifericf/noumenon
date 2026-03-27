@@ -208,11 +208,18 @@
          (remove str/blank?)
          (into [] (keep parse-record)))))
 
+(defn- person-tx-data
+  "Build person entity tx-data. Deduplicates when author == committer."
+  [author-tid author-email author-name committer-tid committer-email committer-name]
+  (cond-> [{:db/id author-tid :person/email author-email :person/name author-name}]
+    (not= author-email committer-email)
+    (conj {:db/id committer-tid :person/email committer-email
+           :person/name committer-name})))
+
 (defn commit->tx-data
   "Convert a parsed commit map into a Datomic tx-data vector.
    Uses tempids for persons and files so Datomic can resolve references
    within a single transaction (upserts via :db.unique/identity).
-   Parent commits use lookup refs since they exist from prior transactions.
    `repo-uri` is used to upsert the repo entity and link commits to it."
   [repo-uri {:keys [sha parent-shas author-name author-email authored-at
                     committer-name committer-email committed-at message
@@ -221,33 +228,25 @@
         committer-tid (str "person-" committer-email)
         commit-tid    (str "commit-" sha)
         file-tids     (mapv #(str "file-" %) changed-files)
-        kind          (classify-commit message)
         commit        (cond-> {:db/id               commit-tid
                                :git/sha             sha
                                :git/type            :commit
                                :commit/message      (truncate message max-message-length)
-                               :commit/kind         kind
+                               :commit/kind         (classify-commit message)
                                :commit/author       author-tid
                                :commit/authored-at  authored-at
                                :commit/committer    committer-tid
                                :commit/committed-at committed-at}
-                        (pos? (or additions 0))
-                        (assoc :commit/additions additions)
-                        (pos? (or deletions 0))
-                        (assoc :commit/deletions deletions)
-                        (seq parent-shas)
-                        (assoc :commit/parents
-                               (mapv #(vector :git/sha %) parent-shas))
-                        (seq file-tids)
-                        (assoc :commit/changed-files file-tids))]
-    (-> (cond-> [{:db/id author-tid :person/email author-email :person/name author-name}]
-          (not= author-email committer-email)
-          (conj {:db/id committer-tid :person/email committer-email
-                 :person/name committer-name}))
+                        (pos? (or additions 0)) (assoc :commit/additions additions)
+                        (pos? (or deletions 0)) (assoc :commit/deletions deletions)
+                        (seq parent-shas)        (assoc :commit/parents
+                                                        (mapv #(vector :git/sha %) parent-shas))
+                        (seq file-tids)          (assoc :commit/changed-files file-tids))]
+    (-> (person-tx-data author-tid author-email author-name
+                        committer-tid committer-email committer-name)
         (into [commit
                {:repo/uri repo-uri :repo/commits [commit-tid]}
-               {:db/id "datomic.tx" :tx/op :import
-                :tx/source :deterministic}])
+               {:db/id "datomic.tx" :tx/op :import :tx/source :deterministic}])
         (into (map (fn [[path tid]] {:db/id tid :file/path path}))
               (map vector changed-files file-tids)))))
 
