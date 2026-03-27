@@ -1,5 +1,6 @@
 (ns noumenon.benchmark-test
   (:require [clojure.java.io :as io]
+            [clojure.java.shell :as shell]
             [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [noumenon.benchmark :as bench]
@@ -137,7 +138,7 @@
 
 (deftest raw-context-includes-all-file-types
   (testing "raw-context includes non-JVM files (C++, Erlang, Python, etc.)"
-    (with-redefs [clojure.java.shell/sh
+    (with-redefs [shell/sh
                   (fn [& args]
                     (let [cmd (str/join " " args)]
                       (cond
