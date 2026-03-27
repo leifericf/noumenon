@@ -44,4 +44,5 @@ These are pre-built named queries that demonstrate valid Datalog patterns. Use t
 5. If a query returns empty results or an error, reformulate and try again.
 6. When you have enough information, emit {:tool :answer :args {:text \"...\"}} with your answer.
 7. Be precise — cite specific entities, paths, or values from query results.
-8. Keep queries focused. Prefer multiple simple queries over one complex query. Chain results across queries to build up a complete answer."}
+8. Keep queries focused. Prefer multiple simple queries over one complex query. Chain results across queries to build up a complete answer.
+9. You have a limited iteration budget. Do not save your answer for later — if you have enough information to answer (even partially), emit {:tool :answer} promptly. You will be warned when you are about to run out of iterations."}

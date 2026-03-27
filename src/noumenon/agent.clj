@@ -184,9 +184,46 @@
       {:result (str "Unknown tool: " (:tool tool-call)
                     ". Available: :query, :schema, :rules, :answer")})))
 
+;; --- Session storage (for resumable budget-exhausted runs) ---
+
+(def ^:private max-sessions 20)
+(def ^:private session-ttl-ms (* 30 60 1000)) ;; 30 minutes
+
+(def ^:private sessions (atom {}))
+
+(defn- evict-expired-sessions! []
+  (let [cutoff (- (System/currentTimeMillis) session-ttl-ms)]
+    (swap! sessions (fn [m]
+                      (let [live (into {} (remove #(< (:created-at (val %)) cutoff)) m)]
+                        (if (<= (count live) max-sessions)
+                          live
+                          (->> live
+                               (sort-by (comp :created-at val))
+                               (drop (- (count live) max-sessions))
+                               (into {}))))))))
+
+(defn- store-session! [state]
+  (evict-expired-sessions!)
+  (let [id (str (java.util.UUID/randomUUID))]
+    (swap! sessions assoc id (assoc state :created-at (System/currentTimeMillis)))
+    id))
+
+(defn- load-session! [id]
+  (let [s (get @sessions id)]
+    (when s
+      (swap! sessions dissoc id)
+      (dissoc s :created-at))))
+
 ;; --- Agent loop ---
 
 (def ^:private default-max-iterations 10)
+
+(def ^:private budget-nudge
+  (str "You have reached your iteration budget. "
+       "You MUST respond with {:tool :answer :args {:text \"...\"}} NOW. "
+       "Synthesize the best answer you can from the information gathered so far. "
+       "If your answer is incomplete, end with a note about what additional queries "
+       "you would have run given more budget."))
 
 (defn- parse-error-transition
   [messages response-text parse-error]
@@ -203,16 +240,29 @@
         {:role "assistant" :content response-text}
         {:role "user" :content (str "Tool result:\n" result)}))
 
+(defn- maybe-append-nudge
+  "Append the budget nudge if this is the last allowed iteration."
+  [messages iterations max-iterations]
+  (if (>= iterations (dec max-iterations))
+    (conj messages {:role "user" :content budget-nudge})
+    messages))
+
 (defn- next-state
   [{:keys [db invoke-fn]}
    {:keys [messages steps iterations total-usage max-iterations]}]
   (if (>= iterations max-iterations)
-    {:done {:answer (or (some :answer steps)
-                        "Budget exhausted: reached maximum iterations without a final answer.")
-            :steps  steps
-            :usage  (assoc total-usage :iterations iterations)
-            :status :budget-exhausted}}
-    (let [response      (invoke-fn (vec messages))
+    (let [state {:messages messages :steps steps
+                 :iterations iterations :total-usage total-usage
+                 :max-iterations max-iterations}
+          session-id (store-session! state)]
+      {:done {:answer     (or (some :answer steps)
+                              "Budget exhausted: reached maximum iterations without a final answer.")
+              :steps      steps
+              :usage      (assoc total-usage :iterations iterations)
+              :status     :budget-exhausted
+              :session-id session-id}})
+    (let [msgs          (maybe-append-nudge messages iterations max-iterations)
+          response      (invoke-fn (vec msgs))
           usage         (merge-with + total-usage
                                     (select-keys (:usage response)
                                                  [:input-tokens :output-tokens :cost-usd :duration-ms]))
@@ -240,16 +290,20 @@
 
 (defn ask
   "Run the agent loop: prompt → parse → dispatch → repeat.
-   Returns {:answer string :steps vec :usage {:iterations n :input-tokens n :output-tokens n}}."
-  [db question {:keys [invoke-fn repo-name max-iterations]
+   Returns {:answer string :steps vec :usage {:iterations n :input-tokens n :output-tokens n}
+            :status :answered|:budget-exhausted :session-id string?}.
+   Pass :continue-from session-id to resume a budget-exhausted session."
+  [db question {:keys [invoke-fn repo-name max-iterations continue-from]
                 :or   {max-iterations default-max-iterations}}]
-  (let [system-prompt (build-system-prompt db repo-name)
-        context      {:db db :invoke-fn invoke-fn}
-        initial      {:messages [{:role "user" :content (str system-prompt "\n\n" question)}]
-                      :steps []
-                      :iterations 0
-                      :total-usage llm/zero-usage
-                      :max-iterations max-iterations}]
+  (let [context {:db db :invoke-fn invoke-fn}
+        initial (if-let [prev (when continue-from (load-session! continue-from))]
+                  (assoc prev :max-iterations (+ (:iterations prev) max-iterations))
+                  {:messages [{:role "user" :content (str (build-system-prompt db repo-name)
+                                                          "\n\n" question)}]
+                   :steps []
+                   :iterations 0
+                   :total-usage llm/zero-usage
+                   :max-iterations max-iterations})]
     (loop [state initial]
       (let [nxt (next-state context state)]
         (if-let [done (:done nxt)]

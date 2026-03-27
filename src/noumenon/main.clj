@@ -237,7 +237,7 @@
 
 (defn do-ask
   "Run the ask subcommand. Returns {:exit n :result map-or-nil}."
-  [{:keys [question model provider max-iterations verbose] :as opts}]
+  [{:keys [question model provider max-iterations continue-from verbose] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
@@ -252,7 +252,8 @@
                                                    :max-tokens  4096})
                   result (agent/ask db question
                                     (cond-> {:invoke-fn invoke-fn :repo-name db-name}
-                                      max-iterations (assoc :max-iterations max-iterations)))]
+                                      max-iterations (assoc :max-iterations max-iterations)
+                                      continue-from  (assoc :continue-from continue-from)))]
               (when verbose
                 (let [max-iters (or max-iterations 10)]
                   (doseq [step (:steps result)]
@@ -267,15 +268,27 @@
                                                            " chars)"))
                                 :else               "thinking")]
                       (log! (str "  [" i "/" max-iters "] " tag))))))
-              (let [exit-code (if (= :budget-exhausted (:status result)) 2 0)]
-                (if (= :budget-exhausted (:status result))
-                  (log! "Budget exhausted — no answer found.")
-                  (when-let [answer (:answer result)]
-                    (log! answer)))
-                {:exit   exit-code
-                 :result {:answer (:answer result)
-                          :status (:status result)
-                          :usage  (:usage result)}}))))
+              (let [exhausted? (= :budget-exhausted (:status result))
+                    answer     (:answer result)
+                    session-id (:session-id result)]
+                (cond
+                  (and exhausted? (not answer))
+                  (do (log! "Budget exhausted — no answer found.")
+                      {:exit 2 :result {:status :budget-exhausted :usage (:usage result)}})
+
+                  exhausted?
+                  (do (log! answer)
+                      (log! (str "\n[Session " session-id " saved — re-run with"
+                                 " --continue-from " session-id " to resume]"))
+                      {:exit   2
+                       :result {:answer answer :status :budget-exhausted
+                                :session-id session-id :usage (:usage result)}})
+
+                  :else
+                  (do (when answer (log! answer))
+                      {:exit   0
+                       :result {:answer answer :status (:status result)
+                                :usage (:usage result)}}))))))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
           {:exit 1})))))

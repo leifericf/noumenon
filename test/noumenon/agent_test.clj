@@ -266,7 +266,56 @@
                              :max-iterations 3})]
     (is (= :budget-exhausted (:status result)))
     (is (<= @call-count 3))
-    (is (= 3 (get-in result [:usage :iterations])))))
+    (is (= 3 (get-in result [:usage :iterations])))
+    (is (string? (:session-id result)))))
+
+(deftest ask-sends-nudge-on-last-iteration
+  (testing "agent receives budget nudge message on final iteration"
+    (let [db            (make-test-db)
+          last-messages (atom nil)
+          call-count    (atom 0)
+          mock-llm      (fn [messages]
+                          (reset! last-messages messages)
+                          (swap! call-count inc)
+                          (if (>= @call-count 3)
+                            {:text  "{:tool :answer :args {:text \"partial answer\"}}"
+                             :usage {:input-tokens 100 :output-tokens 50}
+                             :model "mock"}
+                            {:text  "{:tool :query :args {:query [:find ?p :where [?e :file/path ?p]]}}"
+                             :usage {:input-tokens 100 :output-tokens 50}
+                             :model "mock"}))
+          result        (agent/ask db "test" {:invoke-fn mock-llm :repo-name "test"
+                                              :max-iterations 3})]
+      (is (= :answered (:status result)))
+      (is (= "partial answer" (:answer result)))
+      (is (re-find #"iteration budget" (:content (last @last-messages)))))))
+
+(deftest ask-session-store-and-continue
+  (testing "budget-exhausted session can be resumed with continue-from"
+    (let [db         (make-test-db)
+          call-count (atom 0)
+          mock-llm   (fn [_messages]
+                       (swap! call-count inc)
+                       (if (>= @call-count 4)
+                         {:text  "{:tool :answer :args {:text \"full answer\"}}"
+                          :usage {:input-tokens 100 :output-tokens 50}
+                          :model "mock"}
+                         {:text  "{:tool :query :args {:query [:find ?p :where [?e :file/path ?p]]}}"
+                          :usage {:input-tokens 100 :output-tokens 50}
+                          :model "mock"}))
+          ;; First run: exhaust budget after 2 iterations
+          result1    (agent/ask db "test" {:invoke-fn mock-llm :repo-name "test"
+                                           :max-iterations 2})
+          _          (is (= :budget-exhausted (:status result1)))
+          session-id (:session-id result1)
+          _          (is (some? session-id))
+          ;; Continue: resume with more budget
+          result2    (agent/ask db "test" {:invoke-fn      mock-llm
+                                           :repo-name      "test"
+                                           :max-iterations 5
+                                           :continue-from  session-id})]
+      (is (= :answered (:status result2)))
+      (is (= "full answer" (:answer result2))))))
 
 ;; --- Tier 1: integration test with mock LLM ---
 

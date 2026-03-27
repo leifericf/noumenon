@@ -217,6 +217,8 @@
                   :desc "Max query iterations (default: 10)"
                   :error-invalid :invalid-max-iterations
                   :error-missing :missing-max-iterations-value}
+                 {:flag "--continue-from" :key :continue-from :parse :string
+                  :desc "Session ID from a budget-exhausted run — resumes the agent"}
                  db-dir-flag]
                 verbose-flags))
    :initial {:subcommand "ask"}

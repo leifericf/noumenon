@@ -144,7 +144,8 @@
                                      {"question" {:type "string" :description "Question to ask about the repository"}
                                       "provider" {:type "string" :description "LLM provider: glm, claude-api, or claude-cli (aliases: claude = claude-cli)"}
                                       "model" {:type "string" :description "Model alias (e.g. sonnet, haiku, opus)"}
-                                      "max_iterations" {:type "integer" :description "Max query iterations (default: 10, max: 50)"}})
+                                      "max_iterations" {:type "integer" :description "Max query iterations (default: 10, max: 50)"}
+                                      "continue_from" {:type "string" :description "Session ID from a budget-exhausted run — resumes the agent from where it left off"}})
                   :required ["question" "repo_path"]}}
    {:name "noumenon_analyze"
     :description "Run LLM analysis on repository files to enrich the knowledge graph with semantic metadata. Only analyzes files not yet analyzed. Requires a prior import."
@@ -336,18 +337,25 @@
             result      (agent/ask db (args "question")
                                    {:invoke-fn      invoke-fn
                                     :repo-name      db-name
-                                    :max-iterations max-iter})
-            usage       (:usage result)]
+                                    :max-iterations max-iter
+                                    :continue-from  (args "continue_from")})
+            usage       (:usage result)
+            answer      (:answer result)
+            session-id  (:session-id result)]
         (log! "agent/done"
               (str "status=" (:status result)
                    " iterations=" (:iterations usage)
                    " tokens=" (+ (:input-tokens usage 0) (:output-tokens usage 0))))
         (if (= :budget-exhausted (:status result))
-          (tool-error (str "Budget exhausted after " max-iter " iterations"
-                           " (" (:input-tokens usage 0) " in / "
-                           (:output-tokens usage 0) " out tokens). "
-                           "Try increasing max_iterations or narrowing the question."))
-          (tool-result (or (:answer result)
+          (if answer
+            (tool-result (str answer
+                              "\n\n[Session " session-id " saved — to continue exploring, "
+                              "call noumenon_ask with continue_from=\"" session-id "\"]"))
+            (tool-error (str "Budget exhausted after " max-iter " iterations"
+                             " (" (:input-tokens usage 0) " in / "
+                             (:output-tokens usage 0) " out tokens) with no answer. "
+                             "Try increasing max_iterations or narrowing the question.")))
+          (tool-result (or answer
                            (str "No answer found (status: " (name (:status result)) ")"))))))))
 
 (defn- handle-analyze [args defaults]
