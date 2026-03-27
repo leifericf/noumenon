@@ -1,12 +1,12 @@
 # Noumenon
 
-Datomic-backed knowledge graph for codebase understanding. See [noumenon.leifericf.com](https://noumenon.leifericf.com) for an overview.
+[Datomic](https://www.datomic.com)-backed knowledge graph for codebase understanding. See [noumenon.leifericf.com](https://noumenon.leifericf.com) for an overview.
 
 ## Requirements
 
-- JDK 21+
-- Clojure CLI (`clj`)
-- Git
+- [JDK 21+](https://adoptium.net)
+- [Clojure CLI](https://clojure.org/guides/install_clojure) (`clj`)
+- [Git](https://git-scm.com)
 - Provider setup (depends on chosen provider)
 
 ### Provider setup
@@ -16,8 +16,8 @@ Noumenon supports three provider modes:
 | Provider | Mode | What you need |
 |---|---|---|
 | `glm` (default) | HTTP API | `NOUMENON_ZAI_TOKEN` |
-| `claude-api` | HTTP API | `ANTHROPIC_API_KEY` |
-| `claude-cli` (alias: `claude`) | Local CLI | `claude` installed and authenticated |
+| `claude-api` | HTTP API | [`ANTHROPIC_API_KEY`](https://console.anthropic.com/settings/keys) |
+| `claude-cli` (alias: `claude`) | Local CLI | [Claude Code](https://claude.ai/claude-code) installed and authenticated |
 
 Use `.env.example` as a template for local environment setup.
 
@@ -79,17 +79,6 @@ clj -M:run import https://github.com/ring-clojure/ring.git
 clj -M:run analyze /path/to/repo --provider glm --model sonnet
 ```
 
-During `analyze`, Noumenon prints token and cost telemetry to stderr:
-
-- Pre-run estimate (input/output tokens, estimated cost, ETA)
-- Per-file usage (`tokens=input/output`)
-- Final aggregate usage (total input/output tokens, total cost, elapsed time)
-
-Notes:
-
-- Cost estimation is model-aware for priced Anthropic model IDs.
-- For providers/models without pricing metadata (for example `glm`), token counts are still tracked but USD cost may be `0.0`.
-
 ### 3) (Optional) Build deterministic import graph
 
 ```bash
@@ -101,14 +90,11 @@ clj -M:run enrich /path/to/repo
 As the codebase changes, update the knowledge graph with the latest git state:
 
 ```bash
-clj -M:run update /path/to/repo                  # fast: import + enrich only
-clj -M:run update /path/to/repo --analyze          # also re-analyze changed files (LLM)
-clj -M:run watch /path/to/repo --interval 30     # auto-sync every 30s on new commits
+clj -M:run update /path/to/repo
+clj -M:run watch /path/to/repo
 ```
 
-`update` works as a first-time setup too — if no database exists, it runs the full import pipeline. On subsequent runs it detects changes via git HEAD SHA and incrementally updates only what changed.
-
-The MCP server also auto-syncs before queries when HEAD changes (disable with `--no-auto-update`).
+`update` also works for first-time setup — it runs the full import if no database exists. On subsequent runs it detects HEAD changes and incrementally updates. The MCP server auto-syncs before queries.
 
 ### 4) Inspect status, databases, and queries
 
@@ -146,21 +132,16 @@ flowchart LR
   C --> H[Benchmark\nEvaluation workflows]
 ```
 
-`enrich` is optional but recommended when you want deterministic dependency and test-impact analysis. `update` can replace the manual `import` + `enrich` workflow and handles incremental updates.
+`enrich` is optional but recommended for deterministic dependency and test-impact analysis. `update` replaces the manual `import` + `enrich` workflow.
 
 ## Command Reference
 
 ```bash
 clj -M:run <command> [options]
+clj -M:run <command> --help
 ```
 
-Run `clj -M:run --help` for global help, or `clj -M:run <command> --help` for details.
-
-`import` accepts either `<repo-path>` or a Git URL (auto-cloned to `data/repos/<name>/`). See [Using with Perforce](#using-with-perforce) for Helix Core repositories.
-
-### Unified CLI and MCP interface
-
-The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir`, `--provider`, and `--model` from the `serve` command flags. `noumenon_ask` and `noumenon_analyze` also accept `provider` and `model` per-call to override server defaults.
+The CLI and [MCP](https://modelcontextprotocol.io) server expose the same capabilities.
 
 | Command | CLI | MCP tool | Description |
 |---|---|---|---|
@@ -168,119 +149,22 @@ The CLI and MCP server expose the same capabilities. MCP tools inherit `--db-dir
 | Analyze | `analyze <path>` | `noumenon_analyze` | Enrich files with LLM semantic metadata |
 | Enrich | `enrich <path>` | `noumenon_enrich` | Extract cross-file import graph (no LLM) |
 | Update | `update <path>` | `noumenon_update` | Sync knowledge graph with latest git state |
+| Digest | `digest <path>` | `noumenon_digest` | Run full pipeline: import, enrich, analyze, benchmark |
 | Ask | `ask -q <question> <path>` | `noumenon_ask` | Ask a question using iterative Datalog querying |
 | Query | `query <name> <path>` | `noumenon_query` | Run a named Datalog query |
 | List queries | `query list` | `noumenon_list_queries` | List available named queries |
 | Show schema | `show-schema <path>` | `noumenon_get_schema` | Show database schema with all attributes |
 | Status | `status <path>` | `noumenon_status` | Show entity counts for a repository |
 | List databases | `list-databases` | `noumenon_list_databases` | List all databases with stats |
+| Benchmark | `benchmark <path>` | `noumenon_benchmark_run` | Evaluate knowledge graph efficacy |
+| Benchmark results | -- | `noumenon_benchmark_results` | Get benchmark results (latest or by ID) |
+| Benchmark compare | -- | `noumenon_benchmark_compare` | Compare two benchmark runs by score differences |
 | Watch | `watch <path>` | -- | Auto-sync on new commits (CLI-only) |
 | Serve | `serve` | -- | Start MCP server (CLI-only) |
-| Benchmark | `benchmark <path>` | -- | Evaluate knowledge graph efficacy (CLI-only) |
-
-### CLI options by command
-
-**`import`** `<repo-path-or-url>`
-- `--db-dir` — storage directory (default: `data/datomic/`)
-
-**`analyze`** `<repo-path>`
-- `--model` — model alias (default: provider default)
-- `--provider` — `glm` (default), `claude-api`, `claude-cli`
-- `--max-files` — stop after analyzing N files (useful for sampling)
-- `--concurrency` — parallel workers, 1-20 (default: 3)
-- `--min-delay` — min ms between LLM requests (default: 0)
-- `--db-dir` — storage directory (default: `data/datomic/`)
-- `-v` / `--verbose` — verbose stderr logs
-
-**`enrich`** `<repo-path>`
-- `--concurrency` — parallel workers, 1-20 (default: 8)
-- `--db-dir` — storage directory (default: `data/datomic/`)
-
-**`update`** `<repo-path>`
-- `--analyze` — also run LLM analysis on changed files
-- `--model` — model alias (default: provider default)
-- `--provider` — `glm` (default), `claude-api`, `claude-cli`
-- `--concurrency` — parallel workers, 1-20 (default: 8)
-- `--db-dir` — storage directory (default: `data/datomic/`)
-
-**`ask`** `-q <question> <repo-path>`
-- `-q` / `--question` — question to ask (required)
-- `--model` — model alias (default: provider default)
-- `--provider` — `glm` (default), `claude-api`, `claude-cli`
-- `--max-iterations` — max query iterations (default: 10)
-- `--db-dir` — storage directory (default: `data/datomic/`)
-- `-v` / `--verbose` — verbose stderr logs
-
-**`query`** `<query-name> <repo-path>` or `query list`
-- `--param` — supply input as `key=value` (repeatable)
-- `--db-dir` — storage directory (default: `data/datomic/`)
-
-**`show-schema`** `<repo-path>`
-- `--db-dir` — storage directory (default: `data/datomic/`)
-
-**`status`** `<repo-path>`
-- `--db-dir` — storage directory (default: `data/datomic/`)
-
-**`list-databases`**
-- `--delete` — delete a database by name
-- `--db-dir` — storage directory (default: `data/datomic/`)
-
-**`watch`** `<repo-path>`
-- `--interval` — polling interval in seconds (default: 30)
-- `--analyze` — also run LLM analysis on changed files
-- `--model` — model alias (default: provider default)
-- `--provider` — `glm` (default), `claude-api`, `claude-cli`
-- `--concurrency` — parallel workers, 1-20 (default: 8)
-- `--db-dir` — storage directory (default: `data/datomic/`)
-
-**`serve`**
-- `--provider` — default LLM provider (default: `glm`)
-- `--model` — default model alias
-- `--no-auto-update` — disable automatic sync before queries
-- `--db-dir` — storage directory (default: `data/datomic/`)
-
-**`benchmark`** `<repo-path>`
-- `--model` — model alias (default: provider default)
-- `--judge-model` — model alias for judge stages
-- `--provider` — `glm` (default), `claude-api`, `claude-cli`
-- `--concurrency` — parallel workers, 1-20 (default: 3)
-- `--min-delay` — min ms between LLM requests (default: 0)
-- `--max-cost` — stop when cost exceeds threshold in USD
-- `--max-questions` — stop after n questions
-- `--stop-after` — stop after n seconds
-- `--resume` — resume from checkpoint (default: latest)
-- `--skip-raw` — omit raw-context condition
-- `--skip-judge` — skip LLM judge stages
-- `--fast` — deterministic + query-only (cheapest)
-- `--full` — all questions including LLM-judged
-- `--canary` — run q01+q02 first as canary
-- `--db-dir` — storage directory (default: `data/datomic/`)
-
-Universal flags: `-h` / `--help`, `--version`
 
 ## Named Queries
 
-Named queries live in `resources/queries/` (EDN). Use:
-
-```bash
-clj -M:run query list
-```
-
-Common examples:
-
-- `hotspots`
-- `bug-hotspots`
-- `top-contributors`
-- `co-changed-files`
-- `files-by-complexity`
-- `files-by-layer`
-- `component-dependencies`
-- `dependency-hotspots`
-- `pure-segments`
-- `file-history` (parameterized)
-- `llm-cost-total`
-- `llm-cost-by-model`
-- `llm-cost-by-file`
+50 named Datalog queries live in `resources/queries/` (EDN), covering hotspots, ownership, dependencies, complexity, churn, impact analysis, LLM cost tracking, and benchmarks. Run `clj -M:run query list` to see them all.
 
 ## Data Model
 
@@ -326,13 +210,11 @@ flowchart LR
   Code -.->|:code/call-names| CalledName[(symbol name)]
 ```
 
-`chunk` entities (`:chunk/parent`, `:chunk/index`, `:chunk/text`) are used for long text values that exceed Datomic string limits.
-
-Component relationships (`:arch/component`, `:component/files`, `:component/depends-on`) and resolved segment call edges (`:code/calls`) are schema-supported and queryable when present, but are not populated by the default `import -> enrich -> analyze` pipeline today.
+`chunk` entities (`:chunk/parent`, `:chunk/index`, `:chunk/text`) handle long text values exceeding Datomic string limits. Component relationships (`:arch/component`, `:component/depends-on`) and resolved call edges (`:code/calls`) are schema-supported but not yet populated by the default pipeline.
 
 ## Language Support
 
-Import + LLM analysis works with any language. `enrich` adds deterministic import extraction with tiered support:
+Import and LLM analysis work with any language. `enrich` adds deterministic import extraction:
 
 | Tier | Languages | Method | External tool |
 |---|---|---|---|
@@ -341,17 +223,17 @@ Import + LLM analysis works with any language. `enrich` adds deterministic impor
 | Import extraction | Python | `ast` parser | `python3` |
 | Import extraction | JavaScript / TypeScript | Regex-based import extraction via Node runtime | `node` |
 | Import extraction | C / C++ | compiler dependency output | `clang` or `gcc` |
-| Import extraction | Go | toolchain metadata | `go` |
+| Import extraction | C# | `using` directive detection | none (regex) |
 | Import extraction | Rust | `mod` detection | none (regex) |
 | Import extraction | Java | `import` detection | none (regex) |
 | Import extraction | Erlang | `-include` / `-include_lib` detection | none (regex) |
 | Analysis only | many others | LLM-only semantics | n/a |
 
-Markdown files (`.md`) are imported as file entities but not analyzed — they are prose, not code or config.
+Markdown files are imported as entities but not analyzed.
 
 ### Sensitive File Protection
 
-Noumenon automatically excludes files matching known sensitive patterns from LLM analysis and import extraction. File contents for these paths are **never read or sent to any AI provider**:
+Files matching known sensitive patterns are **never read or sent to any AI provider**:
 
 | Pattern | Examples |
 |---|---|
@@ -360,20 +242,20 @@ Noumenon automatically excludes files matching known sensitive patterns from LLM
 | Credential files | `credentials.json`, `token.json`, `.npmrc`, `.pypirc`, `.netrc`, `.htpasswd`, `.pgpass` |
 | SSH material | `.ssh/*`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*` |
 
-These files are still recorded in the knowledge graph as file entities (path, size, extension) but their contents are never accessed.
+These files are still tracked as entities (path, size, extension) but their contents are never accessed.
 
-**Your responsibility:** This blocklist covers well-known secret *files*. If you embed secrets directly in source code (hardcoded API keys, tokens, passwords), Noumenon will not detect them — that content will be sent to the LLM like any other code. Use `.gitignore`, pre-commit hooks, or tools like [git-secrets](https://github.com/awslabs/git-secrets) or [gitleaks](https://github.com/gitleaks/gitleaks) to prevent secrets from entering your repository.
+**Note:** This covers well-known secret *files*. Secrets hardcoded in source code will still be sent to the LLM. Use [git-secrets](https://github.com/awslabs/git-secrets) or [gitleaks](https://github.com/gitleaks/gitleaks) to prevent secrets from entering your repo.
 
 ## MCP Server
 
-Run Noumenon as an MCP server so agents can call it as a tool:
+Run Noumenon as an [MCP](https://modelcontextprotocol.io) server so agents can call it as a tool:
 
 ```bash
 clj -M:run serve
 # or java -jar noumenon-0.1.0.jar serve
 ```
 
-### Claude Desktop config
+### [Claude Desktop](https://claude.ai/download) config
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -388,7 +270,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-### Claude Code config
+### [Claude Code](https://claude.ai/claude-code) config
 
 Add to `~/.claude/settings.json` (global) or `.mcp.json` (per-project):
 
@@ -404,100 +286,24 @@ Add to `~/.claude/settings.json` (global) or `.mcp.json` (per-project):
 }
 ```
 
-The `source .env` ensures environment variables (like `NOUMENON_ZAI_TOKEN` for the GLM provider) are loaded. If you don't use providers that need env vars, you can simplify to `"command": "clj"` with `"args": ["-M:run", "serve"]`.
-
-You do not need extra skills, custom sub-agents, or special `CLAUDE.md` wiring just to make Noumenon discoverable. Those are optional only if you want stricter usage behavior.
-
-### Exposed MCP tools
-
-| Tool | Required params | Optional params | Description |
-|---|---|---|---|
-| `noumenon_import` | `repo_path` | | Import git history and files |
-| `noumenon_analyze` | `repo_path` | `provider`, `model`, `concurrency` (default: 3), `max_files` | Run LLM semantic analysis |
-| `noumenon_enrich` | `repo_path` | `concurrency` (default: 8) | Extract import graph (no LLM) |
-| `noumenon_update` | `repo_path` | `analyze` (default: false) | Update with latest git state |
-| `noumenon_ask` | `repo_path`, `question` | `provider`, `model`, `max_iterations` (default: 10) | Ask a question via iterative querying |
-| `noumenon_query` | `repo_path`, `query_name` | `params` | Run a named Datalog query |
-| `noumenon_list_queries` | | | List available named queries |
-| `noumenon_get_schema` | `repo_path` | | Show database schema |
-| `noumenon_status` | `repo_path` | | Get entity counts |
-| `noumenon_list_databases` | | | List all databases with stats |
+The `source .env` loads provider tokens. If you don't need env vars, simplify to `"command": "clj"` with `"args": ["-M:run", "serve"]`.
 
 ## Benchmarks
 
-Run the benchmark on your own repo to measure whether the knowledge graph meaningfully improves LLM answers about your codebase. Each question is answered twice: once with structured Datomic query results (the knowledge graph) and once with raw source code. If the knowledge-graph-augmented answers score higher, the graph is earning its keep.
+Run the benchmark on your own repo to measure whether the knowledge graph improves LLM answers about your codebase. See [reports/digest-run-2026-03-27.md](reports/digest-run-2026-03-27.md) for results from a full run across 9 repos and 8 languages.
 
-Results vary depending on repo size, history depth, and codebase characteristics. Small repos with few commits won't produce meaningful signal.
+## Cost Estimates
 
-### Scoring tiers
+`analyze` averages roughly `~4,500` input + `~750` output tokens per file. Example projections using [Anthropic Sonnet pricing](https://docs.anthropic.com/en/docs/about-claude/models) (`$3/M` input, `$15/M` output):
 
-- **Deterministic (22 questions)** — Primary metric. Answers are compared against Datomic query results using exact matching. Objective and reproducible. Run by default.
-- **LLM-judged (18 questions)** — Supplementary metric. A judge LLM scores architectural reasoning answers against rubrics. Useful but subjective. Opt-in via `--full`.
+| Repo size | Source files | Estimated cost |
+|---|---:|---:|
+| Small (Ring-scale) | 90 | ~$2 |
+| Medium | 500 | ~$12 |
+| Large (Redis-scale) | 1,350 | ~$34 |
+| Very large (Guava-scale) | 3,300 | ~$82 |
 
-### Progressive testing
-
-By default, only deterministic questions run. Start here — if the deterministic score is poor, there's no point spending tokens on LLM-judged questions. Once you're satisfied with deterministic results, run `--full` to include the architectural reasoning tier.
-
-### Running
-
-```bash
-# Default: deterministic questions only (22 questions, both conditions)
-clj -M:run benchmark /path/to/repo
-
-# All 40 questions including LLM-judged architectural reasoning
-clj -M:run benchmark --full /path/to/repo
-
-# Cheapest mode: deterministic + query-only (no raw context comparison)
-clj -M:run benchmark --fast /path/to/repo
-
-# Budget-limited
-clj -M:run benchmark --max-cost 2.0 /path/to/repo
-
-# Resume an interrupted run
-clj -M:run benchmark --resume /path/to/repo
-```
-
-## Cost Planning (Rough)
-
-These are planning estimates, not guarantees. Actual usage depends on file sizes, retries, model choice, provider billing, and whether you run partial workflows.
-
-### Analysis estimate examples
-
-`analyze` uses language-specific token profiles based on empirical data from 2,396 files across 9 repos and 8 languages. The averages are roughly `~4,567` input + `~743` output tokens per file, but vary by language:
-
-| Language | Input tokens/file | Output tokens/file | Time/file |
-|---|---:|---:|---:|
-| TypeScript | ~3,400 | ~476 | ~1.7s |
-| JavaScript | ~3,600 | ~648 | ~2.0s |
-| Python | ~3,900 | ~718 | ~2.3s |
-| Clojure | ~4,000 | ~778 | ~2.4s |
-| Java | ~4,600 | ~743 | ~3.0s |
-| C | ~4,900 | ~801 | ~3.3s |
-| Go | ~5,500 | ~840 | ~3.5s |
-| Rust | ~6,000 | ~932 | ~5.2s |
-
-Example cost projections (using overall averages):
-
-| Example repo size | Approx source files | Estimated input tokens | Estimated output tokens | Sonnet API rough cost* |
-|---|---:|---:|---:|---:|
-| Small library (Ring-scale) | 90 | 411,000 | 66,900 | ~$2.24 |
-| Medium repo | 500 | 2,284,000 | 371,500 | ~$12.42 |
-| Large repo (Redis-scale) | 1,350 | 6,165,000 | 1,003,000 | ~$33.54 |
-| Very large repo (Guava-scale) | 3,300 | 15,071,000 | 2,452,000 | ~$81.99 |
-
-### Benchmark estimate examples
-
-Project benchmark has `40` questions (`22` deterministic, `18` LLM-judged). Default runs deterministic only.
-
-`benchmark` uses a planning heuristic of roughly `~2,400` input + `~230` output tokens per LLM call, based on 1,280 stages across 9 repos. Deterministic judge stages are free (no LLM call), so effective LLM calls are lower than total stages.
-
-| Benchmark mode | LLM calls | Estimated input tokens | Estimated output tokens | Sonnet API rough cost* |
-|---|---:|---:|---:|---:|
-| Default (deterministic, both conditions) | 44 (22 × 2 answer stages) | 105,600 | 10,120 | ~$0.47 |
-| Full (`--full`, all 40 questions) | 124 (80 answer + 44 LLM judge) | 297,600 | 28,520 | ~$1.32 |
-| Fast (`--fast`, deterministic + query-only) | 22 (22 × 1 answer stage) | 52,800 | 5,060 | ~$0.24 |
-
-\* Cost examples use Anthropic Sonnet pricing assumptions (`$3/M` input tokens, `$15/M` output tokens). Providers without public per-token pricing metadata (for example `glm`) still report token usage, but USD estimates may be `0.0`.
+`benchmark` costs ~$0.25-$1.30 per run depending on mode. Providers without per-token pricing (e.g. `glm`) still track token counts but report `$0.00`.
 
 ## Development
 
@@ -520,9 +326,9 @@ clj -M:nrepl
 
 ## Using with Perforce
 
-Noumenon works with Perforce (Helix Core) repositories via [git-p4](https://git-scm.com/docs/git-p4), which creates a local Git mirror from a P4 depot path. Noumenon then treats it as a regular Git repo.
+Works with Helix Core via [git-p4](https://git-scm.com/docs/git-p4), which creates a local Git mirror from a P4 depot path.
 
-**Requirements**: `git`, `p4` CLI, and `git-p4` (bundled with most Git distributions) must be on PATH. Your Perforce environment (`P4PORT`, `P4USER`, `P4CLIENT`) must be configured.
+**Requirements**: `git`, `p4`, and `git-p4` on PATH. Perforce environment (`P4PORT`, `P4USER`, `P4CLIENT`) configured.
 
 ### Import a Perforce depot
 
@@ -538,17 +344,13 @@ cd data/repos/project && git p4 sync && git p4 rebase && cd -
 clj -M:run update data/repos/project
 ```
 
-`git p4 sync` fetches new changelists from the Perforce server and `git p4 rebase` applies them as Git commits. Then `noumenon sync` detects the new HEAD and incrementally updates the knowledge graph.
-
-### If your server has Helix4Git
-
-If your Perforce admin has configured [Helix4Git](https://www.perforce.com/products/helix-core-git-connector), the depot is already mirrored as a Git repo. Point Noumenon at the Git URL directly — no `git-p4` needed.
-
-See the [git-p4 documentation](https://git-scm.com/docs/git-p4) for full usage details, including filtering by depot path, handling streams, and troubleshooting.
+If your server has [Helix4Git](https://www.perforce.com/products/helix-core-git-connector), point Noumenon at the Git URL directly — no `git-p4` needed.
 
 ## Status
 
 This project is under active development and currently optimized for CLI workflows.
+
+This project was developed using [leifericf's Claude Code Toolkit](https://github.com/leifericf/claude-code-toolkit).
 
 ## License
 

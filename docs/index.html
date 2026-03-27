@@ -45,7 +45,7 @@
     </div>
     <h1>Ask your codebase precise questions.<br>Get grounded answers.</h1>
     <p class="hero-sub">
-      Noumenon builds a Datomic knowledge graph from your repository &mdash; immutable facts, temporal queries, and semantic annotations &mdash; so agents retrieve exactly what they need instead of dumping raw files into context windows. In benchmarks across 9 repos and 8 languages, graph-augmented answers scored <strong>2&times; higher</strong> on average than raw-context answers.
+      Noumenon builds a <a href="https://www.datomic.com">Datomic</a> knowledge graph from your repository so agents query structured facts instead of dumping raw files into context windows. In benchmarks across 9 repos and 8 languages, graph-augmented answers scored <strong>2&times; higher</strong> on average.
     </p>
     <div class="hero-actions">
       <a href="#get-started" class="btn btn-primary">Get Started</a>
@@ -80,20 +80,20 @@
   <div class="container section-center">
     <h2 class="section-title">Why structured knowledge</h2>
     <p class="section-sub">
-      As repositories grow, stuffing files into context windows becomes expensive and noisy. A queryable graph lets you retrieve exactly what you need.
+      Context windows don't scale with repo size. A queryable graph returns exactly what you need.
     </p>
     <div class="problem-grid">
       <div class="card">
         <h3>Context windows don't scale</h3>
-        <p>Dumping files into prompts degrades with repo size and dilutes signal with noise. A Datalog query returns exactly the entities a question needs, nothing more. In benchmarks, structured graph context improved LLM accuracy by <strong>+19.7 percentage points</strong> on average.</p>
+        <p>A Datalog query returns exactly the entities a question needs. In benchmarks, graph context improved LLM accuracy by <strong>+19.7 percentage points</strong> on average.</p>
       </div>
       <div class="card">
         <h3>Answers you can't verify</h3>
-        <p>When an LLM generates answers from raw context, you can't tell what it looked at or whether it missed something. Grounding answers in queryable, inspectable facts makes them auditable.</p>
+        <p>When an LLM answers from raw context, you can't tell what it looked at. Grounding answers in queryable facts makes them auditable.</p>
       </div>
       <div class="card">
         <h3>Code structure without history</h3>
-        <p>Who changed this file, how often, and what else changed with it? Risk lives in the temporal dimension &mdash; churn, bus factor, co-change patterns &mdash; not just the current tree.</p>
+        <p>Who changed this file, how often, and what else changed with it? Churn, bus factor, and co-change patterns live in git history, not the current tree.</p>
       </div>
     </div>
   </div>
@@ -106,44 +106,44 @@
   <div class="container section-center">
     <h2 class="section-title">Three complementary layers</h2>
     <p class="section-sub">
-      Each layer adds a different kind of information to the graph. The first two require no LLM at all. Use them independently or together.
+      Each layer adds different information. The first two require no LLM. Use them independently or together.
     </p>
     <div class="layers-grid">
       <div class="card card-green">
         <div class="card-icon">&#9679;</div>
         <span class="tag tag-green">No LLM required</span>
         <h3>Deterministic Facts</h3>
-        <p>Git history, file structure, authorship, change frequency, and cross-file import graphs stored as immutable Datomic facts with stable entity identities. Fully reproducible.</p>
+        <p>Git history, file structure, authorship, change frequency, and cross-file import graphs. Immutable Datomic facts with stable entity identities. Fully reproducible.</p>
       </div>
       <div class="card card-purple">
         <div class="card-icon">&#9679;</div>
         <span class="tag tag-purple">LLM-powered</span>
         <h3>Semantic Annotations</h3>
-        <p>Complexity ratings, safety concerns, architectural roles, function signatures, deprecation markers. Processed concurrently with up to 20 parallel workers, with automatic retry and checkpointing.</p>
+        <p>Complexity ratings, safety concerns, architectural roles, function signatures, deprecation markers. Up to 20 parallel workers with automatic retry and checkpointing.</p>
       </div>
       <div class="card card-blue">
         <div class="card-icon">&#9679;</div>
         <span class="tag tag-blue">Iterative reasoning</span>
         <h3>Recursive LLM Querying</h3>
-        <p><code>ask</code> mode takes a natural-language question, formulates Datalog queries, reads results, reasons about gaps, and queries again &mdash; iterating until it has a grounded answer backed by data from the graph, not approximations from file contents.</p>
+        <p><code>ask</code> takes a natural-language question, formulates Datalog queries, reads results, and iterates until it has a grounded answer from the graph.</p>
       </div>
     </div>
     <div class="principles">
       <div class="principle">
         <span class="principle-label text-green">Immutable</span>
-        <p>Datomic stores facts, not state. Every transaction is an accretion &mdash; nothing is overwritten. The full history of the graph is retained.</p>
+        <p>Datomic stores facts, not state. Every transaction is an accretion &mdash; nothing is overwritten.</p>
       </div>
       <div class="principle">
         <span class="principle-label text-blue">Composable</span>
-        <p>Datalog queries compose naturally. Join across git history, code structure, and semantics in a single query. No imperative glue code.</p>
+        <p>Datalog queries compose naturally. Join across git history, code structure, and semantics in a single query.</p>
       </div>
       <div class="principle">
         <span class="principle-label text-purple">Measurable</span>
-        <p>Built-in A/B benchmarks. Tested across 9 repos and 8 languages: accuracy jumped from 18.2% (raw) to 37.9% (graph-augmented). Numbers, not claims.</p>
+        <p>Built-in A/B benchmarks. 9 repos, 8 languages: 18.2% (raw) to 37.9% (graph-augmented).</p>
       </div>
       <div class="principle">
         <span class="principle-label text-muted">Local</span>
-        <p>Runs on your machine. Your code stays yours. Only the LLM provider you choose sees file contents &mdash; and sensitive files are never sent.</p>
+        <p>Runs on your machine. Only the LLM provider you choose sees file contents &mdash; sensitive files are never sent.</p>
       </div>
     </div>
   </div>
@@ -156,7 +156,7 @@
   <div class="container section-center">
     <h2 class="section-title">How it works</h2>
     <p class="section-sub">
-      A pipeline of independent, idempotent steps. Each can run on its own. The graph stays in sync as your codebase evolves.
+      Independent, idempotent steps. Run individually or together. The graph stays in sync as your codebase evolves.
     </p>
     <div class="pipeline">
       <div class="pipeline-step">
@@ -184,7 +184,7 @@
       </div>
     </div>
     <p class="section-sub" style="margin: 1.5rem auto 0;">
-      <code>update</code> detects HEAD changes and processes only new commits. <code>watch</code> polls continuously. The MCP server auto-syncs before each query. No need to re-import from scratch.
+      <code>update</code> detects HEAD changes and processes only new commits. <code>watch</code> polls continuously. The MCP server auto-syncs before each query.
     </p>
   </div>
 </section>
@@ -196,7 +196,7 @@
   <div class="container section-center">
     <h2 class="section-title">Measured on real codebases</h2>
     <p class="section-sub">
-      Each repository was benchmarked with 40 questions answered under two conditions: <strong>Raw</strong> (LLM sees only source file listings) and <strong>Full</strong> (LLM sees knowledge graph context). Tested with Sonnet via GLM, March 2026.
+      40 questions per repo, two conditions: <strong>Raw</strong> (source file listings only) vs. <strong>Full</strong> (knowledge graph context). Sonnet via GLM, March 2026.
     </p>
     <table class="benchmark-table">
       <thead>
@@ -226,15 +226,15 @@
     <div class="benchmark-notes">
       <div class="card">
         <h3>Biggest gains on unfamiliar repos</h3>
-        <p>Flask, fzf, and Express saw improvements of +26&ndash;29pp &mdash; the knowledge graph fills in what the LLM lacks from training data.</p>
+        <p>Flask, fzf, and Express saw +26&ndash;29pp &mdash; the graph fills in what the LLM lacks from training data.</p>
       </div>
       <div class="card">
         <h3>Factual lookups improved most</h3>
-        <p>Single-hop accuracy (e.g. &ldquo;which files import X?&rdquo;) jumped from 29.5% to 65.9% on one test corpus &mdash; a +36pp improvement.</p>
+        <p>Single-hop accuracy (e.g. &ldquo;which files import X?&rdquo;) jumped from 29.5% to 65.9% on Ring &mdash; +36pp.</p>
       </div>
       <div class="card">
         <h3>8 languages, zero failures</h3>
-        <p>Clojure, Python, JavaScript, TypeScript, C, Go, Rust, and Java all completed the full pipeline with no analysis failures on standard-sized files.</p>
+        <p>Clojure, Python, JavaScript, TypeScript, C, Go, Rust, and Java all completed the full pipeline successfully.</p>
       </div>
     </div>
     <p class="section-sub" style="margin-top: 1.5rem;">
@@ -255,35 +255,35 @@
     <div class="features-grid">
       <div class="card">
         <h3>Concurrent &amp; built for scale</h3>
-        <p>Configurable parallelism (1&ndash;20 workers) with automatic retry on rate limits and transient errors. Incremental sync processes only new commits. Datomic's append-only storage and Clojure's persistent data structures keep memory predictable as the graph grows.</p>
+        <p>1&ndash;20 parallel workers with automatic retry. Incremental sync processes only new commits. Append-only storage keeps memory predictable as the graph grows.</p>
       </div>
       <div class="card">
         <h3>Git history as a first-class citizen</h3>
-        <p>Commits, authorship, change frequency, co-changed files, and fix-commit ratios are all queryable entities in the graph &mdash; the temporal dimension of your codebase, not just the current tree.</p>
+        <p>Commits, authorship, change frequency, co-changed files, and fix-commit ratios are all queryable &mdash; not just the current tree.</p>
       </div>
       <div class="card">
         <h3>MCP server</h3>
-        <p>Expose the knowledge graph as MCP tools so Claude Desktop, Claude Code, or any MCP-compatible agent can query, import, and analyze repositories directly.</p>
+        <p>Expose the graph as MCP tools for Claude Desktop, Claude Code, or any MCP-compatible agent.</p>
       </div>
       <div class="card">
         <h3>Multi-language import extraction</h3>
-        <p>Deterministic cross-file import graphs for Clojure, Python, JS/TS, Go, Rust, Java, Elixir, Erlang, and C/C++. LLM analysis works with any language Git can track.</p>
+        <p>Deterministic import graphs for Clojure, Python, JS/TS, Rust, Java, C#, C/C++, Elixir, and Erlang. LLM analysis works with any language.</p>
       </div>
       <div class="card">
         <h3>Cost transparency</h3>
-        <p>Per-file token estimates before you start, per-file telemetry as it runs, and aggregate totals when it finishes. Query your own LLM spend with <code>llm-cost-by-file</code> and <code>llm-cost-by-model</code>.</p>
+        <p>Token estimates before you start, per-file telemetry as it runs, aggregate totals when it finishes. Query LLM spend with <code>llm-cost-by-file</code> and <code>llm-cost-by-model</code>.</p>
       </div>
       <div class="card">
         <h3>Benchmark framework</h3>
-        <p>40-question A/B test suite comparing knowledge-graph-augmented answers against raw context on your own repo. Deterministic scoring by default, LLM-judged scoring opt-in.</p>
+        <p>40-question A/B test comparing graph-augmented vs. raw-context answers on your repo. Deterministic scoring by default, LLM-judged opt-in.</p>
       </div>
       <div class="card">
         <h3>Sensitive file protection</h3>
-        <p>Files matching known secret patterns (<code>.env</code>, <code>*.pem</code>, credentials) are recorded as entities but their contents are never read or sent to any provider.</p>
+        <p>Files matching known secret patterns (<code>.env</code>, <code>*.pem</code>, credentials) are tracked as entities but never read or sent to any provider.</p>
       </div>
       <div class="card">
         <h3>Open data model</h3>
-        <p>Datomic schema with stable entity identities. <code>show-schema</code> lists every attribute and type. Named queries are plain EDN files you can read, edit, and version control.</p>
+        <p>Stable entity identities. <code>show-schema</code> lists every attribute. Named queries are plain EDN files you can read, edit, and version control.</p>
       </div>
       <div class="card">
         <h3>Perforce support</h3>
@@ -302,7 +302,7 @@
       <div class="showcase-text">
         <h2 class="section-title">Named queries</h2>
         <p>
-          Pre-built Datalog queries in EDN format for common analysis tasks. Deterministic, reproducible, composable. Run from the CLI or through the MCP server.
+          50 pre-built Datalog queries in EDN. Deterministic, reproducible, composable. Run from the CLI or MCP server.
         </p>
         <ul>
           <li>Complexity and change hotspots</li>
@@ -313,7 +313,7 @@
           <li>LLM cost tracking by model and file</li>
         </ul>
         <p style="margin-top: 1rem;">
-          Or use <code>ask</code> mode to query the graph with natural language. The LLM formulates Datalog queries, reads the results, and iterates until it can answer from the data.
+          Or use <code>ask</code> to query the graph with natural language &mdash; the LLM formulates Datalog queries and iterates until it has a grounded answer.
         </p>
       </div>
       <div class="terminal">
@@ -355,7 +355,7 @@ src/auth/session.ts       28       complex</span></pre>
   <div class="container section-center">
     <h2 class="section-title">Get started</h2>
     <p class="section-sub">
-      Requires JDK 21+ and Clojure CLI. Runs on your machine. See the <a href="https://github.com/leifericf/noumenon#readme">README</a> for standalone JAR and dependency options.
+      Requires JDK 21+ and Clojure CLI. See the <a href="https://github.com/leifericf/noumenon#readme">README</a> for JAR and dependency options.
     </p>
     <div class="steps">
       <div class="step">
@@ -370,7 +370,7 @@ src/auth/session.ts       28       complex</span></pre>
         <div class="step-number">2</div>
         <div class="step-content">
           <h3>Import a repository</h3>
-          <p>Point it at any local Git repo or a remote URL. Import is deterministic and takes seconds for most repos.</p>
+          <p>Local path or remote URL. Import is deterministic and takes seconds for most repos.</p>
           <code>clj -M:run import /path/to/your/repo</code>
         </div>
       </div>
@@ -378,7 +378,7 @@ src/auth/session.ts       28       complex</span></pre>
         <div class="step-number">3</div>
         <div class="step-content">
           <h3>Query or ask</h3>
-          <p>Run a named query for instant results, or ask a question and let the LLM iterate over the graph.</p>
+          <p>Named queries for instant results, or natural-language questions with iterative LLM reasoning.</p>
           <code>clj -M:run ask -q "Which files have the most risk?" /path/to/your/repo</code>
         </div>
       </div>
@@ -394,6 +394,8 @@ src/auth/session.ts       28       complex</span></pre>
       <a href="https://github.com/leifericf/noumenon#readme">Documentation</a>
       <a href="https://github.com/leifericf/noumenon/blob/main/CHANGES.md">Changelog</a>
       <a href="https://github.com/leifericf/noumenon/blob/main/LICENSE">MIT License</a>
+      <a href="https://www.datomic.com">Datomic</a>
+      <a href="https://github.com/leifericf/claude-code-toolkit">Claude Code Toolkit</a>
     </div>
     <p>Leif Eric Fredheim</p>
   </div>
