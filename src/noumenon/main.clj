@@ -120,8 +120,9 @@
                                                          :concurrency  (or concurrency 3)
                                                          :min-delay-ms (or min-delay 0)}
                                                   max-files (assoc :max-files max-files)))]
-              (log! (str "Next: run '" cli/program-name " ask -q \"<question>\" " repo-path
-                         "' to query with semantic context."))
+              (log! (str "Next: run '" cli/program-name " query <query-name> " repo-path
+                         "' or '" cli/program-name " ask -q \"...\" " repo-path
+                         "' to explore the knowledge graph."))
               {:exit 0 :result result})))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
