@@ -110,6 +110,20 @@
       (is (= 10 (:additions c)))
       (is (= 5 (:deletions c))))))
 
+(deftest parse-malformed-record-skipped
+  (testing "records with too few fields are silently dropped"
+    (let [malformed "\u0001only\u0000two-fields"
+          commits   (git/parse-commits malformed)]
+      (is (= [] commits))))
+  (testing "malformed records mixed with valid ones are filtered out"
+    (let [valid     (make-record "aaa" "" "A" "a@x.com" iso-ts
+                                 "A" "a@x.com" iso-ts "good" ["f.txt"])
+          malformed "\u0001bad\u0000record"
+          log       (str valid malformed)
+          commits   (git/parse-commits log)]
+      (is (= 1 (count commits)))
+      (is (= "aaa" (:sha (first commits)))))))
+
 (deftest parse-commit-no-changed-files
   (let [log     (make-record "sha1" "" "A" "a@x.com" iso-ts "A" "a@x.com" iso-ts "init" nil)
         commits (git/parse-commits log)]

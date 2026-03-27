@@ -145,24 +145,25 @@
      :deletions     (transduce (map #(nth % 2)) + 0 parsed)}))
 
 (defn- parse-record [text]
-  (let [fields  (str/split text #"\x00" -1)
-        ;; Fields 0-7 are fixed headers, last field is numstat.
-        ;; The body (%B) sits between index 8 and second-to-last.
-        ;; If the body contains embedded \x00, extra fields appear
-        ;; between 8 and the end — we rejoin them to reconstruct it.
-        numstat (parse-numstat (peek fields))
-        body    (str/join "\u0000" (subvec fields 8 (dec (count fields))))]
-    (merge {:sha             (nth fields 0)
-            :parent-shas     (let [p (nth fields 1)]
-                               (if (str/blank? p) [] (str/split p #" ")))
-            :author-name     (nth fields 2)
-            :author-email    (nth fields 3)
-            :authored-at     (parse-iso-instant (nth fields 4))
-            :committer-name  (nth fields 5)
-            :committer-email (nth fields 6)
-            :committed-at    (parse-iso-instant (nth fields 7))
-            :message         (str/trim body)}
-           numstat)))
+  (let [fields (str/split text #"\x00" -1)]
+    (when (>= (count fields) 9)
+      ;; Fields 0-7 are fixed headers, last field is numstat.
+      ;; The body (%B) sits between index 8 and second-to-last.
+      ;; If the body contains embedded \x00, extra fields appear
+      ;; between 8 and the end — we rejoin them to reconstruct it.
+      (let [numstat (parse-numstat (peek fields))
+            body    (str/join "\u0000" (subvec fields 8 (dec (count fields))))]
+        (merge {:sha             (nth fields 0)
+                :parent-shas     (let [p (nth fields 1)]
+                                   (if (str/blank? p) [] (str/split p #" ")))
+                :author-name     (nth fields 2)
+                :author-email    (nth fields 3)
+                :authored-at     (parse-iso-instant (nth fields 4))
+                :committer-name  (nth fields 5)
+                :committer-email (nth fields 6)
+                :committed-at    (parse-iso-instant (nth fields 7))
+                :message         (str/trim body)}
+               numstat)))))
 
 ;; --- Commit classification ---
 
@@ -205,7 +206,7 @@
     []
     (->> (str/split log-text #"\x01")
          (remove str/blank?)
-         (mapv parse-record))))
+         (into [] (keep parse-record)))))
 
 (defn commit->tx-data
   "Convert a parsed commit map into a Datomic tx-data vector.
