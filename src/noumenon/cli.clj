@@ -332,7 +332,8 @@
                        :initial {:subcommand "serve"}
                        :positionals {:required 0 :error nil :keys []}}
                 :summary "Start MCP server (JSON-RPC over stdio)"
-                :usage "serve [options]"}})
+                :usage "serve [options]"
+                :epilog "Communicates via JSON-RPC over stdio (stdin/stdout).\nConfigure your MCP client to launch: noumenon serve [options]\nThe server auto-updates the knowledge graph on each query by default;\npass --no-auto-update to disable."}})
 
 (def ^:private command-order
   ["digest" "import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark"])
