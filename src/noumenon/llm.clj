@@ -263,9 +263,18 @@
   [provider {:keys [model temperature max-tokens]}]
   (let [kw (provider->kw provider)]
     (if-let [{:keys [env-var base-url]} (api-provider-config kw)]
-      (let [token (System/getenv env-var)]
+      (let [token (or (System/getenv env-var)
+                      (some-> (let [env-file (java.io.File. ".env")]
+                                (when (.exists env-file)
+                                  (->> (slurp env-file)
+                                       str/split-lines
+                                       (some #(when-let [[_ v] (re-matches
+                                                                  (re-pattern (str "(?:export\\s+)?" env-var "=(.+)"))
+                                                                  (str/trim %))]
+                                               v)))))
+                              str/trim))]
         (when-not token
-          (throw (ex-info (str env-var " environment variable is not set. Set " env-var " in your environment.")
+          (throw (ex-info (str env-var " environment variable is not set. Set " env-var " in your environment or in .env file.")
                           {:provider kw})))
         (fn [messages]
           (invoke-api messages {:model       model
