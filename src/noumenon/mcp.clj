@@ -417,7 +417,11 @@
               (when-let [rp (:report-path result)]
                 (str "\nReport: " rp))))))))
 
+(def ^:private max-run-id-len 256)
+
 (defn- handle-benchmark-results [args defaults]
+  (when-let [rid (args "run_id")]
+    (validate-string-length! "run_id" rid max-run-id-len))
   (with-conn args defaults
     (fn [{:keys [db]}]
       (let [run-id (args "run_id")
@@ -455,6 +459,8 @@
             (tool-result (str base detail))))))))
 
 (defn- handle-benchmark-compare [args defaults]
+  (validate-string-length! "run_id_a" (args "run_id_a") max-run-id-len)
+  (validate-string-length! "run_id_b" (args "run_id_b") max-run-id-len)
   (with-conn args defaults
     (fn [{:keys [db]}]
       (let [id-a (args "run_id_a")
