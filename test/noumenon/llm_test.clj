@@ -193,3 +193,16 @@
     (is (= "system:\nbe helpful\n\nUser:\nhi"
            (llm/flatten-messages [{:role "system" :content "be helpful"}
                                   {:role "user" :content "hi"}])))))
+
+(deftest flatten-messages-truncates-oversized-history
+  (testing "drops oldest middle messages when total exceeds max-prompt-chars"
+    (let [big-content (apply str (repeat 600000 "x"))
+          messages [{:role "user" :content "system prompt"}
+                    {:role "assistant" :content big-content}
+                    {:role "user" :content "middle"}
+                    {:role "assistant" :content "ok"}
+                    {:role "user" :content "latest"}]
+          result (llm/flatten-messages messages)]
+      (is (<= (count result) 1000000))
+      (is (clojure.string/includes? result "system prompt"))
+      (is (clojure.string/includes? result "latest")))))

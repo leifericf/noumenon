@@ -189,14 +189,31 @@
 
 ;; --- CLI message flattening ---
 
+(def ^:private max-prompt-chars
+  "Maximum characters for a flattened CLI prompt (1 MB).
+   Prevents exceeding OS argument-length limits (~2 MB on macOS/Linux)."
+  1000000)
+
 (defn flatten-messages
   "Flatten a messages vector into a single prompt string for CLI invocation.
-   Prefixes each message with its role, separated by blank lines."
+   Prefixes each message with its role, separated by blank lines.
+   Truncates oldest messages if the result would exceed max-prompt-chars."
   [messages]
-  (->> messages
-       (map (fn [{:keys [role content]}]
-              (str (case role "user" "User" "assistant" "Assistant" (str role)) ":\n" content)))
-       (str/join "\n\n")))
+  (let [format-msg (fn [{:keys [role content]}]
+                     (str (case role "user" "User" "assistant" "Assistant" (str role)) ":\n" content))
+        formatted  (mapv format-msg messages)
+        full       (str/join "\n\n" formatted)]
+    (if (<= (count full) max-prompt-chars)
+      full
+      ;; Drop oldest messages (keeping first + last few) until under limit
+      (loop [msgs (vec messages)]
+        (if (<= (count msgs) 2)
+          (truncate (str/join "\n\n" (mapv format-msg msgs)) max-prompt-chars)
+          (let [trimmed (into [(first msgs)] (subvec msgs 2))
+                result  (str/join "\n\n" (mapv format-msg trimmed))]
+            (if (<= (count result) max-prompt-chars)
+              result
+              (recur trimmed))))))))
 
 (defn invoke-cli
   "Invoke Claude via CLI. Flattens messages to a single prompt string."
