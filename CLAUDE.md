@@ -22,7 +22,7 @@ This project has its own MCP server (`noumenon`) that provides a knowledge graph
 | `noumenon_ask` | Ask a natural-language question — AI-powered iterative querying |
 | `noumenon_import` | Import git history and file structure (idempotent — safe to re-run) |
 | `noumenon_update` | Sync knowledge graph with latest git state (import + enrich; pass `analyze=true` for LLM analysis) |
-| `noumenon_analyze` | Run LLM analysis on files not yet analyzed — enriches the graph with semantic metadata |
+| `noumenon_analyze` | Run LLM analysis on files — by default only unanalyzed; pass `reanalyze` for re-analysis (all, prompt-changed, model-changed, stale) |
 | `noumenon_enrich` | Extract cross-file import/dependency graph deterministically (no LLM calls) |
 | `noumenon_list_databases` | List all noumenon databases with entity counts, pipeline stages, and cost |
 | `noumenon_digest` | Run the full pipeline: import, enrich, analyze, benchmark (each step idempotent, skippable) |

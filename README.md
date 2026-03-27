@@ -146,7 +146,7 @@ The CLI and [MCP](https://modelcontextprotocol.io) server expose the same capabi
 | Command | CLI | MCP tool | Description |
 |---|---|---|---|
 | Import | `import <path>` | `noumenon_import` | Import git history and file structure |
-| Analyze | `analyze <path>` | `noumenon_analyze` | Enrich files with LLM semantic metadata |
+| Analyze | `analyze <path>` | `noumenon_analyze` | Enrich files with LLM semantic metadata (`--reanalyze` for re-analysis) |
 | Enrich | `enrich <path>` | `noumenon_enrich` | Extract cross-file import graph (no LLM) |
 | Update | `update <path>` | `noumenon_update` | Sync knowledge graph with latest git state |
 | Digest | `digest <path>` | `noumenon_digest` | Run full pipeline: import, enrich, analyze, benchmark |

@@ -306,6 +306,64 @@
       (log! (str "Skipping " (count sensitive) " sensitive file(s) from analysis")))
     (sort-by :file/path safe)))
 
+(def ^:private valid-reanalyze-scopes
+  #{:all :prompt-changed :model-changed :stale})
+
+(defn files-for-reanalysis
+  "Return analyzed files matching `scope` for re-analysis.
+   `opts` may include :prompt-hash (for :prompt-changed) and :model-id (for :model-changed).
+   Returns [{:file/path ... :file/lang ...}], same shape as `files-needing-analysis`."
+  [db scope opts]
+  {:pre [(valid-reanalyze-scopes scope)]}
+  (let [raw (case scope
+              :all
+              (d/q '[:find ?path ?lang
+                     :where
+                     [?e :file/path ?path]
+                     [?e :file/lang ?lang]
+                     [?e :sem/summary _]]
+                   db)
+
+              :prompt-changed
+              (d/q '[:find ?path ?lang
+                     :in $ ?current-hash
+                     :where
+                     [?e :file/path ?path]
+                     [?e :file/lang ?lang]
+                     [?e :sem/summary _ ?tx]
+                     [?tx :prov/prompt-hash ?h]
+                     [(not= ?h ?current-hash)]]
+                   db (:prompt-hash opts))
+
+              :model-changed
+              (d/q '[:find ?path ?lang
+                     :in $ ?current-model
+                     :where
+                     [?e :file/path ?path]
+                     [?e :file/lang ?lang]
+                     [?e :sem/summary _ ?tx]
+                     [?tx :prov/model-version ?m]
+                     [(not= ?m ?current-model)]]
+                   db (:model-id opts))
+
+              :stale
+              (d/q '[:find ?path ?lang
+                     :where
+                     [?e :file/path ?path]
+                     [?e :file/lang ?lang]
+                     [?e :sem/summary _ ?tx]
+                     [?tx :prov/analyzed-at ?at]
+                     [?c :commit/changed-files ?e]
+                     [?c :commit/committed-at ?ct]
+                     [(> ?ct ?at)]]
+                   db))
+        candidates (mapv (fn [[path lang]] {:file/path path :file/lang lang}) raw)
+        {sensitive true safe false} (group-by #(files/sensitive-path? (:file/path %))
+                                              candidates)]
+    (when (seq sensitive)
+      (log! (str "Skipping " (count sensitive) " sensitive file(s) from re-analysis")))
+    (sort-by :file/path safe)))
+
 ;; --- Orchestration ---
 
 (defn repo-name

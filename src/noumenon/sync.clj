@@ -70,13 +70,16 @@
 
 ;; --- Retraction ---
 
-(def ^:private mutable-file-attrs
-  "Attributes to retract on modified/deleted files so the pipeline re-processes them."
-  [:file/size :file/lines :file/imports
-   :sem/summary :sem/purpose :sem/tags :sem/complexity
+(def ^:private analysis-file-attrs
+  "Analysis attributes to retract when re-analyzing (not import/enrich attrs)."
+  [:sem/summary :sem/purpose :sem/tags :sem/complexity
    :sem/patterns :sem/category :sem/dependencies
    :arch/layer :arch/subsystem
    :prov/confidence])
+
+(def ^:private mutable-file-attrs
+  "Attributes to retract on modified/deleted files so the pipeline re-processes them."
+  (into [:file/size :file/lines :file/imports] analysis-file-attrs))
 
 (defn- find-file-eid
   "Look up a file entity ID by path. Returns nil if not found."
@@ -88,11 +91,11 @@
   [v]
   (if (map? v) (:db/id v) v))
 
-(defn- retract-file-attrs
-  "Build retraction tx-data for mutable attributes on a file entity."
-  [db eid]
-  (let [entity (d/pull db mutable-file-attrs eid)]
-    (->> mutable-file-attrs
+(defn- retract-attrs
+  "Build retraction tx-data for the given attributes on a file entity."
+  [db eid attrs]
+  (let [entity (d/pull db attrs eid)]
+    (->> attrs
          (mapcat (fn [attr]
                    (let [v (get entity attr)]
                      (cond
@@ -116,7 +119,26 @@
           results (->> paths
                        (keep (fn [path]
                                (when-let [eid (find-file-eid db path)]
-                                 (let [tx (into (retract-file-attrs db eid)
+                                 (let [tx (into (retract-attrs db eid mutable-file-attrs)
+                                                (retract-code-segments db eid))]
+                                   (when (seq tx) tx)))))
+                       vec)
+          tx-data (into [] cat results)]
+      (when (seq tx-data)
+        (d/transact conn {:tx-data tx-data}))
+      (count results))))
+
+(defn retract-analysis!
+  "Retract analysis attributes and code segments for the given file paths.
+   Does not retract import/enrich attrs (:file/size, :file/lines, :file/imports).
+   Returns count of files actually retracted."
+  [conn paths]
+  (when (seq paths)
+    (let [db      (d/db conn)
+          results (->> paths
+                       (keep (fn [path]
+                               (when-let [eid (find-file-eid db path)]
+                                 (let [tx (into (retract-attrs db eid analysis-file-attrs)
                                                 (retract-code-segments db eid))]
                                    (when (seq tx) tx)))))
                        vec)

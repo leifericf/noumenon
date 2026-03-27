@@ -148,7 +148,7 @@
                                       "continue_from" {:type "string" :description "Session ID from a budget-exhausted run — resumes the agent from where it left off"}})
                   :required ["question" "repo_path"]}}
    {:name "noumenon_analyze"
-    :description "Run LLM analysis on repository files to enrich the knowledge graph with semantic metadata. Only analyzes files not yet analyzed. Requires a prior import."
+    :description "Run LLM analysis on repository files to enrich the knowledge graph with semantic metadata. By default only analyzes files not yet analyzed. Pass reanalyze to re-analyze files: all, prompt-changed, model-changed, or stale. Requires a prior import."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"provider" {:type "string"
@@ -158,7 +158,9 @@
                                       "concurrency" {:type "integer"
                                                      :description "Number of concurrent LLM calls (default: 3, max: 20)"}
                                       "max_files" {:type "integer"
-                                                   :description "Stop after analyzing N files (useful for sampling)"}})
+                                                   :description "Stop after analyzing N files (useful for sampling)"}
+                                      "reanalyze" {:type "string"
+                                                   :description "Re-analyze scope: all, prompt-changed, model-changed, stale (default: only unanalyzed files)"}})
                   :required ["repo_path"]}}
    {:name "noumenon_enrich"
     :description "Extract cross-file import graph deterministically. No LLM calls — uses language-specific parsers. Requires a prior import."
@@ -358,29 +360,53 @@
           (tool-result (or answer
                            (str "No answer found (status: " (name (:status result)) ")"))))))))
 
+(def ^:private valid-reanalyze-scopes
+  #{"all" "prompt-changed" "model-changed" "stale"})
+
+(defn- prepare-reanalysis!
+  "Retract analysis attrs for files matching the reanalyze scope.
+   Returns count of files marked for re-analysis, or nil if no scope given."
+  [conn db reanalyze {:keys [prompt-hash model-id]}]
+  (when reanalyze
+    (let [scope (keyword reanalyze)
+          files (analyze/files-for-reanalysis db scope {:prompt-hash prompt-hash
+                                                        :model-id    model-id})
+          paths (mapv :file/path files)
+          n     (if (seq paths) (sync/retract-analysis! conn paths) 0)]
+      (log! (str "Marked " n " file(s) for re-analysis (scope: " reanalyze ")"))
+      n)))
+
 (defn- handle-analyze [args defaults]
   (validate-llm-inputs! args)
-  (with-conn args defaults
-    (fn [{:keys [conn repo-path]}]
-      (let [{:keys [prompt-fn model-id]}
-            (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                              :model    (or (args "model") (:model defaults))})
-            concurrency (min (or (args "concurrency") 3) 20)
-            max-files   (args "max_files")
-            result      (analyze/analyze-repo! conn repo-path prompt-fn
-                                               (cond-> {:model-id    model-id
-                                                        :concurrency concurrency}
-                                                 max-files (assoc :max-files max-files)))]
-        (tool-result (str "Analysis complete. "
-                          (:files-analyzed result 0) " files analyzed"
-                          (when (pos? (:files-parse-errored result 0))
-                            (str ", " (:files-parse-errored result 0) " parse errors"))
-                          (when (pos? (:files-errored result 0))
-                            (str ", " (:files-errored result 0) " errors"))
-                          ". " (get-in result [:total-usage :input-tokens] 0)
-                          " in / " (get-in result [:total-usage :output-tokens] 0) " out tokens"
-                          (when-let [c (get-in result [:total-usage :cost-usd])]
-                            (when (pos? c) (str " ($" (format "%.2f" c) ")")))))))))
+  (let [reanalyze (args "reanalyze")]
+    (when (and reanalyze (not (valid-reanalyze-scopes reanalyze)))
+      (throw (ex-info (str "Invalid reanalyze scope: " reanalyze
+                           ". Must be one of: all, prompt-changed, model-changed, stale")
+                      {:scope reanalyze})))
+    (with-conn args defaults
+      (fn [{:keys [conn repo-path]}]
+        (let [{:keys [prompt-fn model-id]}
+              (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
+                                                :model    (or (args "model") (:model defaults))})
+              prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template)))]
+          (prepare-reanalysis! conn (d/db conn) reanalyze
+                               {:prompt-hash prompt-hash :model-id model-id})
+          (let [concurrency (min (or (args "concurrency") 3) 20)
+                max-files   (args "max_files")
+                result      (analyze/analyze-repo! conn repo-path prompt-fn
+                                                   (cond-> {:model-id    model-id
+                                                            :concurrency concurrency}
+                                                     max-files (assoc :max-files max-files)))]
+            (tool-result (str "Analysis complete. "
+                              (:files-analyzed result 0) " files analyzed"
+                              (when (pos? (:files-parse-errored result 0))
+                                (str ", " (:files-parse-errored result 0) " parse errors"))
+                              (when (pos? (:files-errored result 0))
+                                (str ", " (:files-errored result 0) " errors"))
+                              ". " (get-in result [:total-usage :input-tokens] 0)
+                              " in / " (get-in result [:total-usage :output-tokens] 0) " out tokens"
+                              (when-let [c (get-in result [:total-usage :cost-usd])]
+                                (when (pos? c) (str " ($" (format "%.2f" c) ")")))))))))))
 
 (defn- handle-enrich [args defaults]
   (with-conn args defaults

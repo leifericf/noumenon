@@ -103,9 +103,29 @@
                         {:db-path    (db-path ctx)
                          :next-step  (str cli/program-name " enrich " repo-path)})}))))
 
+(def ^:private valid-reanalyze-scopes
+  #{"all" "prompt-changed" "model-changed" "stale"})
+
+(defn- prepare-reanalysis!
+  "Retract analysis attrs for files matching the reanalyze scope.
+   Returns count of files marked for re-analysis, or nil if no scope given."
+  [conn db reanalyze {:keys [prompt-hash model-id]}]
+  (when reanalyze
+    (let [scope (keyword reanalyze)
+          files (analyze/files-for-reanalysis db scope {:prompt-hash prompt-hash
+                                                        :model-id    model-id})
+          paths (mapv :file/path files)
+          n     (if (seq paths) (sync/retract-analysis! conn paths) 0)]
+      (log! (str "Marked " n " file(s) for re-analysis (scope: " reanalyze ")"))
+      n)))
+
 (defn do-analyze
   "Run the analyze subcommand. Returns {:exit n :result map-or-nil}."
-  [{:keys [repo-path model provider concurrency min-delay max-files] :as opts}]
+  [{:keys [repo-path model provider concurrency min-delay max-files reanalyze] :as opts}]
+  (when (and reanalyze (not (valid-reanalyze-scopes reanalyze)))
+    (print-error! (str "Invalid --reanalyze scope: " reanalyze
+                       ". Must be one of: all, prompt-changed, model-changed, stale"))
+    (System/exit 1))
   (with-valid-repo
     opts
     (fn [ctx]
@@ -115,15 +135,18 @@
           (fn [{:keys [conn]}]
             (let [{:keys [prompt-fn model-id]}
                   (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})
-                  result (analyze/analyze-repo! conn repo-path prompt-fn
-                                                (cond-> {:model-id     model-id
-                                                         :concurrency  (or concurrency 3)
-                                                         :min-delay-ms (or min-delay 0)}
-                                                  max-files (assoc :max-files max-files)))]
-              (log! (str "Next: run '" cli/program-name " query <query-name> " repo-path
-                         "' or '" cli/program-name " ask -q \"...\" " repo-path
-                         "' to explore the knowledge graph."))
-              {:exit 0 :result result})))
+                  prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template)))]
+              (prepare-reanalysis! conn (d/db conn) reanalyze
+                                   {:prompt-hash prompt-hash :model-id model-id})
+              (let [result (analyze/analyze-repo! conn repo-path prompt-fn
+                                                  (cond-> {:model-id     model-id
+                                                           :concurrency  (or concurrency 3)
+                                                           :min-delay-ms (or min-delay 0)}
+                                                    max-files (assoc :max-files max-files)))]
+                (log! (str "Next: run '" cli/program-name " query <query-name> " repo-path
+                           "' or '" cli/program-name " ask -q \"...\" " repo-path
+                           "' to explore the knowledge graph."))
+                {:exit 0 :result result}))))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
           (when-let [help (cli/format-subcommand-help "analyze")]

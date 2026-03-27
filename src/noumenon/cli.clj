@@ -111,9 +111,14 @@
   [specs valid-set]
   (mapv #(if (= "--provider" (:flag %)) (assoc % :valid valid-set) %) specs))
 
+(def ^:private reanalyze-flag
+  {:flag "--reanalyze" :key :reanalyze :parse :string
+   :desc "Re-analyze files: all, prompt-changed, model-changed, stale"
+   :error-missing :missing-reanalyze-value})
+
 (def ^:private analyze-flags
   (vec (concat [model-flag (assoc provider-flag :valid all-valid-providers)
-                max-files-flag db-dir-flag]
+                max-files-flag reanalyze-flag db-dir-flag]
                verbose-flags concurrency-flags)))
 
 ;; --- Declarative command specs ---
@@ -234,7 +239,7 @@
    "analyze"      {:spec analyze-command-spec
                    :summary "Enrich imported files with LLM-driven semantic analysis"
                    :usage "analyze [options] <repo-path>"
-                   :epilog "Sensitive files (.env, *.pem, credentials, SSH keys, etc.) are\nautomatically excluded — their contents are never sent to the LLM."}
+                   :epilog "Sensitive files (.env, *.pem, credentials, SSH keys, etc.) are\nautomatically excluded — their contents are never sent to the LLM.\n\nRe-analysis scopes (--reanalyze):\n  all              Re-analyze every file\n  prompt-changed   Files analyzed with a different prompt template\n  model-changed    Files analyzed with a different model\n  stale            Files modified by commits since their last analysis"}
    "enrich"       {:spec enrich-command-spec
                    :summary "Extract cross-file import graph deterministically"
                    :usage "enrich [options] <repo-path>"
