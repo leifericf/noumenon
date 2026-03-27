@@ -165,6 +165,8 @@
          done?    (.waitFor proc cli-timeout-ms TimeUnit/MILLISECONDS)
          _        (when-not done?
                     (.destroyForcibly proc)
+                    (future-cancel out-f)
+                    (future-cancel err-f)
                     (throw (ex-info "Claude CLI timed out" {:timeout-ms cli-timeout-ms})))
          exit     (.exitValue proc)
          out-str  @out-f
