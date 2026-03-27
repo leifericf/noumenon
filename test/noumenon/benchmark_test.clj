@@ -341,12 +341,20 @@
     (is (= "ra" (:raw-answer (first results))))
     (is (= :partial (:raw-score (first results))))))
 
-(deftest stages->results-incomplete-question-excluded
-  (let [qs     [{:id :q01 :category :single-hop :query-name "test"}]
-        stages {[:q01 :full :answer] {:status :ok :result "qa"}
-                [:q01 :full :judge]  {:status :ok :result {:score :correct :reasoning "good"}}}
-        results (vec (bench/stages->results qs stages))]
-    (is (= 0 (count results)))))
+(deftest stages->results-partial-layers-included
+  (testing "Question with only :full complete is included with :full-score only"
+    (let [qs     [{:id :q01 :category :single-hop :query-name "test"}]
+          stages {[:q01 :full :answer] {:status :ok :result "qa"}
+                  [:q01 :full :judge]  {:status :ok :result {:score :correct :reasoning "good"}}}
+          results (vec (bench/stages->results qs stages))]
+      (is (= 1 (count results)))
+      (is (= :correct (:full-score (first results))))
+      (is (nil? (:raw-score (first results))))))
+  (testing "Question with no complete layers is excluded"
+    (let [qs     [{:id :q01 :category :single-hop :query-name "test"}]
+          stages {[:q01 :full :answer] {:status :ok :result "qa"}}
+          results (vec (bench/stages->results qs stages))]
+      (is (= 0 (count results))))))
 
 (deftest stages->results-nil-judge-uses-wrong-when-judge-present
   (let [qs     [{:id :q01 :category :single-hop :query-name "test"}]

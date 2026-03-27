@@ -533,7 +533,8 @@
          mean       (fn [xs] (if (seq xs) (/ (reduce + xs) (count xs)) 0.0))
          layer-key  (fn [layer] (keyword (str (name layer) "-score")))
          layer-mean (fn [layer rs]
-                      (mean (mapv #(score-value (get % (layer-key layer))) rs)))
+                      (let [scored (filterv #(contains? % (layer-key layer)) rs)]
+                        (mean (mapv #(score-value (get % (layer-key layer))) scored))))
          by-cat     (group-by :category results)
          det-rs     (filterv #(= :deterministic (:scoring %)) results)
          llm-rs     (filterv #(not= :deterministic (:scoring %)) results)
@@ -548,9 +549,11 @@
              {:question-count      (count results)
               :canonical           canonical?
               :deterministic-count (count det-rs)
-              :deterministic-mean  (mean (mapv #(score-value (get % (layer-key primary-layer))) det-rs))
+              :deterministic-mean  (let [scored (filterv #(contains? % (layer-key primary-layer)) det-rs)]
+                                     (mean (mapv #(score-value (get % (layer-key primary-layer))) scored)))
               :llm-judged-count    (count llm-rs)
-              :llm-judged-mean     (mean (mapv #(score-value (get % (layer-key primary-layer))) llm-rs))
+              :llm-judged-mean     (let [scored (filterv #(contains? % (layer-key primary-layer)) llm-rs)]
+                                     (mean (mapv #(score-value (get % (layer-key primary-layer))) scored)))
               :per-category        (into {}
                                          (map (fn [[cat rs]]
                                                 [cat (reduce (fn [m layer]
@@ -952,16 +955,32 @@
                    :completed-at (java.util.Date.)})
               (throw e))))))))
 
+(defn- layer-stage-keys
+  "Return stage keys for a single [question, layer] pair under the given mode."
+  [question layer mode]
+  (let [qid            (:id question)
+        skip-judge?    (:skip-judge mode)
+        deterministic? (= :deterministic (:scoring question))]
+    (cond-> [[qid layer :answer]]
+      (or (not skip-judge?) deterministic?)
+      (conj [qid layer :judge]))))
+
 (defn stages->results
-  "Convert stages map to result seq. Only includes questions with all expected stages complete.
+  "Convert stages map to result seq. Includes questions with at least one layer
+   fully scored (answer + judge complete). Layers that haven't finished are omitted
+   from the result map rather than counted as wrong.
    Results include per-layer scores keyed as :<layer>-score, :<layer>-reasoning, :<layer>-answer."
   ([questions stages] (stages->results questions stages nil))
   ([questions stages mode]
    (let [layers (resolve-layers (or mode {}))]
      (for [q questions
-           :let [qid      (:id q)
-                 exp-keys (if mode (mode-stage-keys q mode) (stage-keys q layers))]
-           :when (every? #(contains? stages %) exp-keys)]
+           :let [qid             (:id q)
+                 complete-layers (filterv
+                                  (fn [layer]
+                                    (every? #(contains? stages %)
+                                            (layer-stage-keys q layer mode)))
+                                  layers)]
+           :when (seq complete-layers)]
        (reduce (fn [result layer]
                  (let [judge-key [qid layer :judge]
                        judge  (get-in stages [judge-key :result])
@@ -977,7 +996,7 @@
                 :category   (:category q)
                 :scoring    (:scoring q)
                 :query-name (:query-name q)}
-               layers)))))
+               complete-layers)))))
 
 ;; --- Rate limiting ---
 
