@@ -199,8 +199,8 @@
                   :properties (merge repo-path-prop
                                      {"provider" {:type "string" :description "LLM provider"}
                                       "model" {:type "string" :description "Model alias"}
-                                      "skip_import" {:type "boolean" :description "Skip import step"}
-                                      "skip_enrich" {:type "boolean" :description "Skip enrich step"}
+                                      "skip_import" {:type "boolean" :description "Skip import+enrich step (same as skip_enrich)"}
+                                      "skip_enrich" {:type "boolean" :description "Skip import+enrich step (same as skip_import)"}
                                       "skip_analyze" {:type "boolean" :description "Skip analyze step"}
                                       "skip_benchmark" {:type "boolean" :description "Skip benchmark step"}
                                       "max_questions" {:type "integer" :description "Benchmark: limit to N questions"}
@@ -488,7 +488,7 @@
             repo-uri    (.getCanonicalPath (java.io.File. (str repo-path)))
             results     (atom {})]
         ;; Import + Enrich
-        (when-not (and (args "skip_import") (args "skip_enrich"))
+        (when-not (or (args "skip_import") (args "skip_enrich"))
           (let [r (sync/update-repo! conn repo-path repo-uri {:concurrency 8})]
             (swap! results assoc :update r)))
         ;; Analyze

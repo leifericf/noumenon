@@ -495,7 +495,7 @@
               repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
               results  (atom {})]
           ;; Step 1: Import + Enrich (via update-repo!)
-          (when-not (and skip-import skip-enrich)
+          (when-not (or skip-import skip-enrich)
             (log! "digest: import + enrich...")
             (let [r (sync/update-repo! conn repo-path repo-uri
                                        {:concurrency (or concurrency 8)})]
