@@ -266,7 +266,8 @@
                 header     (when-let [cols (:columns query-def)]
                              (str "Columns: " (str/join ", " cols) "\n"))
                 summary    (str "Query '" query-name "': " (count rows) " results\n")]
-            (tool-result (str summary header (pr-str rows))))
+            (tool-result (str summary header
+                              (str/join "\n" (map pr-str rows)))))
           (tool-error (:error result)))))))
 
 (defn- handle-list-queries [_args _defaults]
@@ -306,10 +307,10 @@
                                                    (or (:model defaults) llm/default-model-alias))}))))
           result   (sync/update-repo! conn repo-path repo-uri opts)]
       (tool-result
-       (let [changes (str (when-let [a (:added result)] (str " " a " files added."))
-                          (when-let [m (:modified result)] (str " " m " modified."))
-                          (when-let [d (:deleted result)] (str " " d " deleted."))
-                          (when-let [c (:commits result)] (str " " c " new commits.")))]
+       (let [changes (str (when (pos? (:added result 0)) (str " " (:added result) " files added."))
+                          (when (pos? (:modified result 0)) (str " " (:modified result) " modified."))
+                          (when (pos? (:deleted result 0)) (str " " (:deleted result) " deleted."))
+                          (when (pos? (:commits result 0)) (str " " (:commits result) " new commits.")))]
          (if (seq changes)
            (str "Update complete." changes)
            "Already up to date."))))))
