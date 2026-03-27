@@ -106,6 +106,39 @@
                                 :max-tokens 128 :base-url "https://x"
                                 :auth-token "t"}))))))))
 
+;; --- .env parsing ---
+
+(deftest parse-env-value-strips-quotes-and-comments
+  (let [parse @#'llm/parse-env-value]
+    (testing "strips surrounding double quotes"
+      (is (= "my-token" (parse "\"my-token\""))))
+    (testing "strips surrounding single quotes"
+      (is (= "my-token" (parse "'my-token'"))))
+    (testing "strips trailing inline comment"
+      (is (= "my-token" (parse "my-token # this is a comment"))))
+    (testing "strips quotes and trailing comment together"
+      (is (= "my-token" (parse "\"my-token\" # comment"))))
+    (testing "plain value passes through"
+      (is (= "sk-abc123" (parse "sk-abc123"))))))
+
+(deftest read-env-from-file-works
+  (let [read-fn @#'llm/read-env-from-file
+        tmp     (java.io.File/createTempFile "env-test" ".env")]
+    (try
+      (spit tmp "FOO=bar\nexport BAZ=\"quoted-val\" # comment\n")
+      (is (= "bar" (read-fn tmp "FOO")))
+      (is (= "quoted-val" (read-fn tmp "BAZ")))
+      (is (nil? (read-fn tmp "MISSING")))
+      (finally (.delete tmp)))))
+
+(deftest read-env-var-does-not-read-cwd-env
+  (testing ".env in cwd is not read (security: untrusted repo directories)"
+    (let [cwd-env (java.io.File. ".env-test-sec002")]
+      (try
+        (spit cwd-env "SEC002_TEST_VAR=should-not-be-read\n")
+        (is (nil? (#'llm/read-env-var "SEC002_TEST_VAR")))
+        (finally (.delete cwd-env))))))
+
 ;; --- Provider resolution ---
 
 (deftest provider->kw-known-providers
@@ -156,15 +189,17 @@
 ;; --- Provider factory ---
 
 (defn- token-available?
-  "Check if a token is available via env var OR .env file fallback,
+  "Check if a token is available via env var OR trusted .env file fallback,
    matching the logic in llm/make-messages-fn."
   [env-var]
   (or (System/getenv env-var)
-      (let [env-file (java.io.File. ".env")]
-        (when (.exists env-file)
-          (some #(re-matches (re-pattern (str "(?:export\\s+)?" env-var "=(.+)"))
-                             (clojure.string/trim %))
-                (clojure.string/split-lines (slurp env-file)))))))
+      (some (fn [^java.io.File f]
+              (when (.exists f)
+                (some #(re-matches (re-pattern (str "(?:export\\s+)?" env-var "=(.+)"))
+                                   (clojure.string/trim %))
+                      (clojure.string/split-lines (slurp f)))))
+            [(java.io.File. (System/getProperty "user.home") ".env")
+             (java.io.File. (System/getProperty "user.dir") ".env")])))
 
 (deftest make-messages-fn-glm-requires-token
   (testing "GLM provider throws when NOUMENON_ZAI_TOKEN is not set"

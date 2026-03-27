@@ -250,20 +250,38 @@
    :claude-api {:env-var  "ANTHROPIC_API_KEY"
                 :base-url "https://api.anthropic.com"}})
 
+(defn- parse-env-value
+  "Strip surrounding quotes and trailing inline comments from a .env value."
+  [v]
+  (-> v
+      str/trim
+      (str/replace #"\s+#.*$" "")
+      (str/replace #"^[\"']|[\"']$" "")))
+
+(defn- read-env-from-file
+  "Read a single env var from a .env file. Returns trimmed value or nil."
+  [^java.io.File env-file env-var]
+  (when (.exists env-file)
+    (some #(when-let [[_ v] (re-matches
+                             (re-pattern (str "(?:export\\s+)?" env-var "=(.+)"))
+                             (str/trim %))]
+             (parse-env-value v))
+          (str/split-lines (slurp env-file)))))
+
+(def ^:private trusted-env-paths
+  "Trusted directories for .env files: user home and project root (where deps.edn lives).
+   Never reads .env from cwd, which could be an untrusted repo directory."
+  [(java.io.File. (System/getProperty "user.home") ".env")
+   (java.io.File. (str (System/getProperty "noumenon.project.dir"
+                                           (System/getProperty "user.dir")))
+                  ".env")])
+
 (defn- read-env-var
-  "Read an environment variable, falling back to .env file in cwd.
-   Returns the trimmed value, or nil if not found."
+  "Read an environment variable, falling back to .env in trusted locations only.
+   Checks ~/.env and the project root .env. Returns the trimmed value, or nil."
   [env-var]
   (or (System/getenv env-var)
-      (some-> (let [env-file (java.io.File. ".env")]
-                (when (.exists env-file)
-                  (->> (slurp env-file)
-                       str/split-lines
-                       (some #(when-let [[_ v] (re-matches
-                                                 (re-pattern (str "(?:export\\s+)?" env-var "=(.+)"))
-                                                 (str/trim %))]
-                                v)))))
-              str/trim)))
+      (some #(read-env-from-file % env-var) trusted-env-paths)))
 
 (defn make-messages-fn
   "Create an invoke function for the given provider.
@@ -278,7 +296,7 @@
     (if-let [{:keys [env-var base-url]} (api-provider-config kw)]
       (let [token (read-env-var env-var)]
         (when-not token
-          (throw (ex-info (str env-var " environment variable is not set. Set " env-var " in your environment or in .env file.")
+          (throw (ex-info (str env-var " environment variable is not set. Set " env-var " in your environment or in ~/.env.")
                           {:provider kw})))
         (fn [messages]
           (invoke-api messages {:model       model
@@ -309,9 +327,9 @@
   [{:keys [temperature max-tokens] :as opts}]
   (let [{:keys [provider-kw model-id]} (resolve-opts opts)]
     {:invoke-fn  (make-messages-fn provider-kw
-                                 (cond-> {:model model-id}
-                                   temperature (assoc :temperature temperature)
-                                   max-tokens  (assoc :max-tokens max-tokens)))
+                                   (cond-> {:model model-id}
+                                     temperature (assoc :temperature temperature)
+                                     max-tokens  (assoc :max-tokens max-tokens)))
      :model-id   model-id
      :provider-kw provider-kw}))
 
