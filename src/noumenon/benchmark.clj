@@ -794,7 +794,7 @@
                                   {:path path :expected stored-hash :actual actual})))
                 (edn/read-string edn-str))
               ;; Legacy checkpoint without checksum — read as-is
-              (do (log! "Warning: checkpoint has no integrity checksum — may be tampered")
+              (do (log! "WARNING: checkpoint has no integrity checksum — may be tampered")
                   (edn/read-string raw)))]
     (validate-run-id (:run-id cp))
     (validate-checkpoint-stages cp)))
