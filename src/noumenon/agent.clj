@@ -144,8 +144,10 @@
               rules  (query/load-rules)
               f      (future (try
                                (d/q q db rules)
-                               (catch Exception _
-                                 (d/q q db))))
+                               (catch Exception e
+                                 (if (str/includes? (str (.getMessage e)) "arity")
+                                   (d/q q db)
+                                   (throw e)))))
               result (deref f query-timeout-ms ::timeout)]
           (if (= result ::timeout)
             (do (future-cancel f)
