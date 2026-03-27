@@ -13,7 +13,7 @@ jobs:
         with: { distribution: temurin, java-version: 21 }
       - uses: DeLaGuardo/setup-clojure@13.0
         with: { cli: latest }
-      - run: clj -T:build uber
+      - run: clojure -T:build uber
       - uses: softprops/action-gh-release@v2
         with:
           files: target/noumenon-*.jar
