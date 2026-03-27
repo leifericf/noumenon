@@ -181,8 +181,12 @@
                      (count (:deleted changes)) " deleted")))
         (let [git-r     (git/import-commits! conn repo-path repo-uri)
               files-r   (files/import-files! conn repo-path repo-uri)
-              post-r    (imports/enrich-repo! conn repo-path
-                                              {:concurrency (or (:concurrency opts) 8)})
+              post-r    (when (or fresh?
+                                  (seq (:added changes))
+                                  (seq (:modified changes))
+                                  (seq (:deleted changes)))
+                          (imports/enrich-repo! conn repo-path
+                                                {:concurrency (or (:concurrency opts) 8)}))
               analyze-r (when-let [invoke-llm (:invoke-llm opts)]
                           (analyze/analyze-repo!
                            conn repo-path invoke-llm
