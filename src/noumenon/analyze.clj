@@ -346,7 +346,7 @@
             result   (try-invoke)
             result   (if (:analysis result)
                        result
-                       (do (log! "  Retrying (unparseable response)...")
+                       (do (log! (str "  Retrying " path " (unparseable response)..."))
                            (let [r2 (try-invoke)]
                              (update r2 :usage #(llm/sum-usage (:usage result) %)))))]
         (reset! usage-atom (:usage result))
@@ -358,7 +358,7 @@
                                             :usage           (:usage result)})]
             (d/transact conn {:tx-data tx-data})
             {:status :ok :usage (:usage result) :truncated? truncated?})
-          (do (log! (str "  Warning: unparseable response for " path ", skipping"))
+          (do (log! (str "  WARNING: unparseable response for " path ", skipping"))
               {:status :parse-error :usage (:usage result) :truncated? truncated?})))
       (catch Exception e
         (log! (str "  Error analyzing " path ": " (.getMessage e)))
@@ -400,7 +400,7 @@
                  (str " tokens=" (:input-tokens usage)
                       "/" (:output-tokens usage)))))
     (when truncated?
-      (log! (str "  Warning: truncated " path)))))
+      (log! (str "  WARNING: truncated " path)))))
 
 (def ^:private avg-input-tokens-per-file 1250)
 (def ^:private avg-output-tokens-per-file 217)

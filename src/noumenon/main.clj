@@ -118,13 +118,15 @@
                   model-id    (llm/model-alias->id
                                (or model llm/default-model-alias))
                   invoke-llm  (llm/make-prompt-fn
-                               (llm/make-invoke-fn provider-kw {:model model-id}))]
-              {:exit   0
-               :result (analyze/analyze-repo! conn repo-path invoke-llm
-                                              (cond-> {:model-id     model-id
-                                                       :concurrency  (or concurrency 3)
-                                                       :min-delay-ms (or min-delay 0)}
-                                                max-files (assoc :max-files max-files)))})))
+                               (llm/make-invoke-fn provider-kw {:model model-id}))
+                  result      (analyze/analyze-repo! conn repo-path invoke-llm
+                                                     (cond-> {:model-id     model-id
+                                                              :concurrency  (or concurrency 3)
+                                                              :min-delay-ms (or min-delay 0)}
+                                                       max-files (assoc :max-files max-files)))]
+              (log! (str "Next: run '" cli/program-name " ask -q \"<question>\" " repo-path
+                         "' to query with semantic context."))
+              {:exit 0 :result result})))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
           (when-let [help (cli/format-subcommand-help "analyze")]
