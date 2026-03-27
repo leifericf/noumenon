@@ -473,7 +473,7 @@ end")
     (if (<= concurrency 1)
       (mapv f files)
       (let [in-ch  (async/to-chan! (vec files))
-            out-ch (async/chan total)]
+            out-ch (async/chan (max 1 total))]
         (async/pipeline-blocking
          concurrency out-ch
          (map #(or (f %) no-imports))
