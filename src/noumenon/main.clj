@@ -146,25 +146,28 @@
                        " query file-imports " repo-path "' to explore."))
             {:exit 0 :result result}))))))
 
+(defn- build-sync-opts
+  [{:keys [analyze model provider concurrency]}]
+  (if analyze
+    (let [{:keys [prompt-fn model-id]}
+          (llm/make-prompt-fn-from-opts {:provider provider :model model})]
+      {:concurrency         (or concurrency 8)
+       :analyze-concurrency (or concurrency 3)
+       :analyze?            true
+       :model-id            model-id
+       :invoke-llm          prompt-fn})
+    {:concurrency         (or concurrency 8)
+     :analyze-concurrency (or concurrency 3)}))
+
 (defn do-update
   "Run the update subcommand. Returns {:exit n :result map-or-nil}."
-  [{:keys [analyze model provider concurrency] :as opts}]
+  [{:keys [analyze] :as opts}]
   (with-valid-repo
     (update opts :repo-path resolve-repo-path)
     (fn [{:keys [repo-path db-dir db-name]}]
       (let [conn      (db/connect-and-ensure-schema db-dir db-name)
             repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
-            sync-opts (if analyze
-                        (let [{:keys [prompt-fn model-id]}
-                              (llm/make-prompt-fn-from-opts {:provider provider :model model})]
-                          {:concurrency         (or concurrency 8)
-                           :analyze-concurrency (or concurrency 3)
-                           :analyze?            true
-                           :model-id            model-id
-                           :invoke-llm          prompt-fn})
-                        {:concurrency         (or concurrency 8)
-                         :analyze-concurrency (or concurrency 3)})
-            result (sync/update-repo! conn repo-path repo-uri sync-opts)]
+            result    (sync/update-repo! conn repo-path repo-uri (build-sync-opts opts))]
         (when-not analyze
           (log! (str "Next: run '" cli/program-name " analyze " repo-path
                      "' to enrich with semantic metadata.")))
@@ -172,23 +175,14 @@
 
 (defn do-watch
   "Run the watch subcommand. Polls git HEAD and syncs on changes."
-  [{:keys [interval analyze model provider concurrency] :as opts}]
+  [{:keys [interval] :as opts}]
   (with-valid-repo
     opts
     (fn [{:keys [repo-path db-dir db-name]}]
       (let [conn       (db/connect-and-ensure-schema db-dir db-name)
             repo-uri   (.getCanonicalPath (java.io.File. (str repo-path)))
             interval-s (or interval 30)
-            sync-opts  (if analyze
-                         (let [{:keys [prompt-fn model-id]}
-                               (llm/make-prompt-fn-from-opts {:provider provider :model model})]
-                           {:concurrency         (or concurrency 8)
-                            :analyze-concurrency (or concurrency 3)
-                            :analyze?            true
-                            :model-id            model-id
-                            :invoke-llm          prompt-fn})
-                         {:concurrency         (or concurrency 8)
-                          :analyze-concurrency (or concurrency 3)})]
+            sync-opts  (build-sync-opts opts)]
         (log! (str "Watching " repo-path " (polling every " interval-s "s)"))
         (loop [failures 0]
           (let [failed? (try
