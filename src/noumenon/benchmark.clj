@@ -1141,7 +1141,10 @@
             eval-result    (canary-evaluate canary-results)]
         (log! (str "bench/canary-" (name (:status eval-result))
                    " run-id=" run-id
-                   " details=" (pr-str (:details eval-result))))))
+                   " details=" (pr-str (:details eval-result))))
+        (when (= :warn (:status eval-result))
+          (log! "WARNING: All canary questions scored :wrong. Results may be unreliable — check model/provider configuration."))))
+
     (when-not @stop-flag
       (run-pairs! rest-pairs shared concurrency))))
 

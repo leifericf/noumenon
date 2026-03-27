@@ -168,6 +168,9 @@
                                              {:model (llm/model-alias->id
                                                       (or model llm/default-model-alias))}))))
             result (sync/update-repo! conn repo-path repo-uri sync-opts)]
+        (when-not analyze
+          (log! (str "Next: run '" cli/program-name " analyze " repo-path
+                     "' to enrich with semantic metadata.")))
         {:exit 0 :result result}))))
 
 (defn do-watch
