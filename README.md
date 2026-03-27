@@ -501,26 +501,39 @@ These are planning estimates, not guarantees. Actual usage depends on file sizes
 
 ### Analysis estimate examples
 
-`analyze` uses a built-in planning heuristic of roughly `~1250` input + `~217` output tokens per file.
+`analyze` uses language-specific token profiles based on empirical data from 2,396 files across 9 repos and 8 languages. The averages are roughly `~4,567` input + `~743` output tokens per file, but vary by language:
+
+| Language | Input tokens/file | Output tokens/file | Time/file |
+|---|---:|---:|---:|
+| TypeScript | ~3,400 | ~476 | ~1.7s |
+| JavaScript | ~3,600 | ~648 | ~2.0s |
+| Python | ~3,900 | ~718 | ~2.3s |
+| Clojure | ~4,000 | ~778 | ~2.4s |
+| Java | ~4,600 | ~743 | ~3.0s |
+| C | ~4,900 | ~801 | ~3.3s |
+| Go | ~5,500 | ~840 | ~3.5s |
+| Rust | ~6,000 | ~932 | ~5.2s |
+
+Example cost projections (using overall averages):
 
 | Example repo size | Approx source files | Estimated input tokens | Estimated output tokens | Sonnet API rough cost* |
 |---|---:|---:|---:|---:|
-| Small library (Ring-scale) | 30 | 37,500 | 6,510 | ~$0.21 |
-| Medium repo | 500 | 625,000 | 108,500 | ~$3.50 |
-| Large service/monorepo slice | 3,000 | 3,750,000 | 651,000 | ~$21.02 |
-| Very large repo | 10,000 | 12,500,000 | 2,170,000 | ~$70.05 |
+| Small library (Ring-scale) | 90 | 411,000 | 66,900 | ~$2.24 |
+| Medium repo | 500 | 2,284,000 | 371,500 | ~$12.42 |
+| Large repo (Redis-scale) | 1,350 | 6,165,000 | 1,003,000 | ~$33.54 |
+| Very large repo (Guava-scale) | 3,300 | 15,071,000 | 2,452,000 | ~$81.99 |
 
 ### Benchmark estimate examples
 
 Project benchmark has `40` questions (`22` deterministic, `18` LLM-judged). Default runs deterministic only.
 
-`benchmark` uses a planning heuristic of roughly `~5000` input + `~800` output tokens per LLM call. Deterministic judge stages are free (no LLM call), so effective LLM calls are lower than total stages.
+`benchmark` uses a planning heuristic of roughly `~2,400` input + `~230` output tokens per LLM call, based on 1,280 stages across 9 repos. Deterministic judge stages are free (no LLM call), so effective LLM calls are lower than total stages.
 
 | Benchmark mode | LLM calls | Estimated input tokens | Estimated output tokens | Sonnet API rough cost* |
 |---|---:|---:|---:|---:|
-| Default (deterministic, both conditions) | 44 (22 × 2 answer stages) | 220,000 | 35,200 | ~$1.19 |
-| Full (`--full`, all 40 questions) | 124 (80 answer + 44 LLM judge) | 620,000 | 99,200 | ~$3.35 |
-| Fast (`--fast`, deterministic + query-only) | 22 (22 × 1 answer stage) | 110,000 | 17,600 | ~$0.60 |
+| Default (deterministic, both conditions) | 44 (22 × 2 answer stages) | 105,600 | 10,120 | ~$0.47 |
+| Full (`--full`, all 40 questions) | 124 (80 answer + 44 LLM judge) | 297,600 | 28,520 | ~$1.32 |
+| Fast (`--fast`, deterministic + query-only) | 22 (22 × 1 answer stage) | 52,800 | 5,060 | ~$0.24 |
 
 \* Cost examples use Anthropic Sonnet pricing assumptions (`$3/M` input tokens, `$15/M` output tokens). Providers without public per-token pricing metadata (for example `glm`) still report token usage, but USD estimates may be `0.0`.
 

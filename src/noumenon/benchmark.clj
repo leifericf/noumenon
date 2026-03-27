@@ -969,8 +969,8 @@
 
 (def ^:private avg-tokens-per-stage
   "Average tokens per benchmark stage (answer or judge call).
-   Based on empirical data from compojure benchmark runs."
-  {:input 5000 :output 800})
+   Based on empirical data from 1,280 stages across 9 repos (2026-03-27)."
+  {:input 2400 :output 230})
 
 (defn- log-cost-estimate!
   "Log estimated cost for a benchmark run. Warns that benchmarks are expensive."

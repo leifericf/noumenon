@@ -402,9 +402,32 @@
     (when truncated?
       (log! (str "  WARNING: truncated " path)))))
 
-(def ^:private avg-input-tokens-per-file 1250)
-(def ^:private avg-output-tokens-per-file 217)
-(def ^:private avg-ms-per-file 18000)
+;; Per-language averages from 2,396 files across 9 repos (2026-03-27).
+;; Fallback used for languages not yet profiled.
+(def ^:private lang-token-profile
+  {:clojure    {:input 3980 :output 778 :ms 2438}
+   :python     {:input 3857 :output 718 :ms 2258}
+   :javascript {:input 3572 :output 648 :ms 2047}
+   :typescript {:input 3441 :output 476 :ms 1724}
+   :c          {:input 4927 :output 801 :ms 3297}
+   :go         {:input 5469 :output 840 :ms 3535}
+   :rust       {:input 6038 :output 932 :ms 5193}
+   :java       {:input 4567 :output 743 :ms 2966}})
+
+(def ^:private default-token-profile
+  {:input 4567 :output 743 :ms 2966})
+
+(defn- estimate-for-files
+  "Compute per-file estimates using language-specific profiles."
+  [files]
+  (reduce (fn [acc {:file/keys [lang]}]
+            (let [profile (get lang-token-profile lang default-token-profile)]
+              (-> acc
+                  (update :input + (:input profile))
+                  (update :output + (:output profile))
+                  (update :ms + (:ms profile)))))
+          {:input 0 :output 0 :ms 0}
+          files))
 
 (defn- format-tokens
   "Format token count with k/M suffix for readability."
@@ -419,14 +442,13 @@
 
 (defn- estimate-banner
   "Print pre-run estimate of tokens, cost, and time."
-  [total model-id]
-  (let [est-in   (* total avg-input-tokens-per-file)
-        est-out  (* total avg-output-tokens-per-file)
-        est-cost (llm/estimate-cost model-id est-in est-out)
-        est-time (format-eta (* total avg-ms-per-file))
+  [files model-id]
+  (let [{:keys [input output ms]} (estimate-for-files files)
+        est-cost (llm/estimate-cost model-id input output)
+        est-time (format-eta ms)
         cost-str (when (pos? est-cost) (str " (" (format-cost est-cost) " USD)"))]
-    (log! (str "  Estimated: " (format-tokens est-in) " input / "
-               (format-tokens est-out) " output tokens"
+    (log! (str "  Estimated: " (format-tokens input) " input / "
+               (format-tokens output) " output tokens"
                cost-str ", " est-time))))
 
 (defn analyze-repo!
@@ -455,7 +477,7 @@
          (log! (str "Analyzing " total " files"
                     (when (> concurrency 1) (str " (concurrency=" concurrency ")"))
                     "..."))
-         (estimate-banner total model-id)
+         (estimate-banner files model-id)
          (let [stats-atom  (atom {:ok 0 :parse-error 0 :error 0 :started 0
                                   :elapsed-ms 0 :total-usage llm/zero-usage})
                stop-flag   (atom nil)
