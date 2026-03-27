@@ -1348,6 +1348,19 @@
     (let [elapsed (- (System/currentTimeMillis) t1)]
       (is (< elapsed 20) "Zero delay should not block"))))
 
+(deftest acquire-rate-gate-concurrent-does-not-serialize-sleep
+  (testing "Two threads waiting should overlap, not serialize (no lock held during sleep)"
+    (let [gate     (atom 0)
+          delay-ms 100
+          _        (bench/acquire-rate-gate! gate delay-ms)
+          t1       (System/currentTimeMillis)
+          f1       (future (bench/acquire-rate-gate! gate delay-ms))
+          f2       (future (bench/acquire-rate-gate! gate delay-ms))]
+      @f1 @f2
+      (let [elapsed (- (System/currentTimeMillis) t1)]
+        (is (< elapsed (* delay-ms 3))
+            (str "Concurrent gates should not serialize: " elapsed "ms for 2 calls"))))))
+
 ;; --- Tier 1: run-stage LLM path ---
 
 (deftest run-stage-answer-with-mock-llm

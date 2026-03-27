@@ -979,16 +979,14 @@
 
 (defn acquire-rate-gate!
   "Block until min-delay-ms has elapsed since the last LLM request.
-   Thread-safe via locking on the atom."
+   Thread-safe via atomic swap — sleep is outside the lock."
   [last-request-atom min-delay-ms]
   (when (pos? min-delay-ms)
-    (locking last-request-atom
-      (let [now     (System/currentTimeMillis)
-            elapsed (- now @last-request-atom)
-            wait    (- min-delay-ms elapsed)]
-        (when (pos? wait)
-          (Thread/sleep wait))
-        (reset! last-request-atom (System/currentTimeMillis))))))
+    (let [now  (System/currentTimeMillis)
+          slot (swap! last-request-atom #(max (+ % min-delay-ms) now))
+          wait (- slot now)]
+      (when (pos? wait)
+        (Thread/sleep wait)))))
 
 ;; --- Cost estimation ---
 
