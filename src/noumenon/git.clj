@@ -319,9 +319,9 @@
         {:keys [to-import skipped] :as _plan}
         (build-import-plan (d/db conn) all)]
     (when (and (empty? all) (seq raw))
-      (log! "Warning: git log produced output but no commits were parsed"))
+      (log! "WARNING: git log produced output but no commits were parsed"))
     (when (empty? all)
-      (log! "Warning: no commits found in" (str repo-path)))
+      (log! "WARNING: no commits found in" (str repo-path)))
     (transact-commits! conn repo-uri to-import)
     (let [elapsed (- (System/currentTimeMillis) start-ms)]
       (log! (str "Imported " (count to-import) " commits, "
