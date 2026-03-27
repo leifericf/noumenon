@@ -172,6 +172,93 @@
     (is (nil? (:commit/parents entity)))
     (is (nil? (:commit/changed-files entity)))))
 
+;; --- Rename path resolution (regression: Flask import crash) ---
+
+(deftest resolve-rename-path-directory
+  (testing "directory rename {old => new}/file resolves to destination"
+    (is (= "flask/testsuite/foo.py"
+           (#'git/resolve-rename-path "{tests => flask/testsuite}/foo.py")))))
+
+(deftest resolve-rename-path-file
+  (testing "file rename src/{old.py => new.py} resolves to destination"
+    (is (= "src/new.py"
+           (#'git/resolve-rename-path "src/{old.py => new.py}")))))
+
+(deftest resolve-rename-path-passthrough
+  (testing "non-rename paths pass through unchanged"
+    (is (= "src/core.clj" (#'git/resolve-rename-path "src/core.clj")))))
+
+(deftest resolve-rename-path-double-slash
+  (testing "double slashes from empty rename segments are normalized"
+    (is (= "templates/mail.txt"
+           (#'git/resolve-rename-path "{tests => }/templates/mail.txt")))))
+
+(deftest parse-numstat-with-rename
+  (testing "numstat line with rename syntax resolves to destination"
+    (let [log     (str "\u0001"
+                       "sha1" "\u0000"
+                       "" "\u0000"
+                       "A" "\u0000"
+                       "a@x.com" "\u0000"
+                       iso-ts "\u0000"
+                       "A" "\u0000"
+                       "a@x.com" "\u0000"
+                       iso-ts "\u0000"
+                       "rename commit\n\u0000"
+                       "\n3\t1\t{tests => flask/testsuite}/helpers.py\n")
+          commits (git/parse-commits log)
+          c       (first commits)]
+      (is (= ["flask/testsuite/helpers.py"] (:changed-files c)))
+      (is (= 3 (:additions c))))))
+
+(deftest parse-numstat-binary-file
+  (testing "binary files with - for additions/deletions parse as zero"
+    (let [log     (str "\u0001"
+                       "sha2" "\u0000"
+                       "" "\u0000"
+                       "A" "\u0000"
+                       "a@x.com" "\u0000"
+                       iso-ts "\u0000"
+                       "A" "\u0000"
+                       "a@x.com" "\u0000"
+                       iso-ts "\u0000"
+                       "add image\n\u0000"
+                       "\n-\t-\tlogo.png\n")
+          commits (git/parse-commits log)
+          c       (first commits)]
+      (is (= ["logo.png"] (:changed-files c)))
+      (is (= 0 (:additions c)))
+      (is (= 0 (:deletions c))))))
+
+;; --- Author/committer shared-email dedup (regression: Flask commit bcba7eb) ---
+
+(deftest same-email-produces-one-person-entity
+  (testing "when author and committer share the same email, only one person entity is emitted"
+    (let [commit  {:sha "bcba7eb" :parent-shas []
+                   :author-name "flowerhack" :author-email "julia@flowerhack.com"
+                   :authored-at #inst "2024-01-01"
+                   :committer-name "Julia Hansbrough" :committer-email "julia@flowerhack.com"
+                   :committed-at #inst "2024-01-01"
+                   :message "fix tests" :changed-files []}
+          tx-data (git/commit->tx-data "test-repo" commit)
+          persons (filter :person/email tx-data)]
+      (is (= 1 (count persons))
+          "Same email should produce exactly one person entity")
+      (is (= "flowerhack" (:person/name (first persons)))
+          "Author name takes precedence when emails match"))))
+
+(deftest different-email-produces-two-person-entities
+  (testing "when author and committer have different emails, two person entities are emitted"
+    (let [commit  {:sha "abc" :parent-shas []
+                   :author-name "Alice" :author-email "alice@x.com"
+                   :authored-at #inst "2024-01-01"
+                   :committer-name "Bob" :committer-email "bob@x.com"
+                   :committed-at #inst "2024-01-01"
+                   :message "test" :changed-files []}
+          tx-data (git/commit->tx-data "test-repo" commit)
+          persons (filter :person/email tx-data)]
+      (is (= 2 (count persons))))))
+
 ;; --- Tier 1: Integration tests (in-memory Datomic + real git repo) ---
 
 (defn- test-conn []

@@ -117,8 +117,9 @@
          'src/{old.py => new.py}' -> 'src/new.py'"
   [path]
   (if-let [[_ prefix _ dest suffix] (re-matches #"(.*?)\{([^}]*?) => ([^}]*?)\}(.*)" path)]
-    (let [resolved (str prefix dest suffix)]
-      (str/replace resolved #"//" "/"))
+    (-> (str prefix dest suffix)
+        (str/replace #"//" "/")
+        (str/replace #"^/" ""))
     path))
 
 (defn- parse-numstat-line
