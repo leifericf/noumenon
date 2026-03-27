@@ -1,5 +1,6 @@
 (ns noumenon.llm-test
   (:require [clojure.data.json :as json]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [noumenon.llm :as llm]
             [org.httpkit.client]))
@@ -204,5 +205,5 @@
                     {:role "user" :content "latest"}]
           result (llm/flatten-messages messages)]
       (is (<= (count result) 1000000))
-      (is (clojure.string/includes? result "system prompt"))
-      (is (clojure.string/includes? result "latest")))))
+      (is (str/includes? result "system prompt"))
+      (is (str/includes? result "latest")))))

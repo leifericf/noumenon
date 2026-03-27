@@ -544,18 +544,6 @@
 
 ;; --- Datomic storage ---
 
-(defn- empty-context-count
-  "Count results where the LLM answer text suggests empty or missing context."
-  [results layers]
-  (let [kg-layers (remove #{:raw} layers)]
-    (count
-     (for [r results
-           layer kg-layers
-           :let [answer (get r (keyword (str (name layer) "-answer")))]
-           :when (and (string? answer)
-                      (re-find #"(?i)(cannot answer|no context|empty|insufficient|not provided)" answer))]
-       r))))
-
 (defn- first-resolved-model
   "Extract the resolved model from the first completed answer stage."
   [stages]
