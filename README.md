@@ -426,12 +426,23 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-### Claude Code note
+### Claude Code config
 
-For Claude Code, MCP enablement is usually just:
+Add to `~/.claude/settings.json` (global) or `.mcp.json` (per-project):
 
-- Start Noumenon in `serve` mode
-- Add/configure the MCP server entry in Claude Code
+```json
+{
+  "mcpServers": {
+    "noumenon": {
+      "command": "bash",
+      "args": ["-c", "source .env && exec clj -M:run serve"],
+      "cwd": "/path/to/noumenon"
+    }
+  }
+}
+```
+
+The `source .env` ensures environment variables (like `NOUMENON_ZAI_TOKEN` for the GLM provider) are loaded. If you don't use providers that need env vars, you can simplify to `"command": "clj"` with `"args": ["-M:run", "serve"]`.
 
 You do not need extra skills, custom sub-agents, or special `CLAUDE.md` wiring just to make Noumenon discoverable. Those are optional only if you want stricter usage behavior.
 
