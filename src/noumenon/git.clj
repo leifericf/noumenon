@@ -238,16 +238,16 @@
                                (mapv #(vector :git/sha %) parent-shas))
                         (seq file-tids)
                         (assoc :commit/changed-files file-tids))]
-    (into (cond-> [{:db/id author-tid :person/email author-email :person/name author-name}]
-            (not= author-email committer-email)
-            (conj {:db/id committer-tid :person/email committer-email
-                   :person/name committer-name})
-            :always (into [commit
-                           {:repo/uri repo-uri :repo/commits [commit-tid]}
-                           {:db/id "datomic.tx" :tx/op :import
-                            :tx/source :deterministic}]))
-          (map (fn [[path tid]] {:db/id tid :file/path path}))
-          (map vector changed-files file-tids))))
+    (-> (cond-> [{:db/id author-tid :person/email author-email :person/name author-name}]
+          (not= author-email committer-email)
+          (conj {:db/id committer-tid :person/email committer-email
+                 :person/name committer-name}))
+        (into [commit
+               {:repo/uri repo-uri :repo/commits [commit-tid]}
+               {:db/id "datomic.tx" :tx/op :import
+                :tx/source :deterministic}])
+        (into (map (fn [[path tid]] {:db/id tid :file/path path}))
+              (map vector changed-files file-tids)))))
 
 (defn git-log
   "Shell out to git log on the given repo path. Returns raw output string.
