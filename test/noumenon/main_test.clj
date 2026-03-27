@@ -247,15 +247,27 @@
     (is (= 1 exit))
     (is (str/includes? stderr "Missing value for --model"))))
 
+(defn- glm-token-available?
+  "Check if GLM token is available via env var or .env file."
+  []
+  (or (System/getenv "NOUMENON_ZAI_TOKEN")
+      (let [env-file (java.io.File. ".env")]
+        (when (.exists env-file)
+          (some #(re-matches #"(?:export\s+)?NOUMENON_ZAI_TOKEN=(.+)"
+                             (str/trim %))
+                (str/split-lines (slurp env-file)))))))
+
 (deftest benchmark-glm-without-token
   ;; GLM provider without NOUMENON_ZAI_TOKEN should fail fast
-  (let [tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-glm-" (random-uuid))]
-    ;; Import first so we have a database
-    (run-capturing ["import" "--db-dir" tmp-dir repo-path])
-    (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "glm"
-                                                "--db-dir" tmp-dir repo-path])]
-      (is (= 1 exit))
-      (is (str/includes? stderr "NOUMENON_ZAI_TOKEN")))))
+  ;; Only runs when no token is available (env or .env file)
+  (when-not (glm-token-available?)
+    (let [tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-glm-" (random-uuid))]
+      ;; Import first so we have a database
+      (run-capturing ["import" "--db-dir" tmp-dir repo-path])
+      (let [{:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "glm"
+                                                  "--db-dir" tmp-dir repo-path])]
+        (is (= 1 exit))
+        (is (str/includes? stderr "NOUMENON_ZAI_TOKEN"))))))
 
 (deftest benchmark-max-cost-flag-parsed
   (let [tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-maxcost-" (random-uuid))

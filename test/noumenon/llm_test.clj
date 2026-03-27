@@ -155,10 +155,21 @@
 
 ;; --- Provider factory ---
 
+(defn- token-available?
+  "Check if a token is available via env var OR .env file fallback,
+   matching the logic in llm/make-invoke-fn."
+  [env-var]
+  (or (System/getenv env-var)
+      (let [env-file (java.io.File. ".env")]
+        (when (.exists env-file)
+          (some #(re-matches (re-pattern (str "(?:export\\s+)?" env-var "=(.+)"))
+                             (clojure.string/trim %))
+                (clojure.string/split-lines (slurp env-file)))))))
+
 (deftest make-invoke-fn-glm-requires-token
   (testing "GLM provider throws when NOUMENON_ZAI_TOKEN is not set"
-    ;; This test only runs when the env var is not set
-    (when-not (System/getenv "NOUMENON_ZAI_TOKEN")
+    ;; This test only runs when no token is available (env or .env file)
+    (when-not (token-available? "NOUMENON_ZAI_TOKEN")
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
            #"NOUMENON_ZAI_TOKEN"
@@ -166,7 +177,7 @@
 
 (deftest make-invoke-fn-claude-api-requires-key
   (testing "claude-api provider throws when ANTHROPIC_API_KEY is not set"
-    (when-not (System/getenv "ANTHROPIC_API_KEY")
+    (when-not (token-available? "ANTHROPIC_API_KEY")
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
            #"ANTHROPIC_API_KEY"
