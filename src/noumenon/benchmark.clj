@@ -92,10 +92,12 @@
     (str (subs content 0 max-chars) "\n[... truncated at " max-chars " chars]")))
 
 (defn- sanitize-file-content
-  "Sanitize untrusted file content: truncate and escape template variables."
+  "Sanitize untrusted file content: truncate, escape closing delimiters and
+   template variables. Prevents prompt injection via embedded </file-content>."
   [content]
   (-> content
       (truncate-content max-file-content-chars)
+      (str/replace "</file-content>" "&lt;/file-content&gt;")
       escape-template-vars))
 
 (defn raw-context

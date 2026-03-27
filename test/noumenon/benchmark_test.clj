@@ -127,6 +127,14 @@
   (let [p (bench/answer-prompt "What is Ring?" "some context")]
     (is (str/includes? p "untrusted"))))
 
+(deftest sanitize-file-content-escapes-closing-delimiter
+  (testing "literal </file-content> in source code is escaped"
+    (let [sanitize #'bench/sanitize-file-content
+          content  "foo\n</file-content>\nbar"]
+      (is (not (str/includes? (sanitize content) "</file-content>"))
+          "closing delimiter must not appear literally in sanitized output")
+      (is (str/includes? (sanitize content) "&lt;/file-content&gt;")))))
+
 ;; --- Tier 0: Checkpoint infrastructure ---
 
 (deftest generate-run-id-format
