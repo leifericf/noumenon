@@ -449,8 +449,8 @@
            canary layers report]}
    conn]
   {:judge-llm      (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
-                                 {:provider provider
-                                  :model    (or judge-model model)}))
+                                {:provider provider
+                                 :model    (or judge-model model)}))
    :model-config   {:model model :judge-model (or judge-model model)
                     :provider provider}
    :checkpoint-dir "data/benchmarks/runs"
@@ -479,7 +479,7 @@
           ctx
           (fn [{:keys [conn db]}]
             (let [answer-llm (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
-                                           {:provider provider :model model}))
+                                          {:provider provider :model model}))
                   run-opts   (build-benchmark-opts opts conn)]
               (if resume
                 (do-benchmark-resume "data/benchmarks/runs" resume db

@@ -357,7 +357,7 @@
   (let [{:keys [file/path file/lang]} file-map]
     (try
       (let [{:keys [prompt truncated?]} (build-file-prompt (d/db conn) repo-path
-                                                            path lang prompt-template)
+                                                           path lang prompt-template)
             result (invoke-with-retry invoke-llm prompt truncated? path)]
         (if-let [analysis (:analysis result)]
           (let [tx-data (analysis->tx-data path analysis
