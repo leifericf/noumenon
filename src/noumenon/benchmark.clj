@@ -905,11 +905,23 @@
                    " score=" (name (:score score))))
         {:status :ok :result score :usage llm/zero-usage :resolved-model nil
          :completed-at (java.util.Date.)})
-      (let [llm-fn (if (= :judge stage-type) judge-llm invoke-llm)
-            {:keys [text usage resolved-model]} (llm-fn (stage-prompt stage-key opts))
-            result (if (= :judge stage-type) (parse-judge-response text) text)]
-        {:status :ok :result result :usage usage :resolved-model resolved-model
-         :completed-at (java.util.Date.)}))))
+      (try
+        (let [llm-fn (if (= :judge stage-type) judge-llm invoke-llm)
+              {:keys [text usage resolved-model]} (llm-fn (stage-prompt stage-key opts))
+              result (if (= :judge stage-type) (parse-judge-response text) text)]
+          {:status :ok :result result :usage usage :resolved-model resolved-model
+           :completed-at (java.util.Date.)})
+        (catch clojure.lang.ExceptionInfo e
+          (let [{:keys [status]} (ex-data e)]
+            (if (#{413 400} status)
+              (do (log! (str "  bench/skip-stage " (pr-str stage-key)
+                             " — HTTP " status " (payload too large)"))
+                  {:status :error :result (if (= :judge stage-type)
+                                            {:score :wrong :reasoning (.getMessage e)}
+                                            (.getMessage e))
+                   :usage llm/zero-usage :resolved-model nil
+                   :completed-at (java.util.Date.)})
+              (throw e))))))))
 
 (defn stages->results
   "Convert stages map to result seq. Only includes questions with all expected stages complete.
