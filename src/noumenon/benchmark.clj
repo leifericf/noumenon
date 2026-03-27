@@ -162,17 +162,17 @@
 
 (defmethod deterministic-score :q02
   [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
-        target-file  (or (:target-file (:resolved-params question))
-                         "ring/middleware/params.clj")
-        layer        (->> ok
-                          (filter (fn [[path _]] (str/ends-with? path target-file)))
-                          first
-                          second)]
-    (if (and layer (str/includes? answer-text (name layer)))
-      {:score :correct :reasoning (str "Correct layer: " (name layer))}
-      {:score :wrong :reasoning (str "Expected layer " (when layer (name layer))
-                                     " not found in answer")})))
+  (let [target-file (:target-file (:resolved-params question))]
+    (if-not target-file
+      {:score :wrong :reasoning "No target file resolved for parameterized question"}
+      (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+            layer (->> ok
+                       (filter (fn [[path _]] (str/ends-with? path target-file)))
+                       first second)]
+        (if (and layer (str/includes? answer-text (name layer)))
+          {:score :correct :reasoning (str "Correct layer: " (name layer))}
+          {:score :wrong :reasoning (str "Expected layer " (when layer (name layer))
+                                         " not found in answer")})))))
 
 (defmethod deterministic-score :q03
   [question db answer-text]
@@ -288,23 +288,24 @@
 
 (defmethod deterministic-score :q30
   [question db answer-text]
-  (let [target-path (or (:target-file (:resolved-params question))
-                        "ring/middleware/params.clj")
-        {:keys [ok]} (query/run-named-query db (:query-name question)
-                                            {:file-path target-path})
-        imports (mapv first ok)
-        found   (count (filter #(str/includes? answer-text %) imports))
-        total   (count imports)
-        ratio   (if (pos? total) (/ (double found) total) 0.0)]
-    (cond
-      (and (pos? total) (= found total))
-      {:score :correct :reasoning (str "All " total " imports listed")}
+  (let [target-path (:target-file (:resolved-params question))]
+    (if-not target-path
+      {:score :wrong :reasoning "No target file resolved for parameterized question"}
+      (let [{:keys [ok]} (query/run-named-query db (:query-name question)
+                                                {:file-path target-path})
+            imports (mapv first ok)
+            found   (count (filter #(str/includes? answer-text %) imports))
+            total   (count imports)
+            ratio   (if (pos? total) (/ (double found) total) 0.0)]
+        (cond
+          (and (pos? total) (= found total))
+          {:score :correct :reasoning (str "All " total " imports listed")}
 
-      (>= ratio 0.5)
-      {:score :partial :reasoning (str found "/" total " imports listed (≥50%)")}
+          (>= ratio 0.5)
+          {:score :partial :reasoning (str found "/" total " imports listed (≥50%)")}
 
-      :else
-      {:score :wrong :reasoning (str found "/" total " imports listed")})))
+          :else
+          {:score :wrong :reasoning (str found "/" total " imports listed")})))))
 
 (defmethod deterministic-score :q05
   [_question db answer-text]
