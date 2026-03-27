@@ -75,8 +75,8 @@
   "Invoke Anthropic Messages API directly via http-kit.
    `messages` is [{:role \"user\"/\"assistant\" :content string} ...].
    Returns {:text string :usage {:input-tokens n :output-tokens m} :model string}.
-   Retries up to 3 times on transient errors (429, 5xx, connection failures).
-   Throws ex-info on persistent HTTP errors. Response body is logged to stderr only."
+   Makes up to 3 attempts (2 retries) on transient errors (429, 5xx, connection failures).
+   Throws ex-info on persistent HTTP errors."
   [messages {:keys [model temperature max-tokens base-url auth-token]}]
   (let [url      (str base-url "/v1/messages")
         req-body (json/write-str
