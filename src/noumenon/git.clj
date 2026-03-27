@@ -142,7 +142,7 @@
                     (keep parse-numstat-line))]
     {:changed-files (vec (distinct (map first parsed)))
      :additions     (transduce (map second) + 0 parsed)
-     :deletions     (transduce (map #(nth % 2)) + 0 parsed)}))
+     :deletions     (transduce (map peek) + 0 parsed)}))
 
 (defn- parse-record [text]
   (let [fields (str/split text #"\x00" -1)]
@@ -151,17 +151,17 @@
       ;; The body (%B) sits between index 8 and second-to-last.
       ;; If the body contains embedded \x00, extra fields appear
       ;; between 8 and the end — we rejoin them to reconstruct it.
-      (let [numstat (parse-numstat (peek fields))
+      (let [[sha parents aname aemail adate cname cemail cdate] fields
+            numstat (parse-numstat (peek fields))
             body    (str/join "\u0000" (subvec fields 8 (dec (count fields))))]
-        (merge {:sha             (nth fields 0)
-                :parent-shas     (let [p (nth fields 1)]
-                                   (if (str/blank? p) [] (str/split p #" ")))
-                :author-name     (nth fields 2)
-                :author-email    (nth fields 3)
-                :authored-at     (parse-iso-instant (nth fields 4))
-                :committer-name  (nth fields 5)
-                :committer-email (nth fields 6)
-                :committed-at    (parse-iso-instant (nth fields 7))
+        (merge {:sha             sha
+                :parent-shas     (if (str/blank? parents) [] (str/split parents #" "))
+                :author-name     aname
+                :author-email    aemail
+                :authored-at     (parse-iso-instant adate)
+                :committer-name  cname
+                :committer-email cemail
+                :committed-at    (parse-iso-instant cdate)
                 :message         (str/trim body)}
                numstat)))))
 

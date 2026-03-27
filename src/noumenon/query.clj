@@ -84,7 +84,7 @@
    (let [{:keys [query uses-rules inputs]} query-def
          rules     (when uses-rules (load-rules))
          extra-args (when (seq inputs)
-                      (mapv #(get params %) inputs))
+                      (mapv params inputs))
          args      (cond-> [query db]
                      uses-rules (conj rules)
                      (seq extra-args) (into extra-args))]

@@ -136,23 +136,26 @@
            complexity smells purpose safety-concerns error-handling
            call-names pure ai-likelihood]}]
   (when (non-blank? name)
-    (cond-> {:name (clamp name)}
-      (valid-code-kind kind)                               (assoc :kind kind)
-      (integer? line-start)                                (assoc :line-start line-start)
-      (integer? line-end)                                  (assoc :line-end line-end)
-      (non-blank? args)                                    (assoc :args (clamp args))
-      (non-blank? returns)                                 (assoc :returns (clamp returns))
-      (valid-visibility visibility)                        (assoc :visibility visibility)
-      (non-blank? docstring)                               (assoc :docstring (clamp docstring))
-      (true? deprecated)                                   (assoc :deprecated true)
-      (valid-segment-complexity complexity)                (assoc :complexity complexity)
-      (seq (filter valid-smells smells))                   (assoc :smells (vec (filter valid-smells smells)))
-      (non-blank? purpose)                                 (assoc :purpose (clamp purpose))
-      (seq (filter valid-safety-concerns safety-concerns)) (assoc :safety-concerns (vec (filter valid-safety-concerns safety-concerns)))
-      (valid-error-handling error-handling)                 (assoc :error-handling error-handling)
-      (seq (filter non-blank? call-names))                 (assoc :call-names (vec (filter non-blank? call-names)))
-      (true? pure)                                         (assoc :pure true)
-      (valid-ai-likelihood ai-likelihood)                  (assoc :ai-likelihood ai-likelihood))))
+    (let [valid-smells'   (seq (filter valid-smells smells))
+          valid-safety    (seq (filter valid-safety-concerns safety-concerns))
+          valid-calls     (seq (filter non-blank? call-names))]
+      (cond-> {:name (clamp name)}
+        (valid-code-kind kind)              (assoc :kind kind)
+        (integer? line-start)               (assoc :line-start line-start)
+        (integer? line-end)                 (assoc :line-end line-end)
+        (non-blank? args)                   (assoc :args (clamp args))
+        (non-blank? returns)                (assoc :returns (clamp returns))
+        (valid-visibility visibility)       (assoc :visibility visibility)
+        (non-blank? docstring)              (assoc :docstring (clamp docstring))
+        (true? deprecated)                  (assoc :deprecated true)
+        (valid-segment-complexity complexity) (assoc :complexity complexity)
+        valid-smells'                       (assoc :smells (vec valid-smells'))
+        (non-blank? purpose)                (assoc :purpose (clamp purpose))
+        valid-safety                        (assoc :safety-concerns (vec valid-safety))
+        (valid-error-handling error-handling) (assoc :error-handling error-handling)
+        valid-calls                         (assoc :call-names (vec valid-calls))
+        (true? pure)                        (assoc :pure true)
+        (valid-ai-likelihood ai-likelihood) (assoc :ai-likelihood ai-likelihood)))))
 
 (def ^:private analysis-sanitizers
   {:summary      #(when (string? %) (clamp %))
