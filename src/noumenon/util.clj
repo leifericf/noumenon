@@ -16,7 +16,8 @@
     (subs s 0 (min (count s) n))))
 
 (defn escape-template-vars
-  "Escape template metacharacters in untrusted content to prevent injection."
+  "Escape double-mustache `{{` in untrusted content to prevent template injection.
+   Only handles `{{` — verify any new template syntax is also escaped at injection points."
   [s]
   (str/replace (or s "") "{{" "{ {"))
 
