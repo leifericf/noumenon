@@ -251,6 +251,21 @@
         (doseq [f (reverse (file-seq dir))]
           (.delete f))))))
 
+(deftest validate-stage-result-rejects-nil-answer
+  (let [validate #'bench/validate-stage-result]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"nil answer"
+                          (validate [:q01 :full :answer] nil)))
+    (is (nil? (validate [:q01 :full :answer] "valid answer")))))
+
+(deftest deterministic-score-nil-answer-returns-wrong
+  (testing "nil answer at call site is coerced to empty string, scoring :wrong"
+    (let [q {:id :q01 :question "Q?" :query-name "files-by-complexity"
+             :rubric "r" :category :test}]
+      (with-redefs [query/run-named-query (fn [_db _qn]
+                                            {:ok [["src/a.clj" :complex]]})]
+        (let [result (bench/deterministic-score q nil "")]
+          (is (= :wrong (:score result))))))))
+
 (deftest checkpoint-write-is-atomic
   (let [dir  (io/file (System/getProperty "java.io.tmpdir")
                       (str "bench-atomic-" (System/currentTimeMillis)))

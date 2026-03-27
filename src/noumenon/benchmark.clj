@@ -160,7 +160,8 @@
 
 (defmulti deterministic-score
   "Score a single-hop question deterministically using Datalog ground truth.
-   Dispatches on question :id. Returns {:score kw :reasoning str}."
+   Dispatches on question :id. Returns {:score kw :reasoning str}.
+   Callers must pass (or answer-text \"\") — nil answer-text is treated as empty."
   (fn [question _db _answer-text] (:id question)))
 
 (defmethod deterministic-score :q01
@@ -760,11 +761,14 @@
   [stage-key result]
   (let [[_ _ stage-type] stage-key]
     (case stage-type
-      :answer (when (string? result)
-                (when (> (count result) max-stage-result-chars)
-                  (throw (ex-info "Checkpoint stage result exceeds maximum length"
-                                  {:stage-key stage-key :length (count result)
-                                   :max max-stage-result-chars}))))
+      :answer (cond
+                (nil? result)
+                (throw (ex-info "Checkpoint stage has nil answer result"
+                                {:stage-key stage-key}))
+                (and (string? result) (> (count result) max-stage-result-chars))
+                (throw (ex-info "Checkpoint stage result exceeds maximum length"
+                                {:stage-key stage-key :length (count result)
+                                 :max max-stage-result-chars})))
       :judge  (when (and (map? result) (not (contains? score-values (:score result))))
                 (throw (ex-info "Checkpoint stage has invalid judge score"
                                 {:stage-key stage-key :score (:score result)})))
@@ -923,7 +927,7 @@
         deterministic? (and (= :judge stage-type)
                             (= :deterministic (:scoring question)))]
     (if deterministic?
-      (let [answer (get-in stages [[qid condition :answer] :result])
+      (let [answer (or (get-in stages [[qid condition :answer] :result]) "")
             score  (deterministic-score question db answer)]
         (log! (str "bench/deterministic-score q=" (name qid)
                    " condition=" (name condition)
