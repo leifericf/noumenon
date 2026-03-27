@@ -167,7 +167,7 @@ Segment field guidelines:
   :robust — comprehensive handling with specific error types, proper logging/recovery.
   Omit for segments where error handling is not applicable.
 
-:call-names — list of function/method names this segment calls. Use unqualified names (e.g. \"map\", \"println\", \"fetch-data\"). Include only significant calls, not every standard library function. Omit if none or if the segment makes no notable calls.
+:call-names — list of function/method names this segment calls. Use unqualified names (e.g. \"map\", \"connect\", \"fetch-data\"). Include ALL calls to functions/methods defined in the same project — these are used to build a call graph. Omit standard library and third-party calls (e.g. omit \"println\", \"str\", \"map\") unless they are project-defined. Omit if none.
 
 :pure — true if the segment is side-effect-free: no I/O (file, network, database), no mutation of external state, no global state access. Pure functions depend only on their arguments and return a value. Omit if not pure or if unsure.
 
