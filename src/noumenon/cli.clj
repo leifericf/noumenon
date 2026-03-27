@@ -256,7 +256,7 @@
   {"import"    {:spec simple-command-spec
                 :summary "Import git history and file structure into Datomic"
                 :usage "import [options] <repo-path-or-url>"
-                :epilog "Accepts a local path or a Git URL (https://, git@).\nURLs are auto-cloned to data/repos/<name>/."}
+                :epilog "Accepts a local path or a Git URL (https://, git@).\nURLs are auto-cloned to data/repos/<name>/.\nStdout: EDN result map (for scripting). Human output goes to stderr."}
    "analyze"      {:spec analyze-command-spec
                    :summary "Enrich imported files with LLM-driven semantic analysis"
                    :usage "analyze [options] <repo-path>"
@@ -264,11 +264,11 @@
    "enrich"       {:spec enrich-command-spec
                    :summary "Extract cross-file import graph deterministically"
                    :usage "enrich [options] <repo-path>"
-                   :epilog "Parses source code imports and resolves them to repo files.\nFull support: Clojure. Import extraction: Elixir, Python, JS/TS, C/C++, Go, Rust, Java, Erlang.\nOther languages are skipped. External tools (elixir, python3, node, etc.) required on PATH."}
+                   :epilog "Parses source code imports and resolves them to repo files.\nFull support: Clojure. Import extraction: Elixir, Python, JS/TS, C/C++, Go, Rust, Java, Erlang.\nOther languages are skipped. External tools (elixir, python3, node, etc.) required on PATH.\nStdout: EDN result map (for scripting). Human output goes to stderr."}
    "update"    {:spec update-command-spec
                 :summary "Update knowledge graph with latest git state"
                 :usage "update [options] <repo-path>"
-                :epilog "Detects changes since last update via git HEAD SHA.\nFirst run: performs full import + enrich.\nSubsequent runs: incrementally updates changed/added/deleted files.\nPass --analyze to also re-analyze changed files (requires LLM)."}
+                :epilog "Detects changes since last update via git HEAD SHA.\nFirst run: performs full import + enrich.\nSubsequent runs: incrementally updates changed/added/deleted files.\nPass --analyze to also re-analyze changed files (requires LLM).\nStdout: EDN result map (for scripting). Human output goes to stderr."}
    "watch"     {:spec watch-command-spec
                 :summary "Watch a repository and auto-update on new commits"
                 :usage "watch [options] <repo-path>"
@@ -276,7 +276,7 @@
    "query"     {:spec query-command-spec
                 :summary "Run a named Datalog query against the knowledge graph"
                 :usage "query [options] <query-name> <repo-path>\n       query list"
-                :epilog "Run `query list` to see all available named queries with descriptions.\nSome queries accept --param key=value inputs — check the query listing."}
+                :epilog "Run `query list` to see all available named queries with descriptions.\nSome queries accept --param key=value inputs — check the query listing.\nStdout: EDN result map (for scripting). Human output goes to stderr."}
    "status"         {:spec simple-command-spec
                      :summary "Show import counts for a repository"
                      :usage "status [options] <repo-path>"}
