@@ -106,6 +106,25 @@
                                 :max-tokens 128 :base-url "https://x"
                                 :auth-token "t"}))))))))
 
+;; --- Usage tracking ---
+
+(deftest sum-usage-nil-handling
+  (testing "nil arguments treated as zero-usage"
+    (is (= llm/zero-usage (llm/sum-usage nil nil)))
+    (is (= {:input-tokens 10 :output-tokens 5 :cost-usd 0.1 :duration-ms 100}
+           (llm/sum-usage {:input-tokens 10 :output-tokens 5 :cost-usd 0.1 :duration-ms 100} nil)))
+    (is (= {:input-tokens 10 :output-tokens 5 :cost-usd 0.1 :duration-ms 100}
+           (llm/sum-usage nil {:input-tokens 10 :output-tokens 5 :cost-usd 0.1 :duration-ms 100})))))
+
+(deftest sum-usage-normal
+  (testing "sums two usage maps"
+    (let [result (llm/sum-usage {:input-tokens 10 :output-tokens 5 :cost-usd 0.1 :duration-ms 100}
+                                {:input-tokens 20 :output-tokens 10 :cost-usd 0.2 :duration-ms 200})]
+      (is (= 30 (:input-tokens result)))
+      (is (= 15 (:output-tokens result)))
+      (is (= 300 (:duration-ms result)))
+      (is (< (abs (- 0.3 (:cost-usd result))) 1e-10)))))
+
 ;; --- .env parsing ---
 
 (deftest parse-env-value-strips-quotes-and-comments

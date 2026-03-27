@@ -61,9 +61,9 @@
   {:input-tokens 0 :output-tokens 0 :cost-usd 0.0 :duration-ms 0})
 
 (defn sum-usage
-  "Sum two usage maps."
+  "Sum two usage maps. Treats nil as zero-usage."
   [a b]
-  (merge-with + a b))
+  (merge-with + (or a zero-usage) (or b zero-usage)))
 
 ;; --- Direct API invocation ---
 
