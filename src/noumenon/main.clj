@@ -113,17 +113,13 @@
         (with-existing-db
           ctx
           (fn [{:keys [conn]}]
-            (let [provider-kw (llm/provider->kw
-                               (or provider llm/default-provider))
-                  model-id    (llm/model-alias->id
-                               (or model llm/default-model-alias))
-                  invoke-llm  (llm/make-prompt-fn
-                               (llm/make-invoke-fn provider-kw {:model model-id}))
-                  result      (analyze/analyze-repo! conn repo-path invoke-llm
-                                                     (cond-> {:model-id     model-id
-                                                              :concurrency  (or concurrency 3)
-                                                              :min-delay-ms (or min-delay 0)}
-                                                       max-files (assoc :max-files max-files)))]
+            (let [{:keys [prompt-fn model-id]}
+                  (llm/make-prompt-fn-from-opts {:provider provider :model model})
+                  result (analyze/analyze-repo! conn repo-path prompt-fn
+                                                (cond-> {:model-id     model-id
+                                                         :concurrency  (or concurrency 3)
+                                                         :min-delay-ms (or min-delay 0)}
+                                                  max-files (assoc :max-files max-files)))]
               (log! (str "Next: run '" cli/program-name " ask -q \"<question>\" " repo-path
                          "' to query with semantic context."))
               {:exit 0 :result result})))
@@ -156,20 +152,18 @@
   (with-valid-repo
     (update opts :repo-path resolve-repo-path)
     (fn [{:keys [repo-path db-dir db-name]}]
-      (let [conn     (db/connect-and-ensure-schema db-dir db-name)
-            repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
-            sync-opts (cond-> {:concurrency          (or concurrency 8)
-                               :analyze-concurrency  (or concurrency 3)}
-                        analyze
-                        (assoc :analyze? true
-                               :model-id (llm/model-alias->id
-                                          (or model llm/default-model-alias))
-                               :invoke-llm (llm/make-prompt-fn
-                                            (llm/make-invoke-fn
-                                             (llm/provider->kw
-                                              (or provider llm/default-provider))
-                                             {:model (llm/model-alias->id
-                                                      (or model llm/default-model-alias))}))))
+      (let [conn      (db/connect-and-ensure-schema db-dir db-name)
+            repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
+            sync-opts (if analyze
+                        (let [{:keys [prompt-fn model-id]}
+                              (llm/make-prompt-fn-from-opts {:provider provider :model model})]
+                          {:concurrency         (or concurrency 8)
+                           :analyze-concurrency (or concurrency 3)
+                           :analyze?            true
+                           :model-id            model-id
+                           :invoke-llm          prompt-fn})
+                        {:concurrency         (or concurrency 8)
+                         :analyze-concurrency (or concurrency 3)})
             result (sync/update-repo! conn repo-path repo-uri sync-opts)]
         (when-not analyze
           (log! (str "Next: run '" cli/program-name " analyze " repo-path
@@ -185,18 +179,16 @@
       (let [conn       (db/connect-and-ensure-schema db-dir db-name)
             repo-uri   (.getCanonicalPath (java.io.File. (str repo-path)))
             interval-s (or interval 30)
-            sync-opts  (cond-> {:concurrency          (or concurrency 8)
-                                :analyze-concurrency  (or concurrency 3)}
-                         analyze
-                         (assoc :analyze? true
-                                :model-id (llm/model-alias->id
-                                           (or model llm/default-model-alias))
-                                :invoke-llm (llm/make-prompt-fn
-                                             (llm/make-invoke-fn
-                                              (llm/provider->kw
-                                               (or provider llm/default-provider))
-                                              {:model (llm/model-alias->id
-                                                       (or model llm/default-model-alias))}))))]
+            sync-opts  (if analyze
+                         (let [{:keys [prompt-fn model-id]}
+                               (llm/make-prompt-fn-from-opts {:provider provider :model model})]
+                           {:concurrency         (or concurrency 8)
+                            :analyze-concurrency (or concurrency 3)
+                            :analyze?            true
+                            :model-id            model-id
+                            :invoke-llm          prompt-fn})
+                         {:concurrency         (or concurrency 8)
+                          :analyze-concurrency (or concurrency 3)})]
         (log! (str "Watching " repo-path " (polling every " interval-s "s)"))
         (loop [failures 0]
           (let [failed? (try
@@ -251,15 +243,12 @@
         (with-existing-db
           ctx
           (fn [{:keys [db db-name]}]
-            (let [provider-kw (llm/provider->kw
-                               (or provider llm/default-provider))
-                  model-id    (llm/model-alias->id
-                               (or model llm/default-model-alias))
-                  invoke-fn   (llm/make-invoke-fn provider-kw
-                                                  {:model       model-id
-                                                   :temperature 0.3
-                                                   :max-tokens  4096})
-                  result      (agent/ask db question
+            (let [{:keys [invoke-fn]}
+                  (llm/make-invoke-fn-from-opts {:provider    provider
+                                                 :model       model
+                                                 :temperature 0.3
+                                                 :max-tokens  4096})
+                  result (agent/ask db question
                                          (cond-> {:invoke-fn invoke-fn :repo-name db-name}
                                            max-iterations (assoc :max-iterations max-iterations)))]
               (when verbose
@@ -458,12 +447,11 @@
           ctx
           (fn [{:keys [conn db]}]
             (let [checkpoint-dir "data/benchmarks/runs"
-                  provider       (or provider llm/default-provider)
-                  provider-kw    (llm/provider->kw provider)
-                  answer-llm     (llm/make-prompt-fn
-                                  (llm/make-invoke-fn provider-kw {:model model}))
-                  judge-llm      (llm/make-prompt-fn
-                                  (llm/make-invoke-fn provider-kw {:model (or judge-model model)}))
+                  answer-llm (:prompt-fn (llm/make-prompt-fn-from-opts
+                                          {:provider provider :model model}))
+                  judge-llm  (:prompt-fn (llm/make-prompt-fn-from-opts
+                                          {:provider provider
+                                           :model    (or judge-model model)}))
                   run-opts       {:judge-llm      judge-llm
                                   :model-config   {:model model :judge-model (or judge-model model)
                                                    :provider provider}
@@ -499,6 +487,8 @@
       (try
         (let [conn      (db/connect-and-ensure-schema db-dir db-name)
               repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
+              {:keys [prompt-fn model-id]}
+              (llm/make-prompt-fn-from-opts {:provider provider :model model})
               results   (atom {})
               t0        (System/currentTimeMillis)
               elapsed   #(str " (" (- (System/currentTimeMillis) %) " ms)")]
@@ -513,32 +503,24 @@
           ;; Step 2: Analyze
           (when-not skip-analyze
             (log! "digest: analyze...")
-            (let [start       (System/currentTimeMillis)
-                  provider-kw (llm/provider->kw (or provider llm/default-provider))
-                  model-id    (llm/model-alias->id (or model llm/default-model-alias))
-                  invoke-llm  (llm/make-prompt-fn
-                               (llm/make-invoke-fn provider-kw {:model model-id}))
-                  r (analyze/analyze-repo! conn repo-path invoke-llm
-                                           {:model-id model-id
-                                            :concurrency (or concurrency 3)})]
+            (let [start (System/currentTimeMillis)
+                  r     (analyze/analyze-repo! conn repo-path prompt-fn
+                                               {:model-id model-id
+                                                :concurrency (or concurrency 3)})]
               (log! (str "digest: analyze done" (elapsed start)))
               (swap! results assoc :analyze r)))
           ;; Step 3: Benchmark
           (when-not skip-benchmark
             (log! "digest: benchmark...")
-            (let [start       (System/currentTimeMillis)
-                  db          (d/db conn)
-                  provider-kw (llm/provider->kw (or provider llm/default-provider))
-                  model-id    (llm/model-alias->id (or model llm/default-model-alias))
-                  invoke-llm  (llm/make-prompt-fn
-                               (llm/make-invoke-fn provider-kw {:model model-id}))
-                  mode        (cond-> {} layers (assoc :layers layers))
-                  r (bench/run-benchmark! db repo-path invoke-llm
-                                          :conn conn
-                                          :mode mode
-                                          :budget {:max-questions max-questions}
-                                          :report? report
-                                          :concurrency (or concurrency 3))]
+            (let [start (System/currentTimeMillis)
+                  db    (d/db conn)
+                  mode  (cond-> {} layers (assoc :layers layers))
+                  r     (bench/run-benchmark! db repo-path prompt-fn
+                                              :conn conn
+                                              :mode mode
+                                              :budget {:max-questions max-questions}
+                                              :report? report
+                                              :concurrency (or concurrency 3))]
               (log! (str "digest: benchmark done" (elapsed start)))
               (swap! results assoc :benchmark
                      (select-keys r [:run-id :aggregate :stop-reason :report-path]))))

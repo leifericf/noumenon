@@ -294,17 +294,16 @@
           conn     (get-or-create-conn db-dir db-name)
           repo-uri repo-path
           analyze? (args "analyze")
-          opts     (cond-> {:concurrency 8}
-                     analyze?
-                     (assoc :analyze? true
-                            :model-id (llm/model-alias->id
-                                       (or (:model defaults) llm/default-model-alias))
-                            :invoke-llm (llm/make-prompt-fn
-                                         (llm/make-invoke-fn
-                                          (llm/provider->kw
-                                           (or (:provider defaults) llm/default-provider))
-                                          {:model (llm/model-alias->id
-                                                   (or (:model defaults) llm/default-model-alias))}))))
+          opts     (if analyze?
+                     (let [{:keys [prompt-fn model-id]}
+                           (llm/make-prompt-fn-from-opts
+                            {:provider (:provider defaults)
+                             :model    (:model defaults)})]
+                       {:concurrency 8
+                        :analyze?    true
+                        :model-id    model-id
+                        :invoke-llm  prompt-fn})
+                     {:concurrency 8})
           result   (sync/update-repo! conn repo-path repo-uri opts)]
       (tool-result
        (let [changes (str (when (pos? (:added result 0)) (str " " (:added result) " files added."))
@@ -320,11 +319,11 @@
   (validate-llm-inputs! args)
   (with-conn args defaults
     (fn [{:keys [db db-name]}]
-      (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
-            model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
-            invoke-fn   (llm/make-invoke-fn provider-kw {:model       model-id
-                                                         :temperature 0.3
-                                                         :max-tokens  4096})
+      (let [{:keys [invoke-fn]}
+            (llm/make-invoke-fn-from-opts {:provider    (or (args "provider") (:provider defaults))
+                                           :model       (or (args "model") (:model defaults))
+                                           :temperature 0.3
+                                           :max-tokens  4096})
             max-iter    (min (or (args "max_iterations") 10) 50)
             result      (agent/ask db (args "question")
                                    {:invoke-fn      invoke-fn
@@ -345,13 +344,12 @@
   (validate-llm-inputs! args)
   (with-conn args defaults
     (fn [{:keys [conn repo-path]}]
-      (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
-            model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
-            invoke-llm  (llm/make-prompt-fn
-                         (llm/make-invoke-fn provider-kw {:model model-id}))
+      (let [{:keys [prompt-fn model-id]}
+            (llm/make-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
+                                           :model    (or (args "model") (:model defaults))})
             concurrency (min (or (args "concurrency") 3) 20)
             max-files   (args "max_files")
-            result      (analyze/analyze-repo! conn repo-path invoke-llm
+            result      (analyze/analyze-repo! conn repo-path prompt-fn
                                                (cond-> {:model-id    model-id
                                                         :concurrency concurrency}
                                                  max-files (assoc :max-files max-files)))]
@@ -395,14 +393,13 @@
   (validate-llm-inputs! args)
   (with-conn args defaults
     (fn [{:keys [conn db repo-path]}]
-      (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
-            model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
-            invoke-llm  (llm/make-prompt-fn
-                         (llm/make-invoke-fn provider-kw {:model model-id}))
+      (let [{:keys [prompt-fn]}
+            (llm/make-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
+                                           :model    (or (args "model") (:model defaults))})
             layers      (validate-layers (args "layers"))
             mode        (cond-> {}
                           layers (assoc :layers layers))
-            result      (bench/run-benchmark! db repo-path invoke-llm
+            result      (bench/run-benchmark! db repo-path prompt-fn
                                               :conn conn
                                               :mode mode
                                               :budget {:max-questions (args "max_questions")}
@@ -490,33 +487,30 @@
   (validate-llm-inputs! args)
   (with-conn args defaults
     (fn [{:keys [conn repo-path]}]
-      (let [provider-kw (llm/provider->kw (or (args "provider") (:provider defaults) llm/default-provider))
-            model-id    (llm/model-alias->id (or (args "model") (:model defaults) llm/default-model-alias))
-            repo-uri    (.getCanonicalPath (java.io.File. (str repo-path)))
-            results     (atom {})]
+      (let [{:keys [prompt-fn model-id]}
+            (llm/make-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
+                                           :model    (or (args "model") (:model defaults))})
+            repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
+            results  (atom {})]
         ;; Import + Enrich
         (when-not (or (args "skip_import") (args "skip_enrich"))
           (let [r (sync/update-repo! conn repo-path repo-uri {:concurrency 8})]
             (swap! results assoc :update r)))
         ;; Analyze
         (when-not (args "skip_analyze")
-          (let [invoke-llm (llm/make-prompt-fn
-                            (llm/make-invoke-fn provider-kw {:model model-id}))
-                r (analyze/analyze-repo! conn repo-path invoke-llm
+          (let [r (analyze/analyze-repo! conn repo-path prompt-fn
                                          {:model-id model-id :concurrency 3})]
             (swap! results assoc :analyze r)))
         ;; Benchmark
         (when-not (args "skip_benchmark")
-          (let [db          (d/db conn)
-                invoke-llm  (llm/make-prompt-fn
-                             (llm/make-invoke-fn provider-kw {:model model-id}))
-                layers      (validate-layers (args "layers"))
-                mode        (cond-> {} layers (assoc :layers layers))
-                r (bench/run-benchmark! (d/db conn) repo-path invoke-llm
-                                        :conn conn :mode mode
-                                        :budget {:max-questions (args "max_questions")}
-                                        :report? (args "report")
-                                        :concurrency 3)]
+          (let [db     (d/db conn)
+                layers (validate-layers (args "layers"))
+                mode   (cond-> {} layers (assoc :layers layers))
+                r      (bench/run-benchmark! db repo-path prompt-fn
+                                             :conn conn :mode mode
+                                             :budget {:max-questions (args "max_questions")}
+                                             :report? (args "report")
+                                             :concurrency 3)]
             (swap! results assoc :benchmark
                    (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
         (let [r @results]

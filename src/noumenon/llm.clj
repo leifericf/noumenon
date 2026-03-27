@@ -291,3 +291,31 @@
   [invoke-fn]
   (fn [prompt]
     (invoke-fn [{:role "user" :content prompt}])))
+
+(defn resolve-opts
+  "Resolve provider/model from option defaults. Returns map with :provider-kw
+   and :model-id — the canonical, validated identifiers."
+  [{:keys [provider model]}]
+  {:provider-kw (provider->kw (or provider default-provider))
+   :model-id    (model-alias->id (or model default-model-alias))})
+
+(defn make-invoke-fn-from-opts
+  "Build a messages-based invoke-fn from provider/model options.
+   Returns {:invoke-fn fn, :model-id string, :provider-kw keyword}."
+  [{:keys [temperature max-tokens] :as opts}]
+  (let [{:keys [provider-kw model-id]} (resolve-opts opts)]
+    {:invoke-fn  (make-invoke-fn provider-kw
+                                 (cond-> {:model model-id}
+                                   temperature (assoc :temperature temperature)
+                                   max-tokens  (assoc :max-tokens max-tokens)))
+     :model-id   model-id
+     :provider-kw provider-kw}))
+
+(defn make-prompt-fn-from-opts
+  "Build a prompt-fn (string->result) from provider/model options.
+   Returns {:prompt-fn fn, :model-id string, :provider-kw keyword}."
+  [opts]
+  (let [{:keys [invoke-fn] :as resolved} (make-invoke-fn-from-opts opts)]
+    (-> resolved
+        (assoc :prompt-fn (make-prompt-fn invoke-fn))
+        (dissoc :invoke-fn))))
