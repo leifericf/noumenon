@@ -290,6 +290,17 @@
     (fn [{:keys [db]}]
       (tool-result (query/schema-summary db)))))
 
+(defn- format-update-changes
+  "Format update result as a human-readable summary string."
+  [result]
+  (let [changes (str (when (pos? (:added result 0)) (str " " (:added result) " files added."))
+                     (when (pos? (:modified result 0)) (str " " (:modified result) " modified."))
+                     (when (pos? (:deleted result 0)) (str " " (:deleted result) " deleted."))
+                     (when (pos? (:commits result 0)) (str " " (:commits result) " new commits.")))]
+    (if (seq changes)
+      (str "Update complete." changes)
+      "Already up to date.")))
+
 (defn- handle-update [args defaults]
   (validate-string-length! "repo_path" (args "repo_path") max-repo-path-len)
   (validate-llm-inputs! args)
@@ -299,27 +310,17 @@
     (let [db-dir   (util/resolve-db-dir defaults)
           db-name  (util/derive-db-name repo-path)
           conn     (get-or-create-conn db-dir db-name)
-          repo-uri repo-path
           analyze? (args "analyze")
           opts     (if analyze?
                      (let [{:keys [prompt-fn model-id]}
                            (llm/wrap-as-prompt-fn-from-opts
                             {:provider (:provider defaults)
                              :model    (:model defaults)})]
-                       {:concurrency 8
-                        :analyze?    true
-                        :model-id    model-id
-                        :invoke-llm  prompt-fn})
+                       {:concurrency 8 :analyze? true
+                        :model-id model-id :invoke-llm prompt-fn})
                      {:concurrency 8})
-          result   (sync/update-repo! conn repo-path repo-uri opts)]
-      (tool-result
-       (let [changes (str (when (pos? (:added result 0)) (str " " (:added result) " files added."))
-                          (when (pos? (:modified result 0)) (str " " (:modified result) " modified."))
-                          (when (pos? (:deleted result 0)) (str " " (:deleted result) " deleted."))
-                          (when (pos? (:commits result 0)) (str " " (:commits result) " new commits.")))]
-         (if (seq changes)
-           (str "Update complete." changes)
-           "Already up to date."))))))
+          result   (sync/update-repo! conn repo-path repo-path opts)]
+      (tool-result (format-update-changes result)))))
 
 (defn- handle-ask [args defaults]
   (validate-string-length! "question" (args "question") max-question-len)
@@ -427,44 +428,50 @@
 
 (def ^:private max-run-id-len 256)
 
+(defn- find-run
+  "Find a benchmark run by ID, or the latest run if no ID given."
+  [db run-id]
+  (let [runs (if run-id
+               (d/q '[:find (pull ?r [*]) :in $ ?id
+                      :where [?r :bench.run/id ?id]]
+                    db run-id)
+               (d/q '[:find (pull ?r [*])
+                      :where [?r :bench.run/id _]]
+                    db))]
+    (->> runs (map first) (sort-by :bench.run/started-at) last)))
+
+(defn- format-run-summary
+  "Format a benchmark run as a human-readable summary string."
+  [run detail?]
+  (let [base (str "Run: " (:bench.run/id run)
+                  "\nStatus: " (name (:bench.run/status run))
+                  "\nCommit: " (:bench.run/commit-sha run)
+                  "\nQuestions: " (:bench.run/question-count run)
+                  (when-let [fm (:bench.run/full-mean run)]
+                    (str "\nFull mean: " (format "%.1f%%" (* 100.0 (double fm)))))
+                  (when-let [rm (:bench.run/raw-mean run)]
+                    (str "\nRaw mean: " (format "%.1f%%" (* 100.0 (double rm)))))
+                  (when (:bench.run/canonical? run) "\nCanonical: true"))]
+    (if-not detail?
+      base
+      (str base "\n\nPer-question results:\n"
+           (str/join "\n"
+                     (map (fn [r]
+                            (str (name (:bench.result/question-id r))
+                                 " " (name (or (:bench.result/category r) :unknown))
+                                 " full=" (name (or (:bench.result/full-score r) :n/a))
+                                 " raw=" (name (or (:bench.result/raw-score r) :n/a))))
+                          (sort-by :bench.result/question-id
+                                   (:bench.run/results run))))))))
+
 (defn- handle-benchmark-results [args defaults]
   (when-let [rid (args "run_id")]
     (validate-string-length! "run_id" rid max-run-id-len))
   (with-conn args defaults
     (fn [{:keys [db]}]
-      (let [run-id (args "run_id")
-            detail? (args "detail")
-            ;; Find the run — latest or by ID
-            runs (if run-id
-                   (d/q '[:find (pull ?r [*]) :in $ ?id
-                          :where [?r :bench.run/id ?id]]
-                        db run-id)
-                   (d/q '[:find (pull ?r [*])
-                          :where [?r :bench.run/id _]]
-                        db))
-            run  (->> runs (map first) (sort-by :bench.run/started-at) last)]
-        (if-not run
-          (tool-error "No benchmark runs found.")
-          (let [base (str "Run: " (:bench.run/id run)
-                          "\nStatus: " (name (:bench.run/status run))
-                          "\nCommit: " (:bench.run/commit-sha run)
-                          "\nQuestions: " (:bench.run/question-count run)
-                          (when-let [fm (:bench.run/full-mean run)]
-                            (str "\nFull mean: " (format "%.1f%%" (* 100.0 (double fm)))))
-                          (when-let [rm (:bench.run/raw-mean run)]
-                            (str "\nRaw mean: " (format "%.1f%%" (* 100.0 (double rm)))))
-                          (when (:bench.run/canonical? run) "\nCanonical: true"))
-                detail (when detail?
-                         (let [results (:bench.run/results run)]
-                           (str "\n\nPer-question results:\n"
-                                (str/join "\n"
-                                          (map (fn [r]
-                                                 (str (name (:bench.result/question-id r))
-                                                      " " (name (or (:bench.result/category r) :unknown))
-                                                      " full=" (name (or (:bench.result/full-score r) :n/a))
-                                                      " raw=" (name (or (:bench.result/raw-score r) :n/a))))
-                                               (sort-by :bench.result/question-id results))))))]
-            (tool-result (str base detail))))))))
+      (if-let [run (find-run db (args "run_id"))]
+        (tool-result (format-run-summary run (args "detail")))
+        (tool-error "No benchmark runs found.")))))
 
 (defn- handle-benchmark-compare [args defaults]
   (validate-string-length! "run_id_a" (args "run_id_a") max-run-id-len)
@@ -492,6 +499,22 @@
                                         (if (pos? v) "+" "")
                                         (format "%.1f" (* 100.0 v)) "pp"))
                                  (sort-by key deltas)))))))))))
+
+(defn- format-digest-summary
+  "Format digest pipeline results as a human-readable summary string."
+  [r]
+  (str "Digest complete."
+       (when-let [u (:update r)]
+         (str "\nUpdate: " (or (:added u) 0) " added, "
+              (or (:modified u) 0) " modified."))
+       (when-let [a (:analyze r)]
+         (str "\nAnalyze: " (:files-analyzed a 0) " files analyzed"
+              (when-let [c (get-in a [:total-usage :cost-usd])]
+                (when (pos? c) (str " ($" (format "%.2f" c) ")")))))
+       (when-let [b (:benchmark r)]
+         (str "\nBenchmark: run-id=" (:run-id b)
+              (when-let [fm (get-in b [:aggregate :full-mean])]
+                (str ", full=" (format "%.1f%%" (* 100.0 (double fm)))))))))
 
 (defn- handle-digest [args defaults]
   (validate-llm-inputs! args)
@@ -523,20 +546,7 @@
                                              :concurrency 3)]
             (swap! results assoc :benchmark
                    (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
-        (let [r @results]
-          (tool-result
-           (str "Digest complete."
-                (when-let [u (:update r)]
-                  (str "\nUpdate: " (or (:added u) 0) " added, "
-                       (or (:modified u) 0) " modified."))
-                (when-let [a (:analyze r)]
-                  (str "\nAnalyze: " (:files-analyzed a 0) " files analyzed"
-                       (when-let [c (get-in a [:total-usage :cost-usd])]
-                         (when (pos? c) (str " ($" (format "%.2f" c) ")")))))
-                (when-let [b (:benchmark r)]
-                  (str "\nBenchmark: run-id=" (:run-id b)
-                       (when-let [fm (get-in b [:aggregate :full-mean])]
-                         (str ", full=" (format "%.1f%%" (* 100.0 (double fm))))))))))))))
+        (tool-result (format-digest-summary @results))))))
 
 (def ^:private tool-handlers
   {"noumenon_import"            handle-import
@@ -608,6 +618,32 @@
   (.setLevel (java.util.logging.Logger/getLogger "datomic")
              java.util.logging.Level/WARNING))
 
+(defn- dispatch-method
+  "Dispatch a JSON-RPC method. Returns a JSON response string, or nil for notifications."
+  [id method params defaults]
+  (case method
+    "initialize"              (format-response id (handle-initialize params))
+    "notifications/initialized" nil
+    "tools/list"              (format-response id (handle-tools-list params))
+    "tools/call"              (format-response id (handle-tools-call params defaults))
+    "ping"                    (format-response id {})
+    "resources/list"          (format-response id {:resources []})
+    (format-error id -32601 (str "Method not found: " method))))
+
+(defn- process-line!
+  "Parse one JSON-RPC line, dispatch, and write response."
+  [line ^PrintWriter writer defaults]
+  (try
+    (let [request (json/read-str line)
+          id      (get request "id")
+          method  (get request "method")
+          params  (or (get request "params") {})]
+      (when-let [response (dispatch-method id method params defaults)]
+        (.println writer response)))
+    (catch Exception e
+      (log! "parse/error" (.getMessage e))
+      (.println writer (format-error nil -32700 "Parse error")))))
+
 (defn serve!
   "Start MCP server. Reads JSON-RPC from stdin, writes responses to stdout.
    Blocks until stdin EOF. Options: :db-dir, :provider, :model."
@@ -628,33 +664,5 @@
                           :oversized))]
         (when-not (= line :oversized)
           (when (seq line)
-            (try
-              (let [request (json/read-str line)
-                    id      (get request "id")
-                    method  (get request "method")
-                    params  (or (get request "params") {})]
-                (case method
-                  "initialize"
-                  (.println writer (format-response id (handle-initialize params)))
-
-                  "notifications/initialized"
-                  nil ;; notification, no response
-
-                  "tools/list"
-                  (.println writer (format-response id (handle-tools-list params)))
-
-                  "tools/call"
-                  (.println writer (format-response id (handle-tools-call params defaults)))
-
-                  "ping"
-                  (.println writer (format-response id {}))
-
-                  "resources/list"
-                  (.println writer (format-response id {:resources []}))
-
-                  ;; unknown method
-                  (.println writer (format-error id -32601 (str "Method not found: " method)))))
-              (catch Exception e
-                (log! "parse/error" (.getMessage e))
-                (.println writer (format-error nil -32700 "Parse error"))))))
+            (process-line! line writer defaults)))
         (recur)))))
