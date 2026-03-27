@@ -2,7 +2,7 @@
 
 All notable changes to Noumenon are documented in this file.
 
-## 0.1.0 — Initial Public Release
+## 0.1.0 — 2026-03-27 — Initial Public Release
 
 First public release of Noumenon, a Datomic-backed knowledge graph for
 AI-assisted codebase understanding.
