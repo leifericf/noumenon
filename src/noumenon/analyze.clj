@@ -511,7 +511,9 @@
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
   ([conn repo-path invoke-llm {:keys [model-id concurrency min-delay-ms max-files]
                                :or   {concurrency 3 min-delay-ms 0}}]
-   (let [all-files     (files-needing-analysis (d/db conn))
+   (let [head-paths    (into #{} (map :path) (files/parse-ls-tree (files/git-ls-tree repo-path)))
+         all-files     (->> (files-needing-analysis (d/db conn))
+                            (filterv (comp head-paths :file/path)))
          files         (if max-files (vec (take max-files all-files)) all-files)
          total         (count files)
          prompt-map    (load-prompt-template)
