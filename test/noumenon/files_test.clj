@@ -3,8 +3,8 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [datomic.client.api :as d]
-            [noumenon.db :as db]
-            [noumenon.files :as files]))
+            [noumenon.files :as files]
+            [noumenon.test-helpers :as th]))
 
 ;; --- Tier 0: Pure function tests ---
 
@@ -150,7 +150,7 @@
 ;; --- Tier 1: Integration tests (in-memory Datomic + real git repo) ---
 
 (defn- test-conn []
-  (db/connect-and-ensure-schema :mem (str "files-test-" (random-uuid))))
+  (th/make-test-conn "files-test"))
 
 (def ^:private repo-path (System/getProperty "user.dir"))
 

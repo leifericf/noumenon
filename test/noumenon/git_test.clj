@@ -3,8 +3,8 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [datomic.client.api :as d]
-            [noumenon.db :as db]
             [noumenon.git :as git]
+            [noumenon.test-helpers :as th]
             [noumenon.util :as util]))
 
 ;; --- Test helpers ---
@@ -175,7 +175,7 @@
 ;; --- Tier 1: Integration tests (in-memory Datomic + real git repo) ---
 
 (defn- test-conn []
-  (db/connect-and-ensure-schema :mem (str "git-test-" (random-uuid))))
+  (th/make-test-conn "git-test"))
 
 (defn- repo-commit-count
   "Get the total commit count for the repo at the given path."

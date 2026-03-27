@@ -8,7 +8,7 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [datomic.client.api :as d]
             [noumenon.db :as db]
-            [noumenon.main :as main]))
+            [noumenon.test-helpers :as th]))
 
 ;; --- Test infrastructure ---
 
@@ -22,15 +22,7 @@
        "/noumenon-ring-test-" (random-uuid)))
 
 (defn- ensure-ring-clone! []
-  (when-not (.exists (io/file ring-dir ".git"))
-    (.mkdirs (io/file ring-dir))
-    (let [{:keys [exit err]} (shell/sh "git" "clone" "--no-checkout" ring-url ring-dir)]
-      (when (not= 0 exit)
-        (throw (ex-info (str "Failed to clone Ring: " err) {:exit exit}))))
-    ;; Check out HEAD so ls-tree works
-    (let [{:keys [exit err]} (shell/sh "git" "-C" ring-dir "checkout" "HEAD")]
-      (when (not= 0 exit)
-        (throw (ex-info (str "Failed to checkout Ring: " err) {:exit exit}))))))
+  (th/ensure-git-clone! ring-url ring-dir))
 
 (defn- git-count [& args]
   (let [{:keys [exit out err]} (apply shell/sh "git" "-C" ring-dir args)]
@@ -38,12 +30,7 @@
       (throw (ex-info (str "git command failed: " err) {:args args :exit exit})))
     (-> out str/trim parse-long)))
 
-(defn- run-capturing [args]
-  (let [out (java.io.StringWriter.)
-        err (java.io.StringWriter.)]
-    (binding [*out* out *err* err]
-      (let [result (main/run args)]
-        (assoc result :stdout (str out) :stderr (str err))))))
+(def ^:private run-capturing th/run-capturing)
 
 (use-fixtures :once
   (fn [f]

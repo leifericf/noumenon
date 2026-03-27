@@ -8,7 +8,7 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [datomic.client.api :as d]
             [noumenon.db :as db]
-            [noumenon.main :as main]))
+            [noumenon.test-helpers :as th]))
 
 ;; --- Test infrastructure ---
 
@@ -27,21 +27,9 @@
     (catch Exception _ false)))
 
 (defn- ensure-jason-clone! []
-  (when-not (.exists (io/file jason-dir ".git"))
-    (.mkdirs (io/file jason-dir))
-    (let [{:keys [exit err]} (shell/sh "git" "clone" "--no-checkout" jason-url jason-dir)]
-      (when (not= 0 exit)
-        (throw (ex-info (str "Failed to clone Jason: " err) {:exit exit}))))
-    (let [{:keys [exit err]} (shell/sh "git" "-C" jason-dir "checkout" "HEAD")]
-      (when (not= 0 exit)
-        (throw (ex-info (str "Failed to checkout Jason: " err) {:exit exit}))))))
+  (th/ensure-git-clone! jason-url jason-dir))
 
-(defn- run-capturing [args]
-  (let [out (java.io.StringWriter.)
-        err (java.io.StringWriter.)]
-    (binding [*out* out *err* err]
-      (let [result (main/run args)]
-        (assoc result :stdout (str out) :stderr (str err))))))
+(def ^:private run-capturing th/run-capturing)
 
 (use-fixtures :once
   (fn [f]

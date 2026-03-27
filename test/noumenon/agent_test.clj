@@ -2,15 +2,15 @@
   (:require [clojure.test :refer [deftest is testing]]
             [datomic.client.api :as d]
             [noumenon.agent :as agent]
-            [noumenon.db :as db]
-            [noumenon.query :as query]))
+            [noumenon.query :as query]
+            [noumenon.test-helpers :as th]))
 
 ;; --- Helpers ---
 
 (defn- make-test-db
   "Create an in-memory DB with schema and some test data."
   []
-  (let [conn (db/connect-and-ensure-schema :mem (str "agent-test-" (System/currentTimeMillis)))]
+  (let [conn (th/make-test-conn "agent-test")]
     (d/transact conn {:tx-data [{:file/path "src/core.clj" :file/ext ".clj"
                                  :file/lines 100 :file/size 3000
                                  :sem/complexity :complex :arch/layer :core}

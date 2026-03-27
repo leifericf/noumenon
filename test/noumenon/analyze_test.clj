@@ -3,7 +3,7 @@
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
-            [noumenon.db :as db]))
+            [noumenon.test-helpers :as th]))
 
 ;; --- Tier 0: Pure function tests ---
 
@@ -313,10 +313,8 @@
 
 ;; --- Tier 1: Integration tests ---
 
-(defn- make-conn
-  "Create an in-memory Datomic connection with schema."
-  []
-  (db/connect-and-ensure-schema :mem (str "analyze-test-" (random-uuid))))
+(defn- make-conn []
+  (th/make-test-conn "analyze-test"))
 
 (defn- import-stub-file!
   "Transact a minimal file entity with :file/lang."

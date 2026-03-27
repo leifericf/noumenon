@@ -3,8 +3,8 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [datomic.client.api :as d]
-            [noumenon.db :as db]
-            [noumenon.query :as query]))
+            [noumenon.query :as query]
+            [noumenon.test-helpers :as th]))
 
 ;; --- Tier 0: Loading tests ---
 
@@ -53,7 +53,7 @@
 ;; --- Tier 1: Integration tests ---
 
 (defn- make-conn []
-  (db/connect-and-ensure-schema :mem (str "query-test-" (random-uuid))))
+  (th/make-test-conn "query-test"))
 
 (deftest files-by-complexity-query
   (let [conn (make-conn)]

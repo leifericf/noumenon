@@ -1,7 +1,7 @@
 (ns noumenon.main-test
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [noumenon.main :as main]
+            [noumenon.test-helpers :as th]
             [noumenon.util :as util]))
 
 ;; --- Tier 0: Pure function tests ---
@@ -41,16 +41,7 @@
 
 ;; --- Tier 0: CLI dispatch / error cases (capture stdout+stderr) ---
 
-(defn- run-capturing
-  "Run main/run, capturing stdout and stderr strings."
-  [args]
-  (let [out (java.io.StringWriter.)
-        err (java.io.StringWriter.)]
-    (binding [*out* out *err* err]
-      (let [result (main/run args)]
-        (assoc result
-               :stdout (str out)
-               :stderr (str err))))))
+(def ^:private run-capturing th/run-capturing)
 
 (deftest no-args-shows-usage
   (let [{:keys [exit stdout stderr]} (run-capturing [])]
