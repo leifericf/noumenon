@@ -560,7 +560,8 @@
    :invalid-max-files            #(str "Invalid --max-files value: " (:value %))
    :missing-max-files-value      "Missing value for --max-files."
    :invalid-interval             #(str "Invalid --interval value: " (:value %) ". Must be a positive integer.")
-   :missing-interval-value       "Missing value for --interval."})
+   :missing-interval-value       "Missing value for --interval."
+   :missing-layers-value         "Missing value for --layers. Example: --layers raw,full"})
 
 (def ^:private errors-with-global-usage
   #{:no-args :unknown-subcommand})
@@ -572,7 +573,8 @@
     :invalid-concurrency :missing-concurrency-value
     :invalid-min-delay :missing-min-delay-value
     :invalid-max-iterations :missing-max-iterations-value
-    :invalid-interval :missing-interval-value})
+    :invalid-interval :missing-interval-value
+    :missing-layers-value})
 
 ;; --- Entry point ---
 
