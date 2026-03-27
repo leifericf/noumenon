@@ -1,0 +1,57 @@
+;; Standard benchmark suite — one repo per supported language.
+;; Run each with: clj -M:run digest <url-or-local-path>
+;; Then: clj -M:run benchmark <local-path>
+[{:lang     :clojure
+  :name     "ring"
+  :url      "https://github.com/ring-clojure/ring.git"
+  :notes    "Canonical Clojure web library. ~1,300 commits."}
+
+ {:lang     :python
+  :name     "flask"
+  :url      "https://github.com/pallets/flask.git"
+  :notes    "Python micro-framework. ~5,000 commits. Has rename edge cases."}
+
+ {:lang     :javascript
+  :name     "express"
+  :url      "https://github.com/expressjs/express.git"
+  :notes    "Node.js web framework. ~5,500 commits."}
+
+ {:lang     :typescript
+  :name     "fresh"
+  :url      "https://github.com/denoland/fresh.git"
+  :notes    "Deno web framework. TypeScript-first."}
+
+ {:lang     :c
+  :name     "redis"
+  :url      "https://github.com/redis/redis.git"
+  :notes    "In-memory data store. ~13,000 commits. Large — may hit API limits."}
+
+ {:lang     :go
+  :name     "fzf"
+  :url      "https://github.com/junegunn/fzf.git"
+  :notes    "Fuzzy finder. Moderate size Go project."}
+
+ {:lang     :rust
+  :name     "ripgrep"
+  :url      "https://github.com/BurntSushi/ripgrep.git"
+  :notes    "Fast grep tool. Multi-crate Rust workspace."}
+
+ {:lang     :java
+  :name     "guava"
+  :url      "https://github.com/google/guava.git"
+  :notes    "Google core Java libraries. Very large — may hit API limits."}
+
+ {:lang     :elixir
+  :name     "jason"
+  :url      "https://github.com/michalmuskala/jason.git"
+  :notes    "Fast JSON parser for Elixir. Small but exercises Elixir import parsing."}
+
+ {:lang     :cpp
+  :name     "spdlog"
+  :url      "https://github.com/gabime/spdlog.git"
+  :notes    "Fast C++ logging library. ~3,000 commits. Header-heavy, good include graph."}
+
+ {:lang     :erlang
+  :name     "cowboy"
+  :url      "https://github.com/ninenines/cowboy.git"
+  :notes    "Erlang HTTP server. Small-to-moderate size."}]
