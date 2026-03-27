@@ -299,9 +299,9 @@
                                     concurrency-flags
                                     budget-flags
                                     [{:flag "--skip-import" :key :skip-import :parse :bool
-                                      :desc "Skip import+enrich step (alias: --skip-enrich)"}
+                                      :desc "Skip import (use both --skip-import --skip-enrich to skip combined step)"}
                                      {:flag "--skip-enrich" :key :skip-enrich :parse :bool
-                                      :desc "Skip import+enrich step (alias: --skip-import)"}
+                                      :desc "Skip enrich (use both --skip-import --skip-enrich to skip combined step)"}
                                      {:flag "--skip-analyze" :key :skip-analyze :parse :bool
                                       :desc "Skip analyze step"}
                                      {:flag "--skip-benchmark" :key :skip-benchmark :parse :bool

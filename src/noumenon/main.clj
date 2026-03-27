@@ -239,12 +239,12 @@
           (fn [{:keys [db db-name]}]
             (let [{:keys [invoke-fn]}
                   (llm/make-messages-fn-from-opts {:provider    provider
-                                                 :model       model
-                                                 :temperature 0.3
-                                                 :max-tokens  4096})
+                                                   :model       model
+                                                   :temperature 0.3
+                                                   :max-tokens  4096})
                   result (agent/ask db question
-                                         (cond-> {:invoke-fn invoke-fn :repo-name db-name}
-                                           max-iterations (assoc :max-iterations max-iterations)))]
+                                    (cond-> {:invoke-fn invoke-fn :repo-name db-name}
+                                      max-iterations (assoc :max-iterations max-iterations)))]
               (when verbose
                 (let [max-iters (or max-iterations 10)]
                   (doseq [step (:steps result)]
@@ -487,8 +487,8 @@
               results   (atom {})
               t0        (System/currentTimeMillis)
               elapsed   #(str " (" (- (System/currentTimeMillis) %) " ms)")]
-          ;; Step 1: Import + Enrich (via update-repo!)
-          (when-not (or skip-import skip-enrich)
+          ;; Step 1: Import + Enrich (combined via update-repo!)
+          (when-not (and skip-import skip-enrich)
             (log! "digest: import + enrich...")
             (let [start (System/currentTimeMillis)
                   r     (sync/update-repo! conn repo-path repo-uri
