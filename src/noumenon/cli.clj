@@ -224,10 +224,10 @@
 
 (def ^:private ask-command-spec
   {:flags [{:flag "-q" :key :question :parse :string
-            :desc "Alias for --question"
+            :desc "Question to ask (place before <repo-path>)"
             :error-missing :ask-missing-question}
            {:flag "--question" :key :question :parse :string
-            :desc "Question to ask about the repository"
+            :desc "Question to ask about the repository (place before <repo-path>)"
             :error-missing :ask-missing-question}
            {:flag "--model" :key :model :parse :string
             :desc "Model alias (e.g. sonnet, haiku, opus)"
@@ -275,7 +275,8 @@
                 :epilog "Polls git HEAD every --interval seconds (default: 30).\nRuns update automatically when new commits are detected.\nPass --analyze to also re-analyze changed files."}
    "query"     {:spec query-command-spec
                 :summary "Run a named Datalog query against the knowledge graph"
-                :usage "query [options] <query-name> <repo-path>\n       query list"}
+                :usage "query [options] <query-name> <repo-path>\n       query list"
+                :epilog "Run `query list` to see all available named queries with descriptions.\nSome queries accept --param key=value inputs — check the query listing."}
    "status"         {:spec simple-command-spec
                      :summary "Show import counts for a repository"
                      :usage "status [options] <repo-path>"}
@@ -298,9 +299,9 @@
                                     concurrency-flags
                                     budget-flags
                                     [{:flag "--skip-import" :key :skip-import :parse :bool
-                                      :desc "Skip import step"}
+                                      :desc "Skip import+enrich step"}
                                      {:flag "--skip-enrich" :key :skip-enrich :parse :bool
-                                      :desc "Skip enrich step"}
+                                      :desc "Skip import+enrich step"}
                                      {:flag "--skip-analyze" :key :skip-analyze :parse :bool
                                       :desc "Skip analyze step"}
                                      {:flag "--skip-benchmark" :key :skip-benchmark :parse :bool

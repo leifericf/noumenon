@@ -335,12 +335,12 @@
 (defn- print-db-stats
   [{:keys [name commits files dirs latest cost ops error]}]
   (if error
-    (println (format "  %-24s (error: %s)" name error))
+    (log! (format "  %-24s (error: %s)" name error))
     (let [date-str  (if latest (str "  (latest: " (format-date latest) ")") "")
           cost-str  (if (pos? cost) (format "  $%.2f" cost) "")
           stage-str (or (format-pipeline ops) "")]
-      (println (format "  %-24s %d commits, %d files, %d dirs%s%s%s"
-                       name commits files dirs date-str cost-str stage-str)))))
+      (log! (format "  %-24s %d commits, %d files, %d dirs%s%s%s"
+                    name commits files dirs date-str cost-str stage-str)))))
 
 (defn do-list-databases
   "List all databases or delete one. Returns {:exit n :result vec-or-nil}."
@@ -491,30 +491,37 @@
     (update opts :repo-path resolve-repo-path)
     (fn [{:keys [repo-path db-dir db-name]}]
       (try
-        (let [conn     (db/connect-and-ensure-schema db-dir db-name)
-              repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
-              results  (atom {})]
+        (let [conn      (db/connect-and-ensure-schema db-dir db-name)
+              repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
+              results   (atom {})
+              t0        (System/currentTimeMillis)
+              elapsed   #(str " (" (- (System/currentTimeMillis) %) " ms)")]
           ;; Step 1: Import + Enrich (via update-repo!)
           (when-not (or skip-import skip-enrich)
             (log! "digest: import + enrich...")
-            (let [r (sync/update-repo! conn repo-path repo-uri
-                                       {:concurrency (or concurrency 8)})]
+            (let [start (System/currentTimeMillis)
+                  r     (sync/update-repo! conn repo-path repo-uri
+                                           {:concurrency (or concurrency 8)})]
+              (log! (str "digest: import + enrich done" (elapsed start)))
               (swap! results assoc :update r)))
           ;; Step 2: Analyze
           (when-not skip-analyze
             (log! "digest: analyze...")
-            (let [provider-kw (llm/provider->kw (or provider llm/default-provider))
+            (let [start       (System/currentTimeMillis)
+                  provider-kw (llm/provider->kw (or provider llm/default-provider))
                   model-id    (llm/model-alias->id (or model llm/default-model-alias))
                   invoke-llm  (llm/make-prompt-fn
                                (llm/make-invoke-fn provider-kw {:model model-id}))
                   r (analyze/analyze-repo! conn repo-path invoke-llm
                                            {:model-id model-id
                                             :concurrency (or concurrency 3)})]
+              (log! (str "digest: analyze done" (elapsed start)))
               (swap! results assoc :analyze r)))
           ;; Step 3: Benchmark
           (when-not skip-benchmark
             (log! "digest: benchmark...")
-            (let [db          (d/db conn)
+            (let [start       (System/currentTimeMillis)
+                  db          (d/db conn)
                   provider-kw (llm/provider->kw (or provider llm/default-provider))
                   model-id    (llm/model-alias->id (or model llm/default-model-alias))
                   invoke-llm  (llm/make-prompt-fn
@@ -526,9 +533,10 @@
                                           :budget {:max-questions max-questions}
                                           :report? report
                                           :concurrency (or concurrency 3))]
+              (log! (str "digest: benchmark done" (elapsed start)))
               (swap! results assoc :benchmark
                      (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
-          (log! "digest: complete")
+          (log! (str "digest: complete" (elapsed t0)))
           {:exit 0 :result @results})
         (catch Exception e
           (print-error! (.getMessage e))
