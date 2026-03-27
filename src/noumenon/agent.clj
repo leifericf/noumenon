@@ -129,6 +129,10 @@
 (def ^:private default-row-limit 100)
 (def ^:private max-row-limit 1000)
 
+(def ^:private query-timeout-ms
+  "Maximum time allowed for a single Datalog query (30 seconds)."
+  30000)
+
 (defn- dispatch-query
   "Execute a Datalog query against db. Returns result text with optional truncation note."
   [db parsed-args]
@@ -138,15 +142,19 @@
       (try
         (let [limit  (min (or (:limit parsed-args) default-row-limit) max-row-limit)
               rules  (query/load-rules)
-              result (try
-                       (d/q q db rules)
-                       (catch Exception _
-                         (d/q q db)))
-              taken  (vec (take (inc limit) result))
-              capped (take limit taken)]
-          (str (pr-str (vec capped))
-               (when (> (count taken) limit)
-                 (str "\n;; Showing " limit " of " limit "+ results. Refine your query or specify :limit."))))
+              f      (future (try
+                               (d/q q db rules)
+                               (catch Exception _
+                                 (d/q q db))))
+              result (deref f query-timeout-ms ::timeout)]
+          (if (= result ::timeout)
+            (do (future-cancel f)
+                "Query timed out after 30 seconds. Simplify the query or add more constraints.")
+            (let [taken  (vec (take (inc limit) result))
+                  capped (take limit taken)]
+              (str (pr-str (vec capped))
+                   (when (> (count taken) limit)
+                     (str "\n;; Showing " limit " of " limit "+ results. Refine your query or specify :limit."))))))
         (catch Exception e
           (str "Query error: " (.getMessage e)))))))
 

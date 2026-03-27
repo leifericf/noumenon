@@ -192,6 +192,15 @@
     (is (:result result))
     (is (re-find #"Showing 2 of 2\+" (:result result)))))
 
+(deftest dispatch-query-returns-timeout-on-slow-query
+  (let [db     (make-test-db)
+        result (with-redefs [noumenon.agent/query-timeout-ms 50
+                             d/q (fn [& _] (Thread/sleep 500) [])]
+                 (agent/dispatch-tool db {:tool :query
+                                          :args {:query '[:find ?p :where [?e :file/path ?p]]}}))]
+    (is (:result result))
+    (is (re-find #"timed out" (:result result)))))
+
 (deftest dispatch-query-clamps-limit-to-max
   (let [db     (make-test-db)
         result (agent/dispatch-tool db {:tool :query
