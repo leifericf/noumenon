@@ -114,8 +114,7 @@
               (recur (inc attempt)))
 
           (not= 200 status)
-          (do (log! (str "API error response (HTTP " status "): "
-                         (truncate (str body) 200)))
+          (do (log! (str "API error response (HTTP " status ")"))
               (throw (ex-info (str "API error: HTTP " status)
                               {:status status :attempts attempt})))
 
