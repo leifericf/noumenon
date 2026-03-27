@@ -482,8 +482,10 @@
       (try
         (let [conn      (db/connect-and-ensure-schema db-dir db-name)
               repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
+              needs-llm (not (and skip-analyze skip-benchmark))
               {:keys [prompt-fn model-id]}
-              (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})
+              (when needs-llm
+                (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model}))
               results   (atom {})
               t0        (System/currentTimeMillis)
               elapsed   #(str " (" (- (System/currentTimeMillis) %) " ms)")]
