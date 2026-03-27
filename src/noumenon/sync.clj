@@ -51,11 +51,13 @@
                        (let [fields (str/split line #"\t")
                              status (first fields)]
                          (if (and status (>= (count fields) 2))
-                           (if (= \R (first status))
-                             (let [old-path (nth fields 1)
-                                   new-path (nth fields 2 nil)]
-                               (cond-> (update acc :deleted conj old-path)
-                                 new-path (update :added conj new-path)))
+                           (case (first status)
+                             \R (let [old-path (nth fields 1)
+                                      new-path (nth fields 2 nil)]
+                                  (cond-> (update acc :deleted conj old-path)
+                                    new-path (update :added conj new-path)))
+                             \C (let [new-path (nth fields 2 nil)]
+                                  (if new-path (update acc :added conj new-path) acc))
                              (let [path (nth fields 1)
                                    k    (case (first status)
                                           \A :added

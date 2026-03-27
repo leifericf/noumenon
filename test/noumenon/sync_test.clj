@@ -35,5 +35,11 @@
         (is (= ["src/new.clj" "src/renamed.clj"] (:added result)))
         (is (= ["src/changed.clj"] (:modified result)))
         (is (= ["src/gone.clj" "src/old.clj"] (:deleted result))))))
+  (testing "copy lines produce :added for new path only"
+    (with-redefs [shell/sh (constantly {:exit 0 :out "C100\tsrc/orig.clj\tsrc/copy.clj\n"})]
+      (let [result (sync/changed-files "/tmp" test-sha)]
+        (is (= ["src/copy.clj"] (:added result)))
+        (is (= [] (:deleted result)))
+        (is (= [] (:modified result))))))
   (testing "invalid SHA returns nil"
     (is (nil? (sync/changed-files "/tmp" "not-a-sha")))))
