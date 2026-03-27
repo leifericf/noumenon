@@ -112,8 +112,7 @@
       (throw (ex-info (str "git ls-tree failed: " (str/trim (or err "")))
                       {:exit exit})))
     (let [files (->> (str/split-lines out)
-                     (remove str/blank?)
-                     (filter #(re-find #"\.(clj[cs]?|java)$" %)))]
+                     (remove str/blank?))]
       (loop [remaining files
              parts     []
              total     0]

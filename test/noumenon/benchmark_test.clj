@@ -135,6 +135,23 @@
           "closing delimiter must not appear literally in sanitized output")
       (is (str/includes? (sanitize content) "&lt;/file-content&gt;")))))
 
+(deftest raw-context-includes-all-file-types
+  (testing "raw-context includes non-JVM files (C++, Erlang, Python, etc.)"
+    (with-redefs [clojure.java.shell/sh
+                  (fn [& args]
+                    (let [cmd (str/join " " args)]
+                      (cond
+                        (str/includes? cmd "ls-tree")
+                        {:exit 0 :out "main.cpp\nlib.erl\napp.py\ncore.clj\n" :err ""}
+                        (str/includes? cmd "show")
+                        {:exit 0 :out "file content" :err ""}
+                        :else {:exit 1 :out "" :err "unexpected"})))]
+      (let [ctx (bench/raw-context "/tmp/test-repo")]
+        (is (str/includes? ctx "main.cpp") "C++ files must be included")
+        (is (str/includes? ctx "lib.erl") "Erlang files must be included")
+        (is (str/includes? ctx "app.py") "Python files must be included")
+        (is (str/includes? ctx "core.clj") "Clojure files must be included")))))
+
 ;; --- Tier 0: Checkpoint infrastructure ---
 
 (deftest generate-run-id-format
