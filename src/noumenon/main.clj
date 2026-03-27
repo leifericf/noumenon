@@ -226,7 +226,8 @@
         (with-existing-db
           ctx
           (fn [{:keys [db]}]
-            (let [{:keys [ok error]} (query/run-named-query db query-name params)]
+            (let [kw-params (into {} (map (fn [[k v]] [(keyword k) v])) params)
+                  {:keys [ok error]} (query/run-named-query db query-name kw-params)]
               (if error
                 (do (print-error! error)
                     (when (str/starts-with? (str error) "Missing required inputs")
