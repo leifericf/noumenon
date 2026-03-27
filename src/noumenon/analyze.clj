@@ -117,13 +117,15 @@
   (cond-> s (string? s) (util/truncate max-string-length)))
 
 (defn strip-markdown-fences
-  "Remove markdown code fences from LLM output."
+  "Remove markdown code fences from LLM output. Returns empty string for nil."
   [s]
-  (-> s
-      str/trim
-      (str/replace #"^```\w*\n?" "")
-      (str/replace #"\n?```$" "")
-      str/trim))
+  (if-not s
+    ""
+    (-> s
+        str/trim
+        (str/replace #"^```\w*\n?" "")
+        (str/replace #"\n?```$" "")
+        str/trim)))
 
 (defn- non-blank? [s] (and (string? s) (not (str/blank? s))))
 

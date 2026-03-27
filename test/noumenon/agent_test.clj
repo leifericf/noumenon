@@ -40,6 +40,10 @@
   (let [result (agent/parse-response "this is not edn {{{")]
     (is (:parse-error result))))
 
+(deftest parse-response-nil-returns-parse-error
+  (let [result (agent/parse-response nil)]
+    (is (:parse-error result))))
+
 (deftest parse-response-returns-error-on-non-map
   (let [result (agent/parse-response "[:not :a :map]")]
     (is (:parse-error result))))

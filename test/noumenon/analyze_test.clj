@@ -25,6 +25,12 @@
   (is (not= (analyze/prompt-hash "template A")
             (analyze/prompt-hash "template B"))))
 
+(deftest strip-markdown-fences-nil-safe
+  (is (= "" (analyze/strip-markdown-fences nil))))
+
+(deftest strip-markdown-fences-removes-fences
+  (is (= "{:tool :answer}" (analyze/strip-markdown-fences "```edn\n{:tool :answer}\n```"))))
+
 (deftest render-prompt-substitutes
   (let [template "File: {{file-path}} Lang: {{lang}} Lines: {{line-count}}"
         result   (analyze/render-prompt template {:file-path "src/foo.clj"
