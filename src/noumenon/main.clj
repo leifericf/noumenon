@@ -204,9 +204,11 @@
   (let [queries (->> (query/list-query-names)
                      (mapv (fn [qname]
                              {:name        qname
-                              :description (or (:description (query/load-named-query qname)) "")})))]
+                              :description (or (:description (query/load-named-query qname)) "")})))
+        width   (+ 4 (reduce max 0 (map (comp count :name) queries)))
+        fmt-str (str "  %-" width "s %s")]
     (doseq [{:keys [name description]} queries]
-      (log! (format "  %-28s %s" name description)))
+      (log! (format fmt-str name description)))
     {:exit 0 :result queries}))
 
 (defn do-query
