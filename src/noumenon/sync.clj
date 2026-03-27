@@ -165,39 +165,37 @@
     (if (and stored (= stored current))
       (do (log! "Already up to date" (str "(HEAD " (subs current 0 7) ")"))
           {:status :up-to-date :head-sha current :elapsed-ms 0})
-      (let [fresh?     (or (nil? stored) (not (valid-sha? stored)))
-            changes    (when-not fresh? (changed-files repo-path stored))
-            _          (when (seq (:modified changes))
-                         (retract-stale! conn (:modified changes)))
-            _          (when (seq (:deleted changes))
-                         (retract-deleted-files! conn (:deleted changes)))
-            _          (when-not fresh?
-                         (log! (str "Incremental sync: "
-                                    (count (:added changes)) " added, "
-                                    (count (:modified changes)) " modified, "
-                                    (count (:deleted changes)) " deleted")))
-            git-r      (git/import-commits! conn repo-path repo-uri)
-            files-r    (files/import-files! conn repo-path repo-uri)
-            post-r     (imports/enrich-repo! conn repo-path
-                                             {:concurrency (or (:concurrency opts) 8)})
-            analyze-r  (when (:analyze? opts)
-                         (let [invoke-llm (:invoke-llm opts)]
-                           (when invoke-llm
-                             (analyze/analyze-repo!
-                              conn repo-path invoke-llm
-                              {:model-id     (:model-id opts)
-                               :concurrency  (or (:analyze-concurrency opts) 3)
-                               :min-delay-ms 0}))))
-            _          (update-head-sha! conn repo-path repo-uri)
-            elapsed    (- (System/currentTimeMillis) start-ms)]
-        (log! (str "Update complete (" elapsed " ms)"))
-        (cond-> {:status      (if fresh? :fresh-import :synced)
-                 :head-sha    current
-                 :added       (count (:added changes []))
-                 :modified    (count (:modified changes []))
-                 :deleted     (count (:deleted changes []))
-                 :commits     (:commits-imported git-r 0)
-                 :files       (:files-imported files-r 0)
-                 :imports     (:imports-resolved post-r 0)
-                 :elapsed-ms  elapsed}
-          analyze-r (assoc :analyzed (:files-analyzed analyze-r 0)))))))
+      (let [fresh?  (or (nil? stored) (not (valid-sha? stored)))
+            changes (when-not fresh? (changed-files repo-path stored))]
+        (when (seq (:modified changes))
+          (retract-stale! conn (:modified changes)))
+        (when (seq (:deleted changes))
+          (retract-deleted-files! conn (:deleted changes)))
+        (when-not fresh?
+          (log! (str "Incremental sync: "
+                     (count (:added changes)) " added, "
+                     (count (:modified changes)) " modified, "
+                     (count (:deleted changes)) " deleted")))
+        (let [git-r     (git/import-commits! conn repo-path repo-uri)
+              files-r   (files/import-files! conn repo-path repo-uri)
+              post-r    (imports/enrich-repo! conn repo-path
+                                              {:concurrency (or (:concurrency opts) 8)})
+              analyze-r (when-let [invoke-llm (:invoke-llm opts)]
+                          (analyze/analyze-repo!
+                           conn repo-path invoke-llm
+                           {:model-id     (:model-id opts)
+                            :concurrency  (or (:analyze-concurrency opts) 3)
+                            :min-delay-ms 0}))]
+          (update-head-sha! conn repo-path repo-uri)
+          (let [elapsed (- (System/currentTimeMillis) start-ms)]
+            (log! (str "Update complete (" elapsed " ms)"))
+            (cond-> {:status      (if fresh? :fresh-import :synced)
+                     :head-sha    current
+                     :added       (count (:added changes []))
+                     :modified    (count (:modified changes []))
+                     :deleted     (count (:deleted changes []))
+                     :commits     (:commits-imported git-r 0)
+                     :files       (:files-imported files-r 0)
+                     :imports     (:imports-resolved post-r 0)
+                     :elapsed-ms  elapsed}
+              analyze-r (assoc :analyzed (:files-analyzed analyze-r 0)))))))))

@@ -214,21 +214,19 @@
   "Resolve db-dir and db-name from arguments, get/create connection, call f with conn and db.
    When auto-update is enabled (default), transparently updates stale databases before returning."
   [args defaults f]
-  (let [raw-path  (args "repo_path")
-        _         (validate-string-length! "repo_path" raw-path max-repo-path-len)
-        repo-path (.getCanonicalPath (io/file raw-path))
-        _         (validate-repo-path! repo-path)
-        db-dir  (util/resolve-db-dir defaults)
-        db-name (util/derive-db-name repo-path)
-        conn    (get-or-create-conn db-dir db-name)
-        _       (when (:auto-update defaults true)
-                  (let [db (d/db conn)]
-                    (when (sync/stale? db repo-path)
-                      (log! "auto-update" "HEAD changed, updating...")
-                      (let [repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))]
-                        (sync/update-repo! conn repo-path repo-uri {:concurrency 8})))))
-        db      (d/db conn)]
-    (f {:conn conn :db db :repo-path repo-path :db-name db-name})))
+  (let [raw-path  (args "repo_path")]
+    (validate-string-length! "repo_path" raw-path max-repo-path-len)
+    (let [repo-path (.getCanonicalPath (io/file raw-path))]
+      (validate-repo-path! repo-path)
+      (let [db-dir  (util/resolve-db-dir defaults)
+            db-name (util/derive-db-name repo-path)
+            conn    (get-or-create-conn db-dir db-name)]
+        (when (:auto-update defaults true)
+          (let [db (d/db conn)]
+            (when (sync/stale? db repo-path)
+              (log! "auto-update" "HEAD changed, updating...")
+              (sync/update-repo! conn repo-path repo-path {:concurrency 8}))))
+        (f {:conn conn :db (d/db conn) :repo-path repo-path :db-name db-name})))))
 
 (defn- format-import-summary [git-r files-r]
   (str "Import complete. "
