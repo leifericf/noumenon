@@ -39,7 +39,7 @@
    Returns nil if old-sha is not a valid 40-char hex SHA."
   [repo-path old-sha]
   (if-not (valid-sha? old-sha)
-    (do (log! "WARNING" (str "Invalid SHA format, skipping diff: " (pr-str old-sha)))
+    (do (log! (str "WARNING: Invalid SHA format, skipping diff: " (pr-str old-sha)))
         nil)
     (let [{:keys [exit out]}
           (shell/sh "git" "-C" (str repo-path)

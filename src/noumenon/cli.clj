@@ -289,7 +289,7 @@
    "ask"            {:spec ask-command-spec
                      :summary "Ask a question about a repository using AI-powered querying"
                      :usage "ask -q <question> [options] <repo-path>"
-                     :epilog "Exit codes: 0 = answered, 1 = error, 2 = budget exhausted (no answer found)."}
+                     :epilog "Exit codes: 0 = answered, 1 = error, 2 = budget exhausted (no answer found).\nStdout: EDN map with :answer, :status, and :usage (for scripting). Human output goes to stderr."}
    "benchmark" {:spec benchmark-command-spec
                 :summary "Evaluate knowledge graph efficacy against a repository"
                 :usage "benchmark [options] <repo-path>"
@@ -299,9 +299,9 @@
                                     concurrency-flags
                                     budget-flags
                                     [{:flag "--skip-import" :key :skip-import :parse :bool
-                                      :desc "Skip import+enrich step"}
+                                      :desc "Skip import+enrich step (alias: --skip-enrich)"}
                                      {:flag "--skip-enrich" :key :skip-enrich :parse :bool
-                                      :desc "Skip import+enrich step"}
+                                      :desc "Skip import+enrich step (alias: --skip-import)"}
                                      {:flag "--skip-analyze" :key :skip-analyze :parse :bool
                                       :desc "Skip analyze step"}
                                      {:flag "--skip-benchmark" :key :skip-benchmark :parse :bool

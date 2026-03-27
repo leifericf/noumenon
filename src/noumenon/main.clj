@@ -143,8 +143,9 @@
         (fn [{:keys [conn repo-path]}]
           (let [result (imports/enrich-repo! conn repo-path
                                              {:concurrency (or concurrency 8)})]
-            (log! (str "Next: run '" cli/program-name " query file-imports "
-                       repo-path "' to explore the import graph."))
+            (log! (str "Next: run '" cli/program-name " analyze " repo-path
+                       "' for semantic metadata, then '" cli/program-name
+                       " query file-imports " repo-path "' to explore."))
             {:exit 0 :result result}))))))
 
 (defn do-update
