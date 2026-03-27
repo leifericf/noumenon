@@ -1,126 +1,129 @@
-# Security Issue Discovery — Pass 1
+# Security Issue Discovery — Round 3 (Post-Fix Audit)
 
 **Scope:** Full repo (src/noumenon/*.clj)
-**Commit:** e63cd59
-**Date:** 2026-03-26
+**Commit:** f4ff045acef240ea951c0fbdf41d3249fe5c63f1
+**Date:** 2026-03-27
+**Purpose:** Verify Round 2 fixes, check for regressions and new issues in commits since e63cd59
+
+---
+
+## Fix Verification (Round 2 fixes)
+
+All 7 Round 2 fixes carried forward from the prior audit remain correct. No regressions were found in:
+- `imports.clj` — shell injection fix verified still present
+- `benchmark.clj` — XML path injection fix verified still present
+- `mcp.clj` — model/provider length validation wired to all relevant handlers
+- `util.clj` — all-dots guard in `derive-db-name` still present
+- `mcp.clj` — `handle-update` path canonicalization still present
+- `analyze.clj` — `valid-git-path?` leading-dash guard still present
+- `mcp.clj` — `validate-layers` allowlist still correct
+
+---
+
+## New Issues Found in Round 3
+
+### SEC-014: MCP run_id fields have no length bound
+
+`handle-benchmark-results` and `handle-benchmark-compare` accept `run_id`, `run_id_a`, and `run_id_b` as free-form strings with no length validation. These are passed directly to Datomic parameterized queries. The `max-line-bytes` guard (10 MB) limits overall request size, but there is no per-field cap comparable to `max-repo-path-len` or `max-model-len`.
+
+- **Severity:** Minor
+- **Priority:** Low
+- **Fix Complexity:** Trivial
+- **Category:** Input Validation/Injection
+- **Area:** mcp.clj — handle-benchmark-results, handle-benchmark-compare
+- **Evidence:** `mcp.clj:423` — `(let [run-id (args "run_id") ...])` — no `validate-string-length!` call before use. `mcp.clj:460-461` — same for `id-a`/`id-b`. The `validate-run-id` guard used in `checkpoint-read` and `find-checkpoint` is not called in MCP handlers.
+- **Threat scenario:** An MCP caller passes a multi-megabyte string as `run_id`. Datomic processes it as a query parameter; no match is returned but excess memory is allocated during query evaluation. Low-impact DoS under heavy load.
+- **Suggested mitigation:** Add `(validate-string-length! "run_id" run-id 256)` before each Datomic query in `handle-benchmark-results` and `handle-benchmark-compare`, consistent with other handler patterns. The `validate-run-id` format check could also be applied here for defense-in-depth (no early error leakage since a non-matching run_id just returns "No benchmark runs found").
+
+---
+
+## Re-examined Areas (Pass 2 Saturation)
+
+The following were re-examined for regressions or new vectors introduced by commits since e63cd59:
+
+- **agent.clj** — System prompt is now prepended once at init as the first user message (commit 3661216). The `sanitize-repo-name` allowlist guard still runs before `{{repo-name}}` substitution. No injection regression.
+- **mcp.clj** — `handle-update` now canonicalizes path via `.getCanonicalPath` before calling `validate-repo-path!`. Correct. `with-conn` also canonicalizes. No double-canonicalization issue.
+- **benchmark.clj** — skip-judge behavior change is functional only; no security impact. `validate-run-id` is used for checkpoint file path construction and `find-checkpoint`; correct scope.
+- **pipeline.clj** — Added default `stop-flag`/`error-atom` atoms. No security impact.
+- **analyze.clj** — `valid-git-path?` guard unchanged. `files-needing-analysis` correctly skips sensitive files.
+- **main.clj** — No new input paths; carried-forward SSRF via git URLs unchanged.
+- **llm.clj** — `invoke-claude-cli` still passes full flattened conversation history as `-p` argument without length bound (SEC-012, carried forward). No regression.
+- **sync.clj** — `git diff` missing `--` separator (SEC-006, carried forward). No regression.
+
+---
+
+## Carried-Forward Issues (Not Fixed, Not Regressed)
+
+### SEC-002: SSRF via unvalidated Git URLs (CLI only)
+- **Severity:** High
+- **Priority:** Medium
+- **Fix Complexity:** Easy
+- **Category:** Input Validation/Injection
+- **Area:** `git.clj:29-36`, `main.clj:69-81`
+- **Status:** Accepted risk (CLI-only, no MCP surface). Only the CLI `import`/`update`/`digest`/`watch` subcommands expose this; MCP `noumenon_import` requires a local path and runs `validate-repo-path!`.
+- **Mitigation available:** Resolve hostname to IP before `git clone!` and reject RFC-1918/loopback ranges. Alternatively document that this is a trusted-user CLI tool and the SSRF risk is accepted.
+
+### SEC-004: Datalog query denial-of-service in agent.clj
+- **Severity:** Normal
+- **Priority:** Low
+- **Fix Complexity:** Challenging
+- **Category:** Input Validation/Injection
+- **Area:** `agent.clj:139-147`
+- **Status:** Carried forward. `d/q` executes to completion before `take` truncates results. A cartesian-join query that passes `validate-query` can exhaust heap.
+- **Mitigation available:** Wrap `d/q` in a timed `future` with `deref` timeout (e.g., 30s), catching `TimeoutException` and returning a `"Query timed out"` result string.
+
+### SEC-006: `git diff` missing `--` separator
+- **Severity:** Minor
+- **Priority:** Very Low
+- **Fix Complexity:** Trivial
+- **Category:** Input Validation/Injection
+- **Area:** `sync.clj:44-47`
+- **Status:** Carried forward. `valid-sha?` guards the call; adding `"--"` before `old-sha` adds defense-in-depth at negligible cost.
+
+### SEC-007: API error body logged to stderr
+- **Severity:** Minor
+- **Priority:** Very Low
+- **Fix Complexity:** Trivial
+- **Category:** Monitoring/Detection/Response
+- **Area:** `llm.clj:117-119`
+- **Status:** Carried forward. Up to 200 chars of raw API error body are logged to stderr. Low exploitability since stderr is not returned to MCP callers.
+
+### SEC-009: `escape-template-vars` naming is misleading
+- **Severity:** Minor
+- **Priority:** Very Low
+- **Fix Complexity:** Trivial
+- **Category:** Security Misconfiguration
+- **Area:** `util.clj:18-21`
+- **Status:** Carried forward. Documentation/naming issue only; the function does what it needs to. Rename to `escape-double-mustache` or add a docstring clarifying it only escapes `{{`.
+
+### SEC-012: Claude CLI argument length unbounded for large prompts
+- **Severity:** Minor
+- **Priority:** Low
+- **Fix Complexity:** Easy
+- **Category:** Input Validation/Injection
+- **Area:** `llm.clj:154-158`
+- **Status:** Carried forward. Flattened conversation history passed as a `-p` argument can grow to hundreds of KB across agent iterations. OS argument-length limits (~2 MB on macOS/Linux) provide a hard floor.
+
+---
 
 ## Summary
 
-| Severity   | Count |
-|------------|-------|
-| Very High  | 0     |
-| High       | 1     |
-| Medium     | 2     |
-| Low        | 0     |
+| Category                    | Count |
+|-----------------------------|-------|
+| Round 2 fixes verified correct | 7  |
+| Net-new issues (Round 3)     | 1     |
+| Regressions                  | 0     |
+| Carried-forward issues       | 6     |
 
 ---
 
-## Issues
+## Issue Table
 
-### SEC-002: SSRF via unvalidated Git URLs in `import` and `update` CLI commands
-- **Severity:** High
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/git.clj:13-17`, `/Users/leif/Code/noumenon/src/noumenon/main.clj:69-81`
-- **Threat:** The `git-url?` predicate accepts any string matching `https?://.+` or `git@.+`, including URLs that target internal network resources. A user or script invoking `noumenon import https://169.254.169.254/latest/meta-data/` or an internal IP would cause the server to clone from that address, creating a server-side request forgery channel. The process runs with the same network privileges as the server.
-- **Evidence:**
-  ```clojure
-  (defn git-url?
-    [s]
-    (boolean (or (re-matches #"https?://.+" s)
-                 (re-matches #"git@.+" s))))
-  ```
-  No block-list for loopback (`127.0.0.0/8`), link-local (`169.254.0.0/16`), or RFC-1918 private ranges. `resolve-repo-path` in `main.clj` calls `git/clone!` for any URL that passes this check, without any further host validation.
-- **Mitigation:** Before cloning, resolve the URL hostname to an IP address and reject loopback, link-local, and RFC-1918 ranges. Alternatively, document that URL-based import is a trusted-user CLI feature only and is not exposed via the MCP server surface.
-- **Confidence:** High (the MCP `noumenon_import` handler requires a local path and calls `validate-repo-path!`, so the MCP surface itself is not affected; the CLI `import` and `update` subcommands are the attack surface)
-
----
-
----
-
-### SEC-004: Datalog query denial-of-service — unbounded `d/q` execution before result truncation
-- **Severity:** Medium
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/agent.clj:139-147`
-- **Threat:** A malicious MCP client using `noumenon_ask` can craft a Datalog query that passes `validate-query` (all symbols are on the allowlist) but performs a cartesian join across large relations. `d/q` runs to completion without a timeout before results are truncated. This can exhaust JVM heap and cause a denial of service.
-- **Evidence:**
-  ```clojure
-  (let [limit  (min (or (:limit parsed-args) default-row-limit) max-row-limit)
-        result (try
-                 (d/q q db rules) ...)
-        taken  (vec (take (inc limit) result))
-  ```
-  The full query executes before `take` applies truncation. A query like `[:find ?c ?f :where [?c :git/type :commit] [?f :file/path _]]` could return millions of tuples on a large repo before truncation occurs.
-- **Mitigation:** Wrap `d/q` in a `future` with a `deref` timeout (e.g., 5 seconds), canceling the query on timeout. Alternatively, prepend a `:limit N` constraint to agent-generated queries if Datomic Local supports it.
-- **Confidence:** Medium
-
----
-
-### SEC-006: Stored HEAD SHA used in `git diff` without format validation in sync.clj
-- **Severity:** Medium
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/sync.clj:41-46`
-- **Threat:** The stored HEAD SHA retrieved from the Datomic database is passed directly to `git diff`. If the stored value were ever set to a non-SHA string (corrupted write, direct Datomic transact, or future code path), it could be interpreted as a git ref expression or flag by git. While `shell/sh` does not invoke a shell (no shell metacharacter risk), git itself accepts complex ref syntax like `HEAD~1`, `--option`, or `origin/main` as positional arguments.
-- **Evidence:**
-  ```clojure
-  (defn changed-files [repo-path old-sha]
-    (if-not (valid-sha? old-sha)
-      (do (log! "WARNING" ...) nil)
-      (let [{:keys [exit out]}
-            (shell/sh "git" "-C" (str repo-path)
-                      "diff" "--name-status" old-sha "HEAD")]
-  ```
-  `valid-sha?` is called and returns nil on invalid input, so this is currently guarded. The guard works correctly. This is a low-severity note that the guard is the only defense.
-- **Mitigation:** The existing `valid-sha?` guard is sufficient. For defense in depth, add `--` before `old-sha` in the git argument list to prevent interpretation as a flag: `"diff" "--name-status" "--" old-sha "HEAD"`. However, `git diff` positional argument order means this would need to be `old-sha..HEAD` syntax.
-- **Confidence:** Low (currently guarded; flag injection via `--` would require the SHA to start with `-`)
-
----
-
-### SEC-007: API error response body logged to stderr — potential credential leakage
-- **Severity:** Low
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/llm.clj:117-119`
-- **Threat:** When an LLM API returns a non-200 status, up to 200 characters of the raw response body are logged to stderr. API error responses sometimes include request context or provider-specific error messages that may contain partial credential hints. In a shared-logging environment this could be observed.
-- **Evidence:**
-  ```clojure
-  (log! (str "API error response (HTTP " status "): "
-             (truncate (str body) 200)))
-  ```
-- **Mitigation:** Parse the response as JSON and log only specific safe fields (`error.type`, `error.code`) rather than the raw body. The thrown exception correctly omits the body.
-- **Confidence:** Low
-
----
-
-### SEC-009: `escape-template-vars` only escapes `{{` — misleading as a security primitive
-- **Severity:** Low
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/util.clj:18-21`
-- **Threat:** `escape-template-vars` is used throughout to "sanitize" untrusted file content before embedding in LLM prompts. It only replaces `{{` with `{ {`. This is sufficient for template-variable injection (preventing `{{repo-name}}` from being substituted) but provides no defense against LLM-level natural-language instruction injection from adversarial file content. The function name implies a broader security guarantee than it delivers.
-- **Evidence:**
-  ```clojure
-  (defn escape-template-vars [s]
-    (str/replace (or s "") "{{" "{ {"))
-  ```
-  Called in `analyze.clj:render-prompt` and `benchmark.clj:sanitize-file-content` on untrusted source file contents.
-- **Mitigation:** No code change required for template injection (the current defense is correct for that threat). Rename to `escape-template-delimiters` or add a docstring clarifying the scope: "prevents `{{var}}` substitution; does not sanitize LLM instruction injection." The XML delimiters in `render-prompt` (`<file-content>`) serve as the primary LLM injection mitigation.
-- **Confidence:** High (for the naming/documentation gap); Low (for exploitability given existing XML delimiters and the `answer-prompt` instruction note)
-
----
-
-## Pass 2 — Saturation
-
-**Files reviewed:** `deps.edn`, `llm.clj`, `db.clj`, `mcp.clj`, `analyze.clj`, `files.clj`, `imports.clj`, `sync.clj`, `agent.clj`, `benchmark.clj`, `util.clj`, `query.clj`, `git.clj`
-**Date:** 2026-03-27
-
----
-
-### SEC-012: `invoke-claude-cli` passes full prompt as a CLI argument — argument length not bounded
-- **Severity:** Low
-- **File:** `/Users/leif/Code/noumenon/src/noumenon/llm.clj:154-158`
-- **Threat:** The full prompt string (which may include file content up to `max-file-content-chars` = 100,000 characters from `analyze.clj`, or entire flattened message histories from `agent.clj`) is passed as a single positional argument via `-p prompt` to the Claude CLI subprocess. On macOS/Linux the per-argument limit is typically 128 KB–2 MB depending on kernel configuration. A prompt approaching or exceeding this limit causes `ProcessBuilder` to throw, potentially with an unhelpful error or silent truncation in some JVM implementations. More importantly, in the context of `invoke-cli` called from the agent loop, the flattened conversation history grows unboundedly across iterations (up to 50 iterations) with no truncation before the CLI call.
-- **Evidence:**
-  ```clojure
-  (let [cmd (cond-> ["claude" "--print" "--output-format" "json"]
-               (:model opts) (into ["--model" (:model opts)])
-               true          (into ["-p" prompt]))]
-  ```
-  `flatten-messages` in `invoke-cli` joins all messages with double newlines. After 50 iterations the accumulated prompt could easily reach several hundred kilobytes.
-- **Mitigation:** Add a character length cap on the prompt before passing it to `ProcessBuilder` (e.g. truncate at 512 KB with a warning). Alternatively, use `stdin` for the prompt rather than a CLI argument — `ProcessBuilder` supports writing to the process's stdin stream, which avoids OS argument length limits entirely.
-- **Confidence:** Medium (the issue is real; exploitability depends on how large the repository files and conversation history grow in practice)
-
----
-
+| severity | priority | fix_complexity | category | area | summary | threat_scenario | evidence | suggested_mitigation |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Normal | Low | Challenging | Input Validation/Injection | agent.clj | Datalog query DoS via cartesian-join query | Agent receives a crafted question that causes the LLM to emit a cartesian-join Datalog query; `d/q` runs to OOM before `take` truncates | `agent.clj:139-147` — `d/q` runs before `(take (inc limit) result)`; `validate-query` does not bound query complexity | Wrap `d/q` in a timed `future`; deref with timeout (e.g., 30s); return "Query timed out" result on timeout |
+| Minor | Low | Trivial | Input Validation/Injection | mcp.clj | run_id fields lack length bound in MCP handlers | MCP caller passes multi-megabyte run_id string; excess memory allocated during Datomic query parameter handling | `mcp.clj:423` — no `validate-string-length!` before `(d/q ... db run-id)`; same for `mcp.clj:460-461` | Add `(validate-string-length! "run_id" run-id 256)` in `handle-benchmark-results` and both run_id fields in `handle-benchmark-compare` |
+| Minor | Very Low | Trivial | Input Validation/Injection | sync.clj | `git diff` missing `--` separator | If `valid-sha?` regex has edge-case bypass, a crafted SHA could be interpreted by git as a flag or refspec | `sync.clj:44-47` — `shell/sh "git" "-C" ... "diff" "--name-status" old-sha "HEAD"` — no `"--"` before `old-sha` | Insert `"--"` before `old-sha`: `(shell/sh "git" "-C" ... "diff" "--name-status" "--" old-sha "HEAD")` |
+| Minor | Very Low | Trivial | Monitoring/Detection/Response | llm.clj | API error body logged to stderr | Raw LLM API error body (up to 200 chars) written to stderr; could leak internal API error messages or partial response data | `llm.clj:117-119` — `(log! (str "API error response (HTTP " status "): " (truncate (str body) 200)))` | Log only the HTTP status code; omit the raw body, or log only a sanitized subset (e.g., error code field from parsed JSON) |
+| Minor | Very Low | Trivial | Security Misconfiguration | util.clj | `escape-template-vars` function name misleading | Developer adds a new `{{variable}}` to a prompt template using a different syntax (e.g., `<%var%>`), assumes `escape-template-vars` covers it, and a prompt injection path opens | `util.clj:18-21` — function replaces only `{{` with `{ {`, name implies broader coverage | Rename to `escape-double-mustache` or add a docstring: "Only escapes `{{` — verify any new template syntax is also escaped at injection points" |
+| Minor | Low | Easy | Input Validation/Injection | llm.clj | Claude CLI -p argument unbounded for long agent conversations | Agent runs many iterations; flattened conversation history grows to MB-scale and is passed as single `-p` argument to `claude` CLI process; OS arg-length limit (~2 MB) causes process failure | `llm.clj:154-158` — `(into ["-p" prompt])` where `prompt` is `flatten-messages` of full history; no length cap | Truncate oldest messages from conversation history before flattening, or split into `--resume`/pipe input instead of `-p` argument |

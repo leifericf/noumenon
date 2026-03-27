@@ -26,9 +26,46 @@
       (str/split #"[/:]")
       last))
 
+(defn- extract-hostname
+  "Extract hostname from a Git URL. Returns nil if not parseable."
+  [url]
+  (when-let [[_ host] (or (re-find #"https?://([^/:]+)" url)
+                          (re-find #"git@([^:]+):" url))]
+    host))
+
+(def ^:private blocked-ip-patterns
+  "Regex patterns matching private/loopback IP ranges (RFC-1918, RFC-5737, loopback, link-local)."
+  [#"^127\." #"^10\." #"^172\.(1[6-9]|2[0-9]|3[01])\." #"^192\.168\."
+   #"^0\." #"^169\.254\." #"^::1$" #"^fc00:" #"^fe80:" #"^fd"])
+
+(defn- private-ip?
+  "True if ip-str matches a private, loopback, or link-local range."
+  [ip-str]
+  (some #(re-find % ip-str) blocked-ip-patterns))
+
+(defn- validate-clone-url!
+  "Validate that a Git URL does not resolve to a private/loopback address.
+   Throws ex-info on blocked addresses."
+  [url]
+  (when-let [host (extract-hostname url)]
+    (try
+      (let [addrs (java.net.InetAddress/getAllByName host)]
+        (doseq [^java.net.InetAddress addr addrs]
+          (let [ip (.getHostAddress addr)]
+            (when (or (private-ip? ip)
+                      (.isLoopbackAddress addr)
+                      (.isLinkLocalAddress addr)
+                      (.isSiteLocalAddress addr))
+              (throw (ex-info (str "Blocked: URL resolves to private/loopback address")
+                              {:url url :host host :ip ip}))))))
+      (catch java.net.UnknownHostException _
+        (throw (ex-info (str "Cannot resolve hostname: " host)
+                        {:url url :host host}))))))
+
 (defn clone!
-  "Clone a Git URL into target-dir. Throws on failure."
+  "Clone a Git URL into target-dir. Validates URL does not resolve to private IPs. Throws on failure."
   [url target-dir]
+  (validate-clone-url! url)
   (io/make-parents (io/file target-dir "dummy"))
   (let [{:keys [exit err]} (shell/sh "git" "clone" url (str target-dir))]
     (when-not (zero? exit)

@@ -277,3 +277,20 @@
 (deftest error-non-existent-path
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"git log failed"
                         (git/git-log "/nonexistent/path/12345"))))
+
+;; --- SSRF protection ---
+
+(deftest clone-blocks-loopback-url
+  (testing "clone! rejects URLs resolving to loopback"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Blocked.*private"
+                          (git/clone! "https://localhost/evil/repo.git" "/tmp/test-clone")))))
+
+(deftest clone-blocks-private-ip-url
+  (testing "clone! rejects URLs with private IPs"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Blocked.*private"
+                          (git/clone! "https://192.168.1.1/evil/repo.git" "/tmp/test-clone")))))
+
+(deftest clone-blocks-127-ip-url
+  (testing "clone! rejects URLs with 127.x.x.x"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Blocked.*private"
+                          (git/clone! "https://127.0.0.1/evil/repo.git" "/tmp/test-clone")))))

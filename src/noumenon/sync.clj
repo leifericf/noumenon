@@ -177,7 +177,7 @@
             git-r      (git/import-commits! conn repo-path repo-uri)
             files-r    (files/import-files! conn repo-path repo-uri)
             post-r     (imports/enrich-repo! conn repo-path
-                                            {:concurrency (or (:concurrency opts) 8)})
+                                             {:concurrency (or (:concurrency opts) 8)})
             analyze-r  (when (:analyze? opts)
                          (let [invoke-llm (:invoke-llm opts)]
                            (when invoke-llm

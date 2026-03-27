@@ -216,13 +216,13 @@
         read-fixture (fn [path]
                        (slurp (str "test-fixtures/clojure/" path)))
         result-core  (imports/enrich-file :clojure (read-fixture "src/myapp/core.clj")
-                                               "src/myapp/core.clj" paths)
+                                          "src/myapp/core.clj" paths)
         result-db    (imports/enrich-file :clojure (read-fixture "src/myapp/db.clj")
-                                               "src/myapp/db.clj" paths)
+                                          "src/myapp/db.clj" paths)
         result-util  (imports/enrich-file :clojure (read-fixture "src/myapp/util.clj")
-                                               "src/myapp/util.clj" paths)
+                                          "src/myapp/util.clj" paths)
         result-test  (imports/enrich-file :clojure (read-fixture "test/myapp/core_test.clj")
-                                               "test/myapp/core_test.clj" paths)]
+                                          "test/myapp/core_test.clj" paths)]
     (testing "core imports db and util"
       (is (= #{"src/myapp/db.clj" "src/myapp/util.clj"} (set result-core))))
     (testing "db imports util"
@@ -236,7 +236,7 @@
   (let [paths #{"myapp/core.py" "myapp/db.py" "myapp/util.py" "myapp/__init__.py"}
         read-fixture (fn [path] (slurp (str "test-fixtures/python/" path)))
         result (imports/enrich-file :python (read-fixture "myapp/core.py")
-                                         "myapp/core.py" paths)]
+                                    "myapp/core.py" paths)]
     (when (seq (imports/extract-imports :python "import os"))  ; skip if python3 unavailable
       (testing "core imports db and util"
         (is (= #{"myapp/db.py" "myapp/util.py"} (set result)))))))
@@ -245,7 +245,7 @@
   (let [paths #{"src/app.js" "src/db.js" "src/util.js" "src/config.js"}
         read-fixture (fn [path] (slurp (str "test-fixtures/javascript/" path)))
         result (imports/enrich-file :javascript (read-fixture "src/app.js")
-                                         "src/app.js" paths)]
+                                    "src/app.js" paths)]
     (when (seq (imports/extract-imports :javascript "import x from './y';"))
       (testing "app imports db, util, config"
         (is (= #{"src/db.js" "src/util.js" "src/config.js"} (set result)))))))
@@ -254,7 +254,7 @@
   (let [paths #{"src/main.rs" "src/parser.rs" "src/lexer/mod.rs"}
         read-fixture (fn [path] (slurp (str "test-fixtures/rust/" path)))
         result (imports/enrich-file :rust (read-fixture "src/main.rs")
-                                         "src/main.rs" paths)]
+                                    "src/main.rs" paths)]
     (testing "main declares parser and lexer modules"
       (is (= #{"src/parser.rs" "src/lexer/mod.rs"} (set result))))))
 
@@ -262,7 +262,7 @@
   (let [paths #{"com/example/Main.java" "com/example/Foo.java"}
         read-fixture (fn [path] (slurp (str "test-fixtures/java/" path)))
         result (imports/enrich-file :java (read-fixture "com/example/Main.java")
-                                         "com/example/Main.java" paths)]
+                                    "com/example/Main.java" paths)]
     (testing "Main imports Foo, skips stdlib"
       (is (= ["com/example/Foo.java"] result)))))
 
@@ -270,11 +270,11 @@
   (let [paths #{"lib/my_app.ex" "lib/my_app/accounts.ex" "lib/my_app/repo.ex"}
         read-fixture (fn [path] (slurp (str "test-fixtures/elixir/" path)))
         result-app   (imports/enrich-file :elixir (read-fixture "lib/my_app.ex")
-                                               "lib/my_app.ex" paths)
+                                          "lib/my_app.ex" paths)
         result-accts (imports/enrich-file :elixir (read-fixture "lib/my_app/accounts.ex")
-                                               "lib/my_app/accounts.ex" paths)
+                                          "lib/my_app/accounts.ex" paths)
         result-repo  (imports/enrich-file :elixir (read-fixture "lib/my_app/repo.ex")
-                                               "lib/my_app/repo.ex" paths)]
+                                          "lib/my_app/repo.ex" paths)]
     (when (seq (imports/extract-imports :elixir "alias Foo"))  ; skip if elixir unavailable
       (testing "app imports accounts and repo via multi-alias"
         (is (= #{"lib/my_app/accounts.ex" "lib/my_app/repo.ex"} (set result-app))))
@@ -287,6 +287,6 @@
   (let [paths #{"src/my_server.erl" "include/my_header.hrl"}
         read-fixture (fn [path] (slurp (str "test-fixtures/erlang/" path)))
         result (imports/enrich-file :erlang (read-fixture "src/my_server.erl")
-                                         "src/my_server.erl" paths)]
+                                    "src/my_server.erl" paths)]
     (testing "my_server includes my_header"
       (is (= ["include/my_header.hrl"] result)))))
