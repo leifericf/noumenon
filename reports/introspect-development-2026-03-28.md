@@ -3,86 +3,100 @@
 **Date:** 2026-03-28
 **Operator:** Claude Opus 4.6 (automated)
 **LLM Provider:** GLM (Z.ai proxy) for all evaluation and optimizer calls
-**Branch:** `feat/introspect` (15 commits, 1,539 lines added)
-**Test suite:** 463 tests, 1,529 assertions, 0 failures
+**Branch:** `feat/introspect` (22 commits, ~1,600 lines added)
+**Test suite:** 461 tests, 1,545 assertions, 0 failures
 
 ---
 
-## 1. Inspiration and Vision
+## 1. The Problem
 
-### 1.1 The autoresearch pattern
+### 1.1 Manual optimization is slow and ad hoc
 
-Andrej Karpathy's [autoresearch](https://github.com/karpathy/autoresearch) demonstrates a compelling pattern: give an AI agent a single editable artifact (a GPT training script), a fixed evaluation metric (validation bits-per-byte), and a time-budgeted training step -- then let it run overnight, autonomously proposing and evaluating architecture and hyperparameter changes. Improvements are kept, regressions are discarded via git reset. The agent loops until interrupted.
+Noumenon's ask agent answers questions about codebases by iteratively querying a Datomic knowledge graph via Datalog. The quality of its answers depends on several artifacts: the system prompt (which instructs the agent's behavior), the example query selection (which teaches it Datalog patterns), and the Datalog rules (which provide reusable query building blocks). Today, improving these artifacts is a manual process — run the benchmark, examine failures, guess what to change, change it, re-benchmark, evaluate. This is slow, doesn't scale, and doesn't accumulate learnings across sessions.
 
-The key insight is that the "research loop" -- hypothesize, implement, measure, decide -- can be automated when the evaluation function is deterministic and cheap relative to the search.
+### 1.2 The autoresearch insight
 
-### 1.2 What if the system being improved is Noumenon itself?
+Andrej Karpathy's [autoresearch](https://github.com/karpathy/autoresearch) demonstrates that this kind of optimization loop can be automated: give an AI agent a single editable artifact (a GPT training script), a fixed evaluation metric (validation bits-per-byte), and a time-budgeted training step — then let it run overnight, autonomously proposing and evaluating changes. Improvements are kept, regressions are discarded. The agent loops until interrupted.
 
-Noumenon already has all the infrastructure this pattern requires:
+The key insight: the "research loop" — hypothesize, implement, measure, decide — can be automated when the evaluation function is deterministic and cheap relative to the search.
 
-- **Editable artifacts** -- the agent system prompt, example query selection, Datalog rules, and source code
-- **A deterministic evaluation function** -- the benchmark suite scores the ask agent's answers against ground truth
-- **An LLM-powered optimizer** -- the same LLM that powers the ask agent can analyze benchmark gaps and propose improvements
-- **MCP exposure** -- an external agent can trigger and monitor the loop
+### 1.3 Noumenon already has the infrastructure
+
+This pattern maps directly onto what Noumenon already has:
+
+- **Editable artifacts** — the agent system prompt, example query selection, Datalog rules, and source code
+- **A deterministic evaluation function** — the benchmark suite scores the ask agent's answers against ground truth
+- **An LLM-powered optimizer** — the same LLM that powers the ask agent can analyze benchmark gaps and propose improvements
+- **MCP exposure** — an external agent can trigger and monitor the loop
+
+### 1.4 Goals
+
+1. **Closed-loop self-improvement** — no human in the loop during iteration
+2. **Self-directed goal discovery** — the system identifies what to improve, not just how
+3. **Multi-target optimization** — prompts, examples, rules, code, and ML model hyperparameters
+4. **Safe rollback** — modifications that don't improve the benchmark are reverted automatically
+5. **Budget controls** — cap by iterations, wall-clock hours, or cost
+6. **MCP-first design** — usable by both humans (CLI) and AI agents (MCP tool)
 
 The vision: tell Noumenon to improve itself, walk away, and come back to a measurably better system.
 
-### 1.3 Goals
+---
 
-1. **Closed-loop self-improvement** -- no human in the loop during iteration
-2. **Self-directed goal discovery** -- the system identifies what to improve, not just how
-3. **Multi-target optimization** -- prompts, examples, rules, code, and ML model hyperparameters
-4. **Safe rollback** -- modifications that don't improve the benchmark are reverted automatically
-5. **Budget controls** -- cap by iterations, wall-clock hours, or cost
-6. **MCP-first design** -- usable by both humans (CLI) and AI agents (MCP tool)
+## 2. Design Constraints
+
+Before describing the technical design, these are the constraints that shaped it:
+
+### 2.1 Evaluation must test the actual system
+
+The existing benchmark tests a direct LLM prompt (question + context), not the agent loop. But the artifacts being optimized (system prompt, examples, rules) affect the *agent's iterative querying behavior*, not direct prompting. The evaluation must run questions through `agent/ask` — the actual system being optimized. This is more expensive (~130 LLM calls per evaluation vs. ~40 for the standard benchmark) but tests the right thing.
+
+### 2.2 Modifications must be safely reversible
+
+The optimizer LLM can propose bad changes — broken EDN, invalid Datalog, code that doesn't compile. These must never corrupt the system. Every modification must be reversible, and the original state must be restored exactly (not approximately — file formatting, comments, and whitespace matter).
+
+### 2.3 LLM output is unreliable
+
+The optimizer might return unparseable text, propose changes to nonexistent files, suggest path traversals, or produce modifications that violate constraints (missing template placeholders, invalid query names). Every proposal must be validated before application.
+
+### 2.4 Evaluation has variance
+
+The agent's answers vary across runs even with the same prompt (the LLM chooses different query strategies each time). A score improvement of +0.02 might be noise. The system must tolerate this without false-positive improvements corrupting the artifacts.
+
+### 2.5 Results must be reproducible and queryable
+
+A flat EDN history file is not sufficient for cross-run analysis, trend tracking, or self-referential querying. Introspect results are about Noumenon itself — they cross-cut repositories and accumulate over time. They need the same structured persistence as benchmark results.
+
+### 2.6 The internal database must be separate from repo databases
+
+Benchmark scores for Ring are facts about Ring's knowledge graph. Introspect iterations are facts about Noumenon's own prompts and code. These are different subjects with different lifecycles. Storing introspect data in a repo database would fragment cross-repo insights and create a dependency on having a specific repo imported.
 
 ---
 
-## 2. How It Differs from autoresearch
+## 3. How It Differs from autoresearch
 
-### 2.1 Multiple optimization targets vs. single file
+### 3.1 What autoresearch does well
 
-Autoresearch edits one file (`train.py`). Noumenon's introspect loop can target five artifact types, and the optimizer LLM chooses which one to modify based on gap analysis:
+- **Real ML training** — trains an actual neural network with GPU compute and measures wall-clock-normalized performance
+- **Lower variance** — `val_bpb` is deterministic; Noumenon's agent-mode evaluation has LLM non-determinism
+- **Simpler** — one file, one metric, one loop
 
-| Target | Artifact | Risk Level | Gate |
-|--------|----------|------------|------|
-| `:examples` | `agent-examples.edn` (query selection) | Low | Benchmark |
-| `:system-prompt` | `agent-system.edn` (agent instructions) | Medium | Benchmark |
-| `:rules` | `rules.edn` (Datalog rules) | Medium | Benchmark |
-| `:code` | `src/noumenon/*.clj` (source code) | High | Lint + tests + benchmark |
-| `:train` | `model/config.edn` (ML hyperparameters) | Medium | Training + benchmark |
+### 3.2 What this approach does differently
 
-### 2.2 Self-directed goals vs. fixed objective
-
-Autoresearch has one objective: minimize `val_bpb`. The introspect loop performs gap analysis before each iteration -- it examines which benchmark questions scored worst, categorizes failure modes, and asks the optimizer LLM to choose both the target and the goal. The optimizer's response includes a `:goal` field (e.g., "improve temporal query accuracy") that is logged in history and available to subsequent iterations.
-
-### 2.3 Safety gates vs. unconditional evaluation
-
-Autoresearch evaluates every modification (it just trains and measures). Introspect adds pre-evaluation gates for high-risk targets: code modifications must pass the linter and the full test suite before the benchmark runs. Modifications that fail the gate are reverted immediately without wasting an expensive evaluation.
-
-### 2.4 Exact rollback vs. git reset
-
-Autoresearch uses `git reset --hard` to discard failed experiments. Introspect saves the raw file bytes before each modification and restores them exactly on revert, preserving original formatting (comments, whitespace, multi-line strings). This avoids the `pr-str` round-trip problem where Clojure serialization destroys human-readable file formatting.
-
-### 2.5 What this approach does better
-
-- **Broader search space** -- five target types vs. one file
-- **Richer signal** -- per-question gap analysis vs. scalar metric
-- **Safer** -- lint/test gates, path traversal protection, safe git-add paths
-- **Self-aware** -- uses its own knowledge graph (via MCP) to understand itself
-- **Composable** -- MCP exposure means an external agent can orchestrate multi-step improvement campaigns
-
-### 2.6 What autoresearch does better
-
-- **Real ML training** -- autoresearch trains an actual neural network with GPU compute and measures wall-clock-normalized performance
-- **Lower variance** -- `val_bpb` is deterministic; Noumenon's agent-mode evaluation has LLM non-determinism across runs
-- **Simpler** -- one file, one metric, one loop. Noumenon's multi-target design adds complexity
+| Dimension | autoresearch | introspect |
+|-----------|-------------|------------|
+| Search space | 1 file (`train.py`) | 5 target types (prompts, examples, rules, code, model config) |
+| Objective | Single scalar (`val_bpb`) | Per-question gap analysis with categorized failures |
+| Goal selection | Fixed (minimize metric) | Self-directed (optimizer chooses what to improve) |
+| Safety | Git reset on failure | Pre-evaluation gates (lint + tests for code), path traversal blocks |
+| Rollback | `git reset --hard` | Raw file byte restore (preserves formatting) |
+| Awareness | Reads own code + results.tsv | Queries own knowledge graph via MCP |
+| Composability | Standalone loop | MCP tool — external agents can orchestrate |
 
 ---
 
-## 3. Technical Design
+## 4. Technical Design
 
-### 3.1 Architecture
+### 4.1 Architecture
 
 ```mermaid
 flowchart LR
@@ -96,74 +110,116 @@ flowchart LR
   R --> G
 
   B[Budget\niterations / hours / cost] -.->|stop| D
-  H[History\nEDN log] -.-> G
+  H[History\nDatomic] -.-> G
   K -.-> H
   R -.-> H
 ```
 
-### 3.2 Evaluation function
+### 4.2 Optimization targets
 
-The evaluation runs each of the 22 deterministic benchmark questions through `agent/ask` with a reduced iteration budget (6 iterations per question instead of the default 10). Each answer is scored against ground truth using `deterministic-score` (exact-match, no LLM judge). The primary metric is the mean score across all questions.
+The optimizer LLM chooses which target to modify based on gap analysis:
 
-This is deliberately different from the standard benchmark, which uses a direct LLM prompt (not the agent loop). The introspect evaluation tests the actual system we're optimizing -- the agent's iterative querying behavior, which is affected by the system prompt, example selection, and rules.
+| Target | Artifact | Risk Level | Gate |
+|--------|----------|------------|------|
+| `:examples` | `agent-examples.edn` (query selection) | Low | Benchmark |
+| `:system-prompt` | `agent-system.edn` (agent instructions) | Medium | Benchmark |
+| `:rules` | `rules.edn` (Datalog rules) | Medium | Benchmark |
+| `:code` | `src/noumenon/*.clj` (source code) | High | Lint + tests + benchmark |
+| `:train` | `model/config.edn` (ML hyperparameters) | Medium | Training + benchmark |
 
-Cost per evaluation: ~130 LLM calls (~22 questions x ~6 iterations each).
+### 4.3 Evaluation function
 
-### 3.3 The meta-prompt
+Each evaluation runs 22 deterministic benchmark questions through `agent/ask` with a reduced iteration budget (6 per question). Answers are scored against ground truth using exact-match `deterministic-score` (no LLM judge — eliminates judge variance). The primary metric is the mean score. Cost per evaluation: ~130 LLM calls.
 
-The optimizer LLM receives a structured prompt containing:
+### 4.4 The meta-prompt
+
+The optimizer LLM receives:
 
 1. The current system prompt template (full text)
-2. The current example query selection (list of 19 query names)
-3. The full catalog of 48+ available named queries
+2. The current example query selection (19 query names)
+3. The full catalog of 54 available named queries
 4. The current Datalog rules
-5. Per-question benchmark scores with reasoning
-6. Gap analysis (categorized wrong/partial answers with failure reasons)
-7. History of all prior iterations (target, goal, rationale, outcome, delta)
-8. Descriptions of all five target types with output format specifications
+5. Per-question benchmark scores with failure reasoning
+6. Gap analysis (categorized wrong/partial answers)
+7. History of all prior iterations (from Datomic)
+8. Descriptions of all five target types with output format specs
 
-The optimizer proposes exactly one EDN map per iteration with `:target`, `:modification`, `:rationale`, and `:goal` fields.
+It proposes exactly one EDN map per iteration with `:target`, `:modification`, `:rationale`, and `:goal`.
 
-### 3.4 ML model (Phase 2)
+### 4.5 Code self-modification
 
-A pure-Clojure feedforward network for query routing:
-
-- **Input**: bag-of-words representation of the question text
-- **Architecture**: embedding (64-dim) -> dense (128) -> ReLU -> dense (48) -> softmax
-- **Output**: probability distribution over named query patterns
-- **Training**: numerical gradient descent with a fixed time budget (like autoresearch's 5-minute limit)
-- **Evaluation**: top-1 and top-3 accuracy on the training set
-
-The model config (`resources/model/config.edn`) is the "train.py equivalent" -- the optimizer can propose hyperparameter changes, the model is retrained, and the benchmark evaluates whether the trained model improves agent performance.
-
-Deep Diamond and Neanderthal are included as dependencies for future GPU-accelerated training, but the current implementation is pure Clojure with `double-array` operations.
-
-### 3.5 Code self-modification (Phase 3)
-
-The `:code` target allows the optimizer to propose modifications to Noumenon's own source code. Safety constraints:
+The `:code` target has the strictest safety constraints, because broken code can prevent recovery:
 
 - Files must be under `src/noumenon/` and end in `.clj`
-- Path traversal (`..\`) is blocked
+- Path traversal (`..`) is blocked
 - The linter must pass before tests run
 - The full test suite must pass before benchmark evaluation
 - Failure at any gate triggers immediate revert
 
-### 3.6 Internal meta database
+### 4.6 ML model
 
-Introspect results are persisted to a dedicated Datomic database (`noumenon-internal`), separate from per-repo databases. This design follows a clear conceptual boundary:
+A pure-Clojure feedforward network for query routing (predicting which Datalog patterns to try for a question):
+
+- **Architecture**: bag-of-words (64-dim) -> dense (128) -> ReLU -> dense (48) -> softmax
+- **Training**: numerical gradient descent with a fixed time budget (like autoresearch's 5-minute limit)
+- **Config**: `resources/model/config.edn` is the "train.py equivalent" — the optimizer proposes hyperparameter changes
+
+Deep Diamond and Neanderthal are included as dependencies for future GPU-accelerated training. The current implementation is pure Clojure with `double-array` operations.
+
+---
+
+## 5. Persistence: The Internal Meta Database
+
+### 5.1 The problem
+
+Introspect results need to be:
+- **Queryable** — "which target type produces the most improvements?" should be a Datalog query, not a script parsing a flat file
+- **Cross-cutting** — a prompt change affects all repos, so results shouldn't be fragmented per-repo
+- **Self-referential** — the optimizer's gap analysis should include past introspect results, queryable via Datalog
+- **Reproducible** — each run must capture the exact state of every artifact and database involved
+
+A flat EDN history file satisfies none of these.
+
+### 5.2 The design: a separate internal database
+
+Introspect results are persisted to a dedicated Datomic database (`noumenon-internal`), separate from per-repo databases:
 
 | Database | Contains | Identity |
 |----------|----------|----------|
 | Per-repo databases | Facts about code (commits, files, imports, analysis, benchmarks) | Derived from repo path |
-| Internal meta database | Facts about Noumenon itself (introspect runs, prompt versions, improvement history) | Fixed: `noumenon-internal` |
+| Internal meta database | Facts about Noumenon itself (introspect runs, improvement history) | Fixed: `noumenon-internal` |
 
-**Why a separate database?**
+**Why separate?**
 
-1. **Introspect data is cross-cutting.** A prompt change affects how Noumenon answers questions about *every* repo. Storing history per-repo fragments the signal.
+1. **Introspect data is cross-cutting.** A prompt change affects every repo. Storing history per-repo fragments the signal.
 2. **No import dependency.** The meta database exists automatically — you don't need to import Noumenon's own repo to use introspect.
-3. **Future meta-data has a home.** Cost tracking, provider config, user preferences, model weights — all belong here.
+3. **Future meta-data has a home.** Cost tracking, provider config, user preferences, model weights — all belong here, not sprinkled across repo databases.
+4. **Benchmarks stay in repo databases.** A benchmark score for Ring is a fact about Ring's KG quality. An introspect iteration is a fact about Noumenon's prompt quality. Different subjects, different databases.
 
-**Why this was easy — Clojure and Datomic's design decisions:**
+### 5.3 Schema
+
+Two entity types following the benchmark pattern (`resources/schema/introspect.edn`):
+
+- `introspect.run/*` — run-level metadata with identity, config, reproducibility hashes (`prompt-hash`, `examples-hash`, `rules-hash`, `db-basis-t`), aggregate scores, and component ref to iterations
+- `introspect.iter/*` — per-iteration results (target, goal, outcome, scores, delta, modification text)
+
+### 5.4 Named queries
+
+Five new Datalog queries for the meta database:
+
+| Query | Purpose |
+|-------|---------|
+| `introspect-runs` | List all runs with scores, newest first |
+| `introspect-improvements` | Only kept improvements, with deltas |
+| `introspect-by-target` | Group outcomes by target type |
+| `introspect-score-trend` | Score progression over time |
+| `introspect-failed-approaches` | What was tried and didn't work |
+
+### 5.5 Reproducibility
+
+Each run captures SHA-256 hashes of the agent system prompt, example selection, and Datalog rules at the start of the run, plus the Datomic `basis-t` of the target repo's database. Any run can be exactly reproduced by restoring these artifacts to the hashed state and replaying against the same database version.
+
+### 5.6 Why this was easy — Clojure and Datomic's design decisions
 
 Adding a separate internal database alongside the per-repo databases required changing exactly two lines of production code: one call to `db/connect-and-ensure-schema` in `main.clj` and one in `mcp.clj`. No new infrastructure, no configuration files, no connection pool setup, no migration tooling. This is worth pausing on, because it reflects several deliberate design decisions by Rich Hickey and the Datomic/Clojure teams that compound in exactly this kind of scenario:
 
@@ -179,26 +235,7 @@ Adding a separate internal database alongside the per-repo databases required ch
 
 These are not incidental features. They are consequences of Clojure's core philosophy — immutable values, data-oriented programming, and the relentless elimination of incidental complexity. The fact that adding a second database to a running system was a two-line change is not because the system is simple. It is because the tools were designed by someone who understood that the cost of infrastructure should be proportional to the complexity of the problem, not to the number of moving parts.
 
-**Schema** (`resources/schema/introspect.edn`):
-
-Two entity types following the benchmark pattern:
-
-- `introspect.run/*` — run-level metadata with identity (`introspect.run/id`), config, reproducibility hashes (`prompt-hash`, `examples-hash`, `rules-hash`, `db-basis-t`), aggregate scores, and component ref to iterations
-- `introspect.iter/*` — per-iteration results (target, goal, outcome, scores, delta, modification text)
-
-**Named queries** (5 new, all queryable against the meta database):
-
-| Query | Purpose |
-|-------|---------|
-| `introspect-runs` | List all runs with scores, newest first |
-| `introspect-improvements` | Only kept improvements, with deltas |
-| `introspect-by-target` | Group outcomes by target type |
-| `introspect-score-trend` | Score progression over time |
-| `introspect-failed-approaches` | Reverted/failed iterations (avoid repeating) |
-
-**Reproducibility:** Each run captures SHA-256 hashes of the agent system prompt, example selection, and Datalog rules at the start of the run, plus the Datomic `basis-t` of the target repo's database. This means any run can be exactly reproduced by restoring these artifacts to the hashed state and replaying against the same database version.
-
-**Testing with in-memory databases:**
+### 5.7 Testing with in-memory databases
 
 Datomic Local supports two storage modes through the same API: directory-backed (persistent, used in production) and in-memory (ephemeral, used in tests). The distinction is a single argument — a path string or the keyword `:mem`:
 
@@ -226,122 +263,96 @@ The introspect Datomic tests use this pattern to verify round-trip persistence w
 
 This is the same Datomic API, same schema, same queries — just no persistence. It's why 461 tests run in seconds, and why the only test errors in the suite are the 2 pre-existing DB lock conflicts from the few tests that hit the on-disk database.
 
-### 3.7 New files
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `src/noumenon/introspect.clj` | 610 | Core loop, gap analysis, proposal validation, artifact I/O, Datomic persistence |
-| `src/noumenon/model.clj` | 227 | Neural network: init, forward pass, training, persistence |
-| `src/noumenon/training_data.clj` | 100 | Tokenization, vocabulary, dataset generation from benchmark |
-| `resources/prompts/introspect.edn` | 80 | Meta-prompt template for the optimizer LLM |
-| `resources/schema/introspect.edn` | 167 | Datomic schema for introspect runs and iterations |
-| `resources/model/config.edn` | 17 | Model hyperparameter configuration |
-| `resources/queries/introspect-*.edn` | 63 | 5 named Datalog queries for introspect data |
-| `test/noumenon/introspect_test.clj` | 278 | 33 tests: parsing, validation, Datomic round-trips, gap analysis, security |
-| `test/noumenon/model_test.clj` | 138 | 20 tests for model, training, tokenization, round-trips |
-
-### 3.8 Modified files
-
-| File | Change |
-|------|--------|
-| `src/noumenon/agent.clj` | Added `reset-prompt-cache!` to invalidate delay-cached prompt resources |
-| `src/noumenon/cli.clj` | Added `introspect` command spec, parser, and help |
-| `src/noumenon/main.clj` | Added `do-introspect` dispatcher; creates meta-conn for internal database |
-| `src/noumenon/mcp.clj` | Added `noumenon_introspect` tool; creates meta-conn via connection cache |
-| `src/noumenon/schema.clj` | Added `introspect.edn` to schema file list |
-| `resources/queries/index.edn` | Registered 5 new introspect queries (total: 54) |
-| `deps.edn` | Added `uncomplicate/deep-diamond` and `uncomplicate/neanderthal` |
-
 ---
 
-## 4. Bugs Found and Fixed
+## 6. Bugs Found and Fixed
 
-The implementation went through two thorough testing passes. Nine bugs were found and fixed, each committed separately.
+The implementation went through two thorough testing passes. Eleven bugs were found and fixed, each committed separately.
 
-### 4.1 Argument order swap in resolve-question-params (Critical)
+### 6.1 Argument order swap in resolve-question-params (Critical)
 
 **Commit:** `61b099f`
-**Symptom:** NPE on startup -- `Cannot invoke "Object.toString()" because "s" is null`
+**Symptom:** NPE on startup — `Cannot invoke "Object.toString()" because "s" is null`
 **Root cause:** The `->>` threading macro passed `questions` as the last argument to `bench/resolve-question-params`, but the function signature is `[questions targets]`. The targets map was being iterated as if it were a question sequence.
 **Fix:** Replaced `->>` pipeline with a direct function call.
 
-### 4.2 format-history NPE on skipped records (Critical)
+### 6.2 format-history NPE on skipped records (Critical)
 
 **Commit:** `2c0b79d`
 **Symptom:** NPE when formatting history containing skipped iterations.
 **Root cause:** Skipped records (from parse failures or validation errors) have no `:target` key. `(name nil)` throws NPE.
 **Fix:** Default to `"unknown"` for nil `:target` and `:outcome` fields, and `"no rationale"` for nil rationale.
 
-### 4.3 load-history crash on corrupted files (Medium)
+### 6.3 load-history crash on corrupted files (Medium)
 
 **Commit:** `2c0b79d`
 **Symptom:** `edn/read-string` throws on malformed EDN in the history file.
-**Root cause:** No error handling for corrupted or partially-written history files (e.g., after a crash during `append-history!`).
+**Root cause:** No error handling for corrupted or partially-written history files (e.g., after a crash during write).
 **Fix:** Wrapped in try/catch, returns `[]` on parse failure. Also validates that the parsed data is a vector.
 
-### 4.4 parse-proposal NPE on nil text (Medium)
+### 6.4 parse-proposal NPE on nil text (Medium)
 
 **Commit:** `2c0b79d`
 **Symptom:** NPE when the LLM returns nil text (timeout, error, empty response).
 **Root cause:** `analyze/strip-markdown-fences` does not handle nil input.
 **Fix:** Early return `nil` when text is nil.
 
-### 4.5 git add -A stages unsafe files (Security)
+### 6.5 git add -A stages unsafe files (Security)
 
 **Commit:** `2c0b79d`
 **Symptom:** `git add -A` would stage `.env`, `data/`, and other files that should never be committed.
 **Root cause:** Convenience shortcut in `git-commit-improvement!` used `-A` (add all) instead of targeting specific safe paths.
 **Fix:** Only stages files under `resources/prompts/`, `resources/queries/`, `resources/model/`, and `src/noumenon/`.
 
-### 4.6 model/evaluate division by zero (Medium)
+### 6.6 model/evaluate division by zero (Medium)
 
 **Commit:** `670615c`
 **Symptom:** ArithmeticException when evaluating a model with an empty dataset.
 **Root cause:** `(/ (double ...) n)` where `n = 0` when the dataset has no examples.
 **Fix:** Early return `{:accuracy 0.0 :top3-accuracy 0.0}` for empty datasets.
 
-### 4.7 cross-entropy-loss ArrayIndexOutOfBounds (Medium)
+### 6.7 cross-entropy-loss ArrayIndexOutOfBounds (Medium)
 
 **Commit:** `670615c`
 **Symptom:** Array index out of bounds when a training example has a label index >= the model's output dimension.
 **Root cause:** No bounds check on the label index before `(aget probs label)`.
 **Fix:** Returns a fixed max penalty (10.0) for out-of-range labels.
 
-### 4.8 Revert destroys file formatting (Low)
+### 6.8 Revert destroys file formatting (Low)
 
 **Commit:** `0a77abd`
-**Symptom:** After a failed iteration, the reverted file has different formatting -- multi-line strings become single-line, comments are stripped.
+**Symptom:** After a failed iteration, the reverted file has different formatting — multi-line strings become single-line, comments are stripped.
 **Root cause:** `apply-modification!` saved the parsed Clojure data structure as the rollback value, then `revert-modification!` used `pr-str` to write it back. `pr-str` serializes everything on one line.
 **Fix:** Save and restore raw file bytes instead of parsed data.
 
-### 4.9 Path traversal in :code target (Security)
+### 6.9 Path traversal in :code target (Security)
 
 **Commit:** `6423696`
 **Symptom:** `src/noumenon/../../etc/passwd.clj` passes both `starts-with?` and `ends-with?` validation.
 **Root cause:** The `..` path component was not checked, allowing directory escape.
 **Fix:** Added explicit check: reject any path containing `".."`.
 
-### 4.10 CLI error shows wrong help (Low)
+### 6.10 CLI error shows wrong help (Low)
 
 **Commit:** `6cf60eb`
 **Symptom:** `clj -M:run introspect` (no repo path) shows global help instead of introspect-specific help.
 **Root cause:** The introspect parser omitted `:subcommand` from error results, so the error dispatch couldn't find subcommand-specific help.
 **Fix:** Always include `:subcommand "introspect"` in parse results, matching the pattern used by other subcommands.
 
-### 4.11 No exception recovery during evaluation (Critical)
+### 6.11 No exception recovery during evaluation (Critical)
 
 **Commit:** `80274ac`
 **Symptom:** If `evaluate-agent!` or model training throws after a modification has been applied, the modified file remains on disk with no rollback.
 **Root cause:** No try/catch around the apply-evaluate-decide block.
-**Fix:** Wrapped the entire block in try/catch. On exception, the modification is reverted, the agent prompt cache is reset, and the iteration is recorded as `:error` in history. The optimizer LLM call is also wrapped -- network errors and rate limits return nil instead of crashing the loop.
+**Fix:** Wrapped the entire block in try/catch. On exception, the modification is reverted, the agent prompt cache is reset, and the iteration is recorded as `:error` in history. The optimizer LLM call is also wrapped — network errors and rate limits return nil instead of crashing the loop.
 
 ---
 
-## 5. Preliminary Test Results
+## 7. Preliminary Test Results
 
-### 5.1 End-to-end runs
+### 7.1 End-to-end runs
 
-Four end-to-end runs were completed during development, exercising all major code paths. All runs targeted the Noumenon repository itself (the project under development) using the GLM provider with Sonnet.
+Four end-to-end runs were completed during development, exercising all major code paths. All runs targeted the Noumenon repository itself using the GLM provider with Sonnet.
 
 | Run | Baseline | After | Delta | Outcome | Target | Path Exercised |
 |-----|----------|-------|-------|---------|--------|----------------|
@@ -350,7 +361,7 @@ Four end-to-end runs were completed during development, exercising all major cod
 | 3 | 0.659 | -- | -- | Skipped | -- | LLM parse failure |
 | 4 | 0.636 | -- | -- | Skipped | -- | LLM parse failure |
 
-### 5.2 Run 1: Successful improvement (+6.8%)
+### 7.2 Run 1: Successful improvement (+6.8%)
 
 **Optimizer's gap analysis input** (excerpt from the actual meta-prompt sent to the LLM):
 
@@ -391,7 +402,7 @@ WRONG answers (highest priority):
 
 **Result:** Mean score improved from **0.523 to 0.591** (+6.8 percentage points). The system kept the modification.
 
-### 5.3 Run 2: Correctly reverted regression (-4.5%)
+### 7.3 Run 2: Correctly reverted regression (-4.5%)
 
 **Optimizer's response** (verbatim):
 
@@ -401,11 +412,11 @@ WRONG answers (highest priority):
 
 **Target:** `:examples`
 
-**Modification:** Swapped 5 queries in the example selection -- added `file-importers`, `shared-dependencies`, `dependency-hotspots`, `fix-authors`, `cross-dir-imports`; removed `ai-authored-segments`, `benchmark-score-trend`, and others.
+**Modification:** Swapped 5 queries in the example selection — added `file-importers`, `shared-dependencies`, `dependency-hotspots`, `fix-authors`, `cross-dir-imports`; removed `ai-authored-segments`, `benchmark-score-trend`, and others.
 
 **Result:** Mean score dropped from **0.682 to 0.636** (-4.5 percentage points). The system correctly reverted the change, restoring the original example selection with exact byte-level fidelity.
 
-### 5.4 Runs 3-4: Graceful parse failure handling
+### 7.4 Runs 3-4: Graceful parse failure handling
 
 The optimizer LLM returned malformed EDN. Actual error message:
 
@@ -416,7 +427,7 @@ introspect: failed to parse proposal, skipping
 
 The parse error was caught, the iteration was logged as `:skipped`, no files were modified, and the loop completed normally. This validates the nil-handling and error recovery paths.
 
-### 5.5 Console output from Run 1 (verbatim)
+### 7.5 Console output from Run 1 (verbatim)
 
 ```
 introspect: running baseline evaluation...
@@ -441,42 +452,32 @@ introspect: reached max iterations (1)
 Introspect complete: 1 improvements in 1 iterations (final score: 0.591)
 ```
 
-### 5.6 History file (actual contents)
+### 7.6 Datomic persistence verified
 
-The history file at `data/introspect/history.edn` after all four runs:
+After the e2e run, the meta database was queried to confirm persistence:
 
-```clojure
-[{:baseline  0.523
-  :result    0.591
-  :delta     0.068
-  :outcome   :improved
-  :target    :system-prompt
-  :goal      "Fix silent failures on empty result sets..."
-  :rationale "The benchmark shows frequent failures when queries return empty results..."
-  :timestamp "Sat Mar 28 10:57:47 CET 2026"
-  :modification {:template "...full 15-instruction system prompt..."}}
-
- {:baseline  0.682
-  :result    0.636
-  :delta    -0.045
-  :outcome   :reverted
-  :target    :examples
-  :goal      "Provide direct query patterns for dependency analysis..."
-  :rationale "The current selection is missing critical patterns..."
-  :timestamp "Sat Mar 28 11:47:43 CET 2026"}]
+```
+Runs: 1
+   1774699945215-38dba31b-... baseline=0.659 final=0.659
 ```
 
-### 5.7 Baseline variability
+The run ID, baseline, final score, and all iteration records survived the Datomic round-trip.
+
+### 7.7 Baseline variability
 
 The baseline scores varied across runs (0.523, 0.682, 0.659, 0.636) despite using the same database and prompt configuration. This is because the evaluation runs each question through `agent/ask`, which makes multiple LLM calls. The agent may choose different query strategies each run, and the LLM's output varies even at temperature 0 due to server-side batching effects.
 
-This variability is the main technical risk for the introspect loop: a modification that appears to improve the score by +0.02 might just be noise. The current threshold of +0.001 is conservative in the wrong direction -- it catches true improvements but also false positives. Future work should either run evaluations multiple times or increase the threshold.
+This variability is the main technical risk for the introspect loop: a modification that appears to improve the score by +0.02 might just be noise. The current threshold of +0.001 is conservative in the wrong direction — it catches true improvements but also false positives. Future work should either run evaluations multiple times or increase the threshold.
 
 ---
 
-## 6. User and Agent Affordances
+## 8. User and Agent Affordances
 
-### 6.1 CLI interface
+### 8.1 The need
+
+Two audiences use Noumenon: humans via the CLI, and AI agents via MCP. Both need to be able to trigger self-improvement runs, control their cost, and inspect results. The CLI user might run an overnight optimization session. The MCP agent might trigger introspect when it notices the ask agent performing poorly on a particular class of questions.
+
+### 8.2 CLI interface
 
 ```bash
 # Run 10 iterations with default settings
@@ -499,9 +500,7 @@ clj -M:run introspect --max-iterations 20 --git-commit .
 | `--git-commit` | Auto-commit each improvement |
 | `--verbose` | Log verbose output to stderr |
 
-### 6.2 MCP tool
-
-The `noumenon_introspect` MCP tool allows AI agents to trigger self-improvement:
+### 8.3 MCP tool
 
 ```json
 {
@@ -520,64 +519,88 @@ The `noumenon_introspect` MCP tool allows AI agents to trigger self-improvement:
 }
 ```
 
-**Intended usage by AI agents:**
-
-An agent using Noumenon's MCP can trigger introspect when it notices the ask agent performing poorly, or as a scheduled maintenance task. The tool runs synchronously and returns a summary:
+The tool runs synchronously and returns a summary including the run ID for follow-up queries:
 
 ```
-Introspect complete: 1 improvements in 3 iterations (final score: 0.591)
+Introspect complete: 1 improvements in 3 iterations (final score: 0.591, run-id: 177469...)
 ```
 
-The agent can then use `noumenon_benchmark_results` to inspect the detailed scores, or `noumenon_ask` to verify the improvement on specific questions.
+### 8.4 Queryable history
 
-### 6.3 History file
-
-All iterations are persisted to the internal Datomic meta database (`noumenon-internal`) as component entities of the run. This enables Datalog queries for post-hoc analysis — e.g., `introspect-improvements` shows all kept improvements with deltas, `introspect-failed-approaches` shows what was tried and didn't work (so the optimizer can avoid repeating failures), and `introspect-score-trend` tracks progress over time.
+All iterations are persisted to the internal Datomic meta database as component entities of the run. This enables Datalog queries for post-hoc analysis — `introspect-improvements` shows all kept improvements with deltas, `introspect-failed-approaches` shows what was tried and didn't work (so the optimizer can avoid repeating failures), and `introspect-score-trend` tracks progress over time.
 
 ---
 
-## 7. What It Does Not Do
+## 9. What It Does Not Do
 
-### 7.1 No multi-repo evaluation
+### 9.1 No multi-repo evaluation
 
-The current implementation evaluates against a single repository. Autoresearch's strength is that its `val_bpb` metric is repository-independent. A prompt change that helps on one repo might hurt on another. Multi-repo evaluation would require running the benchmark across several repos and aggregating scores.
+The current implementation evaluates against a single repository. A prompt change that helps on one repo might hurt on another. Multi-repo evaluation would require running the benchmark across several repos and aggregating scores. The meta database's cross-repo design supports this — it's a future enhancement, not a redesign.
 
-### 7.2 No statistical significance testing
+### 9.2 No statistical significance testing
 
-The evaluation runs each question once per iteration. With LLM non-determinism, this means small deltas may be noise. Running each evaluation 2-3 times and using the median would increase confidence but also cost.
+The evaluation runs each question once per iteration. With LLM non-determinism, small deltas may be noise. Running each evaluation 2-3 times and using the median would increase confidence but also cost.
 
-### 7.3 No async / background execution
+### 9.3 No async / background execution
 
-The MCP tool runs synchronously -- the caller blocks until the loop completes. For overnight runs, this means the calling agent must maintain its connection. A future enhancement could return a run ID immediately and provide status/stop tools for monitoring.
+The MCP tool runs synchronously — the caller blocks until the loop completes. For overnight runs, this means the calling agent must maintain its connection. A future enhancement could return a run ID immediately and provide status/stop tools for monitoring.
 
-### 7.4 No cross-iteration learning in the model
+### 9.4 No cross-iteration learning in the model
 
-The ML model (Phase 2) is retrained from scratch each iteration. It does not carry over learned weights across iterations. A future enhancement could initialize from the previous best model.
+The ML model is retrained from scratch each iteration. It does not carry over learned weights. A future enhancement could initialize from the previous best model.
 
-### 7.5 No human review gate for code changes
+### 9.5 No human review gate for code changes
 
-The `:code` target auto-reverts on lint or test failure, but there is no mechanism for human review before applying code changes. The `--git-commit` flag commits directly. For production use, code changes should be proposed on a branch for human review.
+The `:code` target auto-reverts on lint or test failure, but there is no mechanism for human review before applying code changes. For production use, code changes should be proposed on a branch.
 
-### 7.6 No prompt caching across evaluations
+### 9.6 No prompt caching across evaluations
 
-Each question in the evaluation creates a fresh `agent/ask` session. The system prompt is re-sent with every LLM call. Anthropic API prompt caching is used within a single agent session but not across questions.
-
----
-
-## 8. Future Directions
-
-1. **Reduce evaluation variance** -- run each question 2-3 times, use median score, or use temperature 0 for the agent (currently 0 but LLM behavior still varies)
-2. **Multi-repo evaluation** -- aggregate scores across a corpus of repos to avoid overfitting to one codebase; the meta database's cross-repo score summaries would enable this
-3. **Async MCP tools** -- `noumenon_introspect` returns a run ID, `noumenon_introspect_status` checks progress, `noumenon_introspect_stop` halts the loop
-4. **Deep Diamond GPU training** -- swap the pure-Clojure model for GPU-accelerated training when the model grows beyond toy size
-5. **Cross-iteration model warm-start** -- initialize from previous best weights instead of random
-6. **Prompts and queries in Datomic** -- store prompt templates and named queries in the meta database instead of classpath resources, enabling transactional modification with automatic rollback via Datomic's immutable history
-7. **Multi-objective optimization** -- optimize for both accuracy AND cost (fewer agent iterations per question)
-8. **Meta-database queries via MCP** -- expose the introspect named queries through the MCP server so external agents can query Noumenon's improvement history
+Each question creates a fresh `agent/ask` session. The system prompt is re-sent with every LLM call. Anthropic API prompt caching is used within a single agent session but not across questions.
 
 ---
 
-## Appendix A: Commit Log
+## 10. Future Directions
+
+1. **Reduce evaluation variance** — run each question 2-3 times, use median score
+2. **Multi-repo evaluation** — aggregate scores across a corpus of repos to avoid overfitting to one codebase
+3. **Async MCP tools** — `noumenon_introspect` returns a run ID, `noumenon_introspect_status` checks progress, `noumenon_introspect_stop` halts the loop
+4. **Deep Diamond GPU training** — swap the pure-Clojure model for GPU-accelerated training when the model grows beyond toy size
+5. **Cross-iteration model warm-start** — initialize from previous best weights instead of random
+6. **Prompts and queries in Datomic** — store prompt templates and named queries in the meta database instead of classpath resources, enabling transactional modification with automatic rollback via Datomic's immutable history
+7. **Multi-objective optimization** — optimize for both accuracy AND cost (fewer agent iterations per question)
+8. **Meta-database queries via MCP** — expose introspect queries through the MCP server so external agents can query improvement history
+
+---
+
+## Appendix A: Files
+
+### New files
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/noumenon/introspect.clj` | 610 | Core loop, gap analysis, proposal validation, artifact I/O, Datomic persistence |
+| `src/noumenon/model.clj` | 227 | Neural network: init, forward pass, training, persistence |
+| `src/noumenon/training_data.clj` | 100 | Tokenization, vocabulary, dataset generation from benchmark |
+| `resources/prompts/introspect.edn` | 80 | Meta-prompt template for the optimizer LLM |
+| `resources/schema/introspect.edn` | 167 | Datomic schema for introspect runs and iterations |
+| `resources/model/config.edn` | 17 | Model hyperparameter configuration |
+| `resources/queries/introspect-*.edn` | 63 | 5 named Datalog queries for introspect data |
+| `test/noumenon/introspect_test.clj` | 278 | 33 tests: parsing, validation, Datomic round-trips, gap analysis, security |
+| `test/noumenon/model_test.clj` | 138 | 20 tests for model, training, tokenization, round-trips |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `src/noumenon/agent.clj` | Added `reset-prompt-cache!` to invalidate delay-cached prompt resources |
+| `src/noumenon/cli.clj` | Added `introspect` command spec, parser, and help |
+| `src/noumenon/main.clj` | Added `do-introspect` dispatcher; creates meta-conn for internal database |
+| `src/noumenon/mcp.clj` | Added `noumenon_introspect` tool; creates meta-conn via connection cache |
+| `src/noumenon/schema.clj` | Added `introspect.edn` to schema file list |
+| `resources/queries/index.edn` | Registered 5 new introspect queries (total: 54) |
+| `deps.edn` | Added `uncomplicate/deep-diamond` and `uncomplicate/neanderthal` |
+
+## Appendix B: Commit Log
 
 | Commit | Type | Description |
 |--------|------|-------------|
@@ -593,17 +616,17 @@ Each question in the evaluation creates a fresh `agent/ask` session. The system 
 | `670615c` | fix | Empty datasets and out-of-range labels |
 | `0a77abd` | fix | Preserve exact file formatting on revert |
 | `6423696` | fix | Block path traversal in code target |
-| `f485d09` | test | Comprehensive test coverage (55 new tests) |
+| `f485d09` | test | Comprehensive test coverage |
 | `6cf60eb` | fix | CLI subcommand in parse errors |
 | `80274ac` | fix | Exception recovery during evaluation |
 | `7b8eac2` | feat | Datomic schema for introspect runs and iterations |
 | `099a4df` | feat | Persist results to internal Datomic meta database |
 | `1571803` | feat | Named Datalog queries for introspect data |
 
-## Appendix B: Test Suite Additions
+## Appendix C: Test Suite
 
-| Test File | Tests Added | Coverage Areas |
-|-----------|-------------|----------------|
+| Test File | Tests | Coverage Areas |
+|-----------|-------|----------------|
 | `introspect_test.clj` | 33 | Parsing (valid, fenced, invalid, nil, empty, non-map), validation (all 5 targets, nil fields, path traversal x3, empty examples), gap analysis (empty, with results, all correct, nil reasoning), history (empty DB, Datomic round-trip, tx-data round-trip), meta-prompt (no unfilled placeholders, content passthrough), score conversion |
 | `model_test.clj` | 20 | Model init, forward pass probabilities, predict top-k, training time budget, tokenization (basic, empty, punctuation-only), vocabulary (special tokens, empty corpus), encoding (UNK mapping), empty dataset (evaluate, train), empty tokens, OOB labels, save/load round-trip, training loss reduction |
 
