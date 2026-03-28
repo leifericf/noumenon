@@ -86,16 +86,18 @@
 (def ^:private prompt-template
   (delay (-> (query/load-edn-resource "prompts/agent-system.edn") :template)))
 
-(defn- format-examples
-  "Format named queries as example Datalog for the system prompt."
-  []
-  (->> (query/list-query-names)
-       (keep query/load-named-query)
-       (map (fn [{:keys [name description query uses-rules]}]
-              (str ";;; " name " — " description "\n"
-                   (pr-str query)
-                   (when uses-rules "\n;; (uses rules — pass % as second input)"))))
-       (str/join "\n\n")))
+(def ^:private agent-example-names
+  (delay (query/load-edn-resource "prompts/agent-examples.edn")))
+
+(def ^:private formatted-examples
+  (delay
+    (->> @agent-example-names
+         (keep query/load-named-query)
+         (map (fn [{:keys [name description query uses-rules]}]
+                (str ";;; " name " — " description "\n"
+                     (pr-str query)
+                     (when uses-rules "\n;; (uses rules — pass % as second input)"))))
+         (str/join "\n\n"))))
 
 (defn- sanitize-repo-name
   "Allowlist-sanitize repo-name to prevent prompt injection via the system prompt."
@@ -109,7 +111,7 @@
       (str/replace "{{repo-name}}" (sanitize-repo-name repo-name))
       (str/replace "{{schema}}" (query/schema-summary db))
       (str/replace "{{rules}}" (pr-str (query/load-rules)))
-      (str/replace "{{examples}}" (format-examples))))
+      (str/replace "{{examples}}" @formatted-examples)))
 
 ;; --- Response parsing ---
 

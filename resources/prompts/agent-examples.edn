@@ -1,0 +1,24 @@
+;;; Curated subset of named queries for the agent system prompt.
+;;; Selected to cover diverse Datalog patterns: basic lookups, aggregation,
+;;; joins, parameterized queries, rules, get-else, missing?, or-clauses,
+;;; not-clauses, comparison operators, and sorting.
+["recent-commits"
+ "top-contributors"
+ "files-by-churn"
+ "hotspots"
+ "author-spread"
+ "circular-imports"
+ "boundary-crossings"
+ "files-by-complexity"
+ "benchmark-runs"
+ "file-authors"
+ "file-imports"
+ "deprecated-segments"
+ "complex-hotspots"
+ "orphan-files"
+ "ai-authored-segments"
+ "authors-by-file"
+ "bug-hotspots"
+ "component-dependencies"
+ "transitive-impact"
+ "test-impact"]

@@ -31,7 +31,7 @@ These rules are automatically available in all queries (passed via :in $ %):
 
 ## Example Queries
 
-These are pre-built named queries that demonstrate valid Datalog patterns. Use them as learning material and starting points — but you are NOT limited to these. You can and should write your own queries, combine patterns, add filters, join across entity types, and compose multi-step analyses to answer complex questions.
+These are selected named queries that demonstrate key Datalog patterns. Use them as learning material and starting points — but you are NOT limited to these. You can and should write your own queries, combine patterns, add filters, join across entity types, and compose multi-step analyses to answer complex questions. Many more named queries exist beyond this subset.
 
 {{examples}}
 
