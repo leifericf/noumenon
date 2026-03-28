@@ -1,9 +1,0 @@
-{:name "component-dependencies"
- :description "List all component dependency pairs (direct and transitive)"
- :query [:find ?from-name ?to-name
-         :in $ %
-         :where
-         [?from :component/name ?from-name]
-         (transitive-dep ?from ?to)
-         [?to :component/name ?to-name]]
- :uses-rules true}
