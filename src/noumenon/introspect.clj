@@ -658,7 +658,9 @@
                                        :eval-runs eval-runs)
         _             (log! (str "introspect: baseline mean="
                                  (format "%.3f" (:mean baseline))))
-        budget-done?  (fn [i cost]
+        _             (when max-cost
+                        (log! "introspect: WARNING: max-cost budget is not yet tracked (no LLM cost data available)"))
+        budget-done?  (fn [i]
                         (let [elapsed (- (System/currentTimeMillis) start-ms)]
                           (cond
                             (and stop-flag @stop-flag)
@@ -666,13 +668,11 @@
                             (>= i max-iterations)
                             (str "reached max iterations (" max-iterations ")")
                             (and max-ms (> elapsed max-ms))
-                            "time budget exhausted"
-                            (and max-cost (> cost max-cost))
-                            (str "cost budget exhausted ($" (format "%.2f" cost) ")"))))
+                            "time budget exhausted")))
         result
         (loop [i 0, baseline baseline, history history,
-               improvements 0, cost 0.0, iter-records []]
-          (if-let [reason (budget-done? i cost)]
+               improvements 0, iter-records []]
+          (if-let [reason (budget-done? i)]
             (do (log! (str "introspect: " reason))
                 {:iterations i :improvements improvements
                  :final-score (:mean baseline) :iter-records iter-records})
@@ -690,7 +690,7 @@
                       new-baseline (if (= :improved outcome) eval-result baseline)]
                   (recur (inc i) new-baseline (conj history record)
                          (if (= :improved outcome) (inc improvements) improvements)
-                         cost (conj iter-records record))))))
+                         (conj iter-records record))))))
         tx-data
         (run->tx-data
          {:run-id run-id :repo-path repo-path :commit-sha commit-sha
