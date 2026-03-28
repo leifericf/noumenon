@@ -326,6 +326,25 @@
                  :summary "Autonomous self-improvement loop (optimize prompts via benchmark)"
                  :usage "introspect [options] <repo-path>"
                  :epilog "Runs an autonomous loop: propose prompt change, evaluate via benchmark,\nkeep if improved, revert if not. Uses an LLM to propose improvements and\nthe agent benchmark to evaluate them.\n\nTargets (comma-separated): examples (default), system-prompt, rules, code, train.\nThe :code target requires passing lint and compilation. The :train target retrains\nthe on-device ML model. Example: --target examples,system-prompt\nUse --max-hours or --max-cost for overnight runs."}
+   "reseed"    {:spec {:flags [db-dir-flag]
+                       :initial {:subcommand "reseed"}
+                       :positionals {:required 0 :error nil :keys []}}
+                :summary "Reseed prompts, queries, and rules into the meta database"
+                :usage "reseed [options]"
+                :epilog "Reloads all artifact definitions (prompts, queries, rules) from\nclasspath resources into the meta database. Safe to re-run."}
+   "artifact-history"
+   {:spec {:flags [{:flag "--type" :key :artifact-type :parse :string
+                    :desc "Artifact type: prompt or rules (required)"
+                    :error-missing :missing-artifact-type-value}
+                   {:flag "--name" :key :artifact-name :parse :string
+                    :desc "Artifact name (required for type=prompt)"
+                    :error-missing :missing-artifact-name-value}
+                   db-dir-flag]
+           :initial {:subcommand "artifact-history"}
+           :positionals {:required 0 :error nil :keys []}}
+    :summary "Show change history for a prompt or rules artifact"
+    :usage "artifact-history --type <prompt|rules> [--name <name>] [options]"
+    :epilog "Shows the transact-time history of an artifact in the meta database.\nFor prompts, --name is required (e.g., --name analyze-file).\nFor rules, --name is not needed."}
    "serve"     {:spec {:flags [{:flag "--db-dir" :key :db-dir :parse :string
                                 :desc "Override storage directory (default: data/datomic/)"
                                 :error-missing :missing-db-dir-value}
@@ -346,7 +365,7 @@
                 :epilog "Communicates via JSON-RPC over stdio (stdin/stdout).\nConfigure your MCP client to launch: noumenon serve [options]\nThe server auto-updates the knowledge graph on each query by default;\npass --no-auto-update to disable."}})
 
 (def ^:private command-order
-  ["digest" "import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark" "introspect"])
+  ["digest" "import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark" "introspect" "reseed" "artifact-history"])
 
 ;; --- Help text generation ---
 
@@ -581,4 +600,10 @@
                                  (:error result) (select-keys [:error :subcommand :flag :value]))))
           (if (#{"import" "status" "show-schema" "analyze" "enrich" "query" "update" "watch"} sub)
             (parse-simple-args sub rest-args)
-            {:error :unknown-subcommand :subcommand sub}))))))
+            (if-let [spec (get-in command-registry [sub :spec])]
+              (if (contains-help? rest-args)
+                {:help sub}
+                (let [result (parse-command spec rest-args)]
+                  (if (:error result) result
+                      (assoc result :subcommand sub))))
+              {:error :unknown-subcommand :subcommand sub})))))))
