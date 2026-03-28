@@ -170,11 +170,11 @@ Segment field guidelines:
   :unvalidated-redirect — redirect URL from user input without validation.
   IMPORTANT: Do NOT flag a segment for a vulnerability it is DEFENDING AGAINST. If the code validates, escapes, or sanitizes input, it is mitigating the concern, not introducing it. Do NOT flag test functions that test security validation — the test is verifying the defense, not introducing the vulnerability. Only flag if the segment itself is the source of the risk. Internal shell commands with hardcoded or validated arguments are not command injection. Test randomness is not insecure-random.
 
-:error-handling — how well errors/exceptions are handled:
-  :none — no error handling; exceptions propagate uncaught.
-  :basic — some try/catch or error checks, but incomplete (e.g., swallows exceptions, broad catches).
-  :robust — comprehensive handling with specific error types, proper logging/recovery.
-  Omit for segments where error handling is not applicable.
+:error-handling — how well RUNTIME ERRORS and EXCEPTIONS are handled:
+  :none — no try/catch, no error checks; exceptions propagate uncaught. This is the DEFAULT for most functions — omit the key entirely if a function has no error handling.
+  :basic — has try/catch or error checks, but broad (e.g., catches Exception, swallows errors, returns nil on failure without logging).
+  :robust — catches specific exception types, logs errors with context, retries transient failures, or returns structured error data. Very few functions qualify.
+  This is ONLY about runtime error/exception handling (try/catch, error returns). Input validation (checking if args are valid) is NOT error handling — do not conflate them. A function that validates its input but has no try/catch is :none. Omit for segments where error handling is not applicable (constants, types, pure data transforms).
 
 :call-names — list of function/method names this segment calls that are defined WITHIN THIS PROJECT. These build the internal call graph for dead-code detection. ONLY include names that match another segment in this file or that you recognize as project-defined from the file's imports. OMIT ALL of the following:
   - Standard library: map, reduce, filter, mapv, group-by, str, subs, println, format, into, conj, assoc, merge, sort, seq, vec, count, get, first, second, last, some, every?, not, and, or, when, if, let, loop, cond, case, apply, partial, comp, juxt, identity, constantly, complement, compare, max, min, inc, dec, pos?, neg?, zero?, nil?, true?, false?, string?, keyword?, number?, integer?, coll?, map?, set?, vector?, seq?, fn?, contains?, empty?, distinct, frequencies, take, drop, concat, interleave, partition, flatten, range, repeat, iterate, keys, vals, select-keys, update, update-in, assoc-in, get-in, dissoc, merge-with, zipmap, re-find, re-matches, re-seq, atom, swap!, reset!, deref, slurp, spit, pr-str, read-string, name, namespace, keyword, symbol, type, class, instance?, Thread/sleep, System/currentTimeMillis, System/getProperty, Math/round, Math/floor, Math/ceil, .getMessage, .getCanonicalPath, .exists, .isDirectory, .getName
