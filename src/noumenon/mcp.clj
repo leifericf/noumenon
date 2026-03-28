@@ -608,33 +608,36 @@
   (validate-llm-inputs! args)
   (with-conn args defaults
     (fn [{:keys [db db-name repo-path]}]
-      (let [{:keys [invoke-fn]}
+      (let [provider (or (args "provider") (:provider defaults))
+            model    (or (args "model") (:model defaults))
+            meta-conn (get-or-create-conn (util/resolve-db-dir defaults)
+                                          "noumenon-internal")
+            {:keys [invoke-fn]}
             (llm/make-messages-fn-from-opts
-             {:provider    (or (args "provider") (:provider defaults))
-              :model       (or (args "model") (:model defaults))
-              :temperature 0.7
-              :max-tokens  8192})
+             {:provider provider :model model
+              :temperature 0.7 :max-tokens 8192})
             invoke-fn-factory
             (fn []
               (:invoke-fn
                (llm/make-messages-fn-from-opts
-                {:provider    (or (args "provider") (:provider defaults))
-                 :model       (or (args "model") (:model defaults))
-                 :temperature 0.0
-                 :max-tokens  4096})))
+                {:provider provider :model model
+                 :temperature 0.0 :max-tokens 4096})))
             result (introspect/run-loop!
                     {:db                  db
                      :repo-name           db-name
                      :repo-path           repo-path
+                     :meta-conn           meta-conn
                      :invoke-fn-factory   invoke-fn-factory
                      :optimizer-invoke-fn invoke-fn
                      :max-iterations      (or (args "max_iterations") 10)
                      :max-hours           (args "max_hours")
-                     :max-cost            (args "max_cost")})]
+                     :max-cost            (args "max_cost")
+                     :model-config        {:provider provider :model model}})]
         (tool-result (str "Introspect complete: " (:improvements result)
                           " improvements in " (:iterations result)
                           " iterations (final score: "
-                          (format "%.3f" (:final-score result)) ")"))))))
+                          (format "%.3f" (:final-score result))
+                          ", run-id: " (:run-id result) ")"))))))
 
 (def ^:private tool-handlers
   {"noumenon_import"            handle-import

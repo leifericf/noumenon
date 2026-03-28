@@ -3,13 +3,20 @@
             [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
+            [datomic.client.api :as d]
             [noumenon.agent :as agent]
             [noumenon.analyze :as analyze]
             [noumenon.benchmark :as bench]
+            [noumenon.git :as git]
             [noumenon.model :as model]
             [noumenon.query :as query]
             [noumenon.training-data :as td]
-            [noumenon.util :refer [log!]]))
+            [noumenon.util :as util :refer [log!]]))
+
+;; --- Internal meta database ---
+
+(defn- generate-run-id []
+  (str (System/currentTimeMillis) "-" (java.util.UUID/randomUUID)))
 
 ;; --- Loading ---
 
@@ -28,17 +35,25 @@
 (defn- resource-path [resource-name]
   (str (.getFile (io/resource resource-name))))
 
+;; --- History from Datomic ---
+
 (defn load-history
-  "Load improvement history from file. Returns [] if missing or corrupted."
-  [path]
-  (let [f (io/file path)]
-    (if (.exists f)
-      (try (let [data (edn/read-string (slurp f))]
-             (if (vector? data) data []))
-           (catch Exception e
-             (log! (str "introspect: failed to read history: " (.getMessage e)))
-             []))
-      [])))
+  "Load improvement history from the meta database. Returns [] if empty."
+  [meta-db]
+  (->> (d/q '[:find ?idx ?target ?outcome ?rationale ?delta ?goal
+              :where
+              [?r :introspect.run/iterations ?i]
+              [?i :introspect.iter/index ?idx]
+              [?i :introspect.iter/outcome ?outcome]
+              [(get-else $ ?i :introspect.iter/target :unknown) ?target]
+              [(get-else $ ?i :introspect.iter/rationale "") ?rationale]
+              [(get-else $ ?i :introspect.iter/delta 0.0) ?delta]
+              [(get-else $ ?i :introspect.iter/goal "") ?goal]]
+            meta-db)
+       (sort-by first)
+       (mapv (fn [[_ target outcome rationale delta goal]]
+               {:target target :outcome outcome :rationale rationale
+                :delta delta :goal goal}))))
 
 ;; --- Gap analysis ---
 
@@ -286,17 +301,13 @@
 
 ;; --- Test gate (for code modifications) ---
 
-(defn- run-tests!
-  "Run the test suite. Returns {:pass? bool :output string}."
-  []
+(defn- run-tests! []
   (log! "introspect: running test suite...")
   (let [{:keys [exit out err]} (shell/sh "clj" "-M:test")]
     {:pass?  (zero? exit)
      :output (str (when (seq err) (str err "\n")) out)}))
 
-(defn- run-lint!
-  "Run the linter. Returns {:pass? bool :output string}."
-  []
+(defn- run-lint! []
   (log! "introspect: running linter...")
   (let [{:keys [exit out err]} (shell/sh "clj" "-M:lint")]
     {:pass?  (zero? exit)
@@ -348,17 +359,57 @@
     {:mean    (if (seq scores) (/ (reduce + scores) (count scores)) 0.0)
      :results results}))
 
-;; --- History ---
+;; --- Datomic transaction builders (pure) ---
 
-(defn- ensure-parent! [path]
-  (.mkdirs (.getParentFile (io/file path))))
+(defn- iter->tx-data
+  "Build a Datomic entity map for one iteration. Pure function."
+  [index {:keys [target goal rationale outcome baseline result delta
+                 modification error]}]
+  (let [base {:introspect.iter/index     (long index)
+              :introspect.iter/outcome   (or outcome :unknown)
+              :introspect.iter/timestamp (java.util.Date.)}]
+    (cond-> base
+      target    (assoc :introspect.iter/target target)
+      goal      (assoc :introspect.iter/goal goal)
+      rationale (assoc :introspect.iter/rationale rationale)
+      baseline  (assoc :introspect.iter/baseline-mean (double baseline))
+      result    (assoc :introspect.iter/result-mean (double result))
+      delta     (assoc :introspect.iter/delta (double delta))
+      error     (assoc :introspect.iter/error error)
+      (and (= :improved outcome) modification)
+      (assoc :introspect.iter/modification (pr-str modification)))))
 
-(defn append-history!
-  "Append an iteration record to the history file."
-  [path record]
-  (ensure-parent! path)
-  (let [history (load-history path)]
-    (spit path (pr-str (conj history record)))))
+(defn run->tx-data
+  "Build Datomic tx-data for a completed introspect run. Pure function."
+  [{:keys [run-id repo-path commit-sha started-at model-config
+           max-iterations prompt-hash examples-hash rules-hash
+           db-basis-t baseline-mean final-mean iteration-count
+           improvement-count cost-usd iter-records]}]
+  (let [iter-entities (vec (map-indexed iter->tx-data iter-records))
+        base {:introspect.run/id                run-id
+              :introspect.run/repo-path         (str repo-path)
+              :introspect.run/started-at        (or started-at (java.util.Date.))
+              :introspect.run/completed-at      (java.util.Date.)
+              :introspect.run/duration-ms       (long (- (System/currentTimeMillis)
+                                                         (.getTime ^java.util.Date
+                                                          (or started-at (java.util.Date.)))))
+              :introspect.run/iteration-count   (long iteration-count)
+              :introspect.run/improvement-count (long improvement-count)
+              :introspect.run/iterations        iter-entities}
+        run-entity
+        (cond-> base
+          commit-sha     (assoc :introspect.run/commit-sha commit-sha)
+          model-config   (assoc :introspect.run/model-config (pr-str model-config))
+          max-iterations (assoc :introspect.run/max-iterations (long max-iterations))
+          prompt-hash    (assoc :introspect.run/prompt-hash prompt-hash)
+          examples-hash  (assoc :introspect.run/examples-hash examples-hash)
+          rules-hash     (assoc :introspect.run/rules-hash rules-hash)
+          db-basis-t     (assoc :introspect.run/db-basis-t (long db-basis-t))
+          baseline-mean  (assoc :introspect.run/baseline-mean (double baseline-mean))
+          final-mean     (assoc :introspect.run/final-mean (double final-mean))
+          cost-usd       (assoc :introspect.run/cost-usd (double cost-usd)))]
+    [run-entity
+     {:db/id "datomic.tx" :tx/op :introspect}]))
 
 ;; --- Iteration ---
 
@@ -366,19 +417,16 @@
   "Run a single introspect iteration.
    Returns {:outcome :improved/:reverted/:skipped/:error :record map}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
-           baseline history history-path git-commit?]}]
-  (let [;; Load current artifacts
-        orig-examples (load-current-examples)
+           baseline history git-commit?]}]
+  (let [orig-examples (load-current-examples)
         orig-system   (load-current-system-prompt)
         orig-rules    (load-current-rules)
-        ;; Build meta-prompt with gap analysis
         meta-prompt (build-meta-prompt
                      {:system-prompt    orig-system
                       :examples         orig-examples
                       :rules            orig-rules
                       :history          history
                       :baseline-results (:results baseline)})
-        ;; Ask optimizer for proposal — catch LLM errors
         response    (try
                       (log! "introspect: requesting proposal from optimizer...")
                       (optimizer-invoke-fn
@@ -390,24 +438,18 @@
     (if-not proposal
       (do (log! "introspect: failed to parse proposal, skipping")
           {:outcome :skipped
-           :record  {:timestamp (str (java.util.Date.))
-                     :outcome   :skipped
-                     :rationale "Parse failure"}})
+           :record  {:outcome :skipped :rationale "Parse failure"}})
       (if-let [err (validate-proposal proposal)]
         (do (log! (str "introspect: invalid proposal: " err))
             {:outcome :skipped
-             :record  {:timestamp (str (java.util.Date.))
-                       :outcome   :skipped
-                       :rationale (str "Validation: " err)}})
+             :record  {:outcome :skipped :rationale (str "Validation: " err)}})
         (let [{:keys [target modification rationale goal]} proposal
               _ (log! (str "introspect: target=" (name target)
                            " goal=" (pr-str goal)
                            "\n  " rationale))
-              ;; Apply modification — wrapped in try/catch for safe revert
               original (apply-modification! proposal)]
           (try
-            (let [;; For code changes, run lint + tests as gate
-                  code-gate-ok?
+            (let [code-gate-ok?
                   (if (= :code target)
                     (let [lint-r (run-lint!)
                           test-r (when (:pass? lint-r) (run-tests!))]
@@ -424,14 +466,10 @@
                     true)]
               (if-not code-gate-ok?
                 (do (revert-modification! proposal original)
-                    (let [record {:timestamp (str (java.util.Date.))
-                                  :target    target :goal goal
-                                  :rationale rationale
-                                  :outcome   :gate-failed}]
-                      (append-history! history-path record)
-                      {:outcome :gate-failed :record record}))
+                    {:outcome :gate-failed
+                     :record  {:target target :goal goal :rationale rationale
+                               :outcome :gate-failed}})
                 (do
-                  ;; For :train target, build dataset and train the model
                   (when (= :train target)
                     (let [config  (model/load-config)
                           dataset (td/build-dataset db config)
@@ -442,10 +480,8 @@
                                  (format "%.3f" (:accuracy eval-r))
                                  " top3=" (format "%.3f" (:top3-accuracy eval-r))))
                       (model/save-model! mdl "data/models/latest.edn")))
-                  ;; Reset agent's cached prompts (for prompt/example/rule changes)
                   (when (#{:examples :system-prompt :rules} target)
                     (agent/reset-prompt-cache!))
-                  ;; Evaluate
                   (log! "introspect: evaluating...")
                   (let [eval-result (evaluate-agent! db repo-name invoke-fn-factory)
                         new-mean    (:mean eval-result)
@@ -456,105 +492,115 @@
                       (do (log! (str "introspect: IMPROVED " (format "%+.3f" delta)
                                      " (" (format "%.3f" base-mean)
                                      " -> " (format "%.3f" new-mean) ")"))
-                          (let [record {:timestamp    (str (java.util.Date.))
-                                        :target       target :goal goal
-                                        :rationale    rationale
-                                        :baseline     base-mean
-                                        :result       new-mean
-                                        :delta        delta
-                                        :outcome      :improved
-                                        :modification modification}]
-                            (append-history! history-path record)
-                            (when git-commit?
-                              (git-commit-improvement! repo-path record))
-                            {:outcome     :improved
-                             :record      record
-                             :eval-result eval-result}))
+                          (when git-commit?
+                            (git-commit-improvement! repo-path
+                                                     {:target target :rationale rationale
+                                                      :delta delta}))
+                          {:outcome     :improved
+                           :record      {:target target :goal goal :rationale rationale
+                                         :outcome :improved
+                                         :baseline base-mean :result new-mean
+                                         :delta delta :modification modification}
+                           :eval-result eval-result})
                       (do (log! (str "introspect: reverted (delta=" (format "%+.3f" delta) ")"))
                           (revert-modification! proposal original)
                           (when (#{:examples :system-prompt :rules} target)
                             (agent/reset-prompt-cache!))
-                          (let [record {:timestamp (str (java.util.Date.))
-                                        :target    target :goal goal
-                                        :rationale rationale
-                                        :baseline  base-mean
-                                        :result    new-mean
-                                        :delta     delta
-                                        :outcome   :reverted}]
-                            (append-history! history-path record)
-                            {:outcome :reverted :record record})))))))
+                          {:outcome :reverted
+                           :record  {:target target :goal goal :rationale rationale
+                                     :outcome :reverted
+                                     :baseline base-mean :result new-mean
+                                     :delta delta}}))))))
             (catch Exception e
               (log! (str "introspect: ERROR during evaluation, reverting: " (.getMessage e)))
               (revert-modification! proposal original)
               (when (#{:examples :system-prompt :rules} target)
                 (agent/reset-prompt-cache!))
-              (let [record {:timestamp (str (java.util.Date.))
-                            :target    target :goal goal
-                            :rationale rationale
-                            :outcome   :error
-                            :error     (.getMessage e)}]
-                (append-history! history-path record)
-                {:outcome :error :record record}))))))))
+              {:outcome :error
+               :record  {:target target :goal goal :rationale rationale
+                         :outcome :error :error (.getMessage e)}})))))))
 
 ;; --- Main loop ---
 
 (defn run-loop!
   "Run the introspect improvement loop.
-   Returns {:iterations n :improvements n :final-score double :history vec}."
+   Persists results to the internal meta database.
+   Returns {:run-id str :iterations n :improvements n :final-score double}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
-           max-iterations max-hours max-cost history-path git-commit?]
-    :or   {max-iterations 10
-           history-path   "data/introspect/history.edn"}}]
-  (let [start-ms (System/currentTimeMillis)
-        max-ms   (when max-hours (* max-hours 3600000))
-        history  (load-history history-path)
-        _        (log! "introspect: running baseline evaluation...")
-        baseline (evaluate-agent! db repo-name invoke-fn-factory)
-        _        (log! (str "introspect: baseline mean=" (format "%.3f" (:mean baseline))))]
-    (loop [i            0
-           baseline     baseline
-           history      history
-           improvements 0
-           total-cost   0.0]
-      (let [elapsed-ms (- (System/currentTimeMillis) start-ms)
-            time-up?   (and max-ms (> elapsed-ms max-ms))
-            cost-up?   (and max-cost (> total-cost max-cost))]
-        (cond
-          (>= i max-iterations)
-          (do (log! (str "introspect: reached max iterations (" max-iterations ")"))
-              {:iterations i :improvements improvements
-               :final-score (:mean baseline) :history history})
+           meta-conn max-iterations max-hours max-cost git-commit?
+           model-config]
+    :or   {max-iterations 10}}]
+  (let [run-id     (generate-run-id)
+        start-ms   (System/currentTimeMillis)
+        started-at (java.util.Date.)
+        max-ms     (when max-hours (* max-hours 3600000))
+        meta-db    (d/db meta-conn)
+        history    (load-history meta-db)
+        ;; Capture reproducibility hashes
+        prompt-hash   (util/sha256-hex (or (load-current-system-prompt) ""))
+        examples-hash (util/sha256-hex (pr-str (or (load-current-examples) [])))
+        rules-hash    (util/sha256-hex (pr-str (or (load-current-rules) [])))
+        commit-sha    (git/head-sha repo-path)
+        db-basis-t    (try (:t (d/db-stats db)) (catch Exception _ nil))
+        _             (log! "introspect: running baseline evaluation...")
+        baseline      (evaluate-agent! db repo-name invoke-fn-factory)
+        _             (log! (str "introspect: baseline mean="
+                                 (format "%.3f" (:mean baseline))))
+        result
+        (loop [i 0, baseline baseline, history history,
+               improvements 0, total-cost 0.0, iter-records []]
+          (let [elapsed-ms (- (System/currentTimeMillis) start-ms)
+                time-up?   (and max-ms (> elapsed-ms max-ms))
+                cost-up?   (and max-cost (> total-cost max-cost))
+                done       (fn [reason]
+                             (log! (str "introspect: " reason))
+                             {:iterations i :improvements improvements
+                              :final-score (:mean baseline)
+                              :iter-records iter-records})]
+            (cond
+              (>= i max-iterations)
+              (done (str "reached max iterations (" max-iterations ")"))
 
-          time-up?
-          (do (log! "introspect: time budget exhausted")
-              {:iterations i :improvements improvements
-               :final-score (:mean baseline) :history history})
+              time-up?  (done "time budget exhausted")
+              cost-up?  (done (str "cost budget exhausted ($"
+                                   (format "%.2f" total-cost) ")"))
 
-          cost-up?
-          (do (log! (str "introspect: cost budget exhausted ($"
-                         (format "%.2f" total-cost) ")"))
-              {:iterations i :improvements improvements
-               :final-score (:mean baseline) :history history})
-
-          :else
-          (do (log! (str "\nintrospect: === Iteration " (inc i) "/"
-                         max-iterations " ==="))
-              (let [{:keys [outcome eval-result record]}
-                    (run-iteration!
-                     {:db                  db
-                      :repo-name           repo-name
-                      :repo-path           repo-path
-                      :invoke-fn-factory   invoke-fn-factory
-                      :optimizer-invoke-fn optimizer-invoke-fn
-                      :baseline            baseline
-                      :history             history
-                      :history-path        history-path
-                      :git-commit?         git-commit?})
-                    new-baseline (if (= :improved outcome)
-                                   eval-result
-                                   baseline)]
-                (recur (inc i)
-                       new-baseline
-                       (conj history record)
-                       (if (= :improved outcome) (inc improvements) improvements)
-                       total-cost))))))))
+              :else
+              (do (log! (str "\nintrospect: === Iteration " (inc i) "/"
+                             max-iterations " ==="))
+                  (let [{:keys [outcome eval-result record]}
+                        (run-iteration!
+                         {:db                  db
+                          :repo-name           repo-name
+                          :repo-path           repo-path
+                          :invoke-fn-factory   invoke-fn-factory
+                          :optimizer-invoke-fn optimizer-invoke-fn
+                          :baseline            baseline
+                          :history             history
+                          :git-commit?         git-commit?})
+                        new-baseline (if (= :improved outcome)
+                                       eval-result baseline)]
+                    (recur (inc i) new-baseline (conj history record)
+                           (if (= :improved outcome) (inc improvements) improvements)
+                           total-cost (conj iter-records record)))))))
+        tx-data
+        (run->tx-data
+         {:run-id            run-id
+          :repo-path         repo-path
+          :commit-sha        commit-sha
+          :started-at        started-at
+          :model-config      model-config
+          :max-iterations    max-iterations
+          :prompt-hash       prompt-hash
+          :examples-hash     examples-hash
+          :rules-hash        rules-hash
+          :db-basis-t        db-basis-t
+          :baseline-mean     (:mean baseline)
+          :final-mean        (:final-score result)
+          :iteration-count   (:iterations result)
+          :improvement-count (:improvements result)
+          :cost-usd          0.0
+          :iter-records      (:iter-records result)})]
+    (d/transact meta-conn {:tx-data tx-data})
+    (log! (str "introspect: persisted run " run-id " to meta database"))
+    (assoc result :run-id run-id)))

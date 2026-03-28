@@ -591,7 +591,9 @@
         (with-existing-db
           ctx
           (fn [{:keys [db db-name]}]
-            (let [{:keys [invoke-fn]}
+            (let [meta-conn (db/connect-and-ensure-schema
+                             (util/resolve-db-dir opts) "noumenon-internal")
+                  {:keys [invoke-fn]}
                   (llm/make-messages-fn-from-opts {:provider    provider
                                                    :model       model
                                                    :temperature 0.7
@@ -607,16 +609,19 @@
                           {:db                  db
                            :repo-name           db-name
                            :repo-path           (:repo-path opts)
+                           :meta-conn           meta-conn
                            :invoke-fn-factory   invoke-fn-factory
                            :optimizer-invoke-fn invoke-fn
                            :max-iterations      (or max-iterations 10)
                            :max-hours           max-hours
                            :max-cost            max-cost
-                           :git-commit?         git-commit})]
+                           :git-commit?         git-commit
+                           :model-config        {:provider provider :model model}})]
               (log! (str "\nIntrospect complete: " (:improvements result)
                          " improvements in " (:iterations result)
                          " iterations (final score: "
-                         (format "%.3f" (:final-score result)) ")"))
+                         (format "%.3f" (:final-score result))
+                         ", run-id: " (:run-id result) ")"))
               {:exit 0 :result result})))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))

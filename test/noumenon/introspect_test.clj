@@ -1,6 +1,8 @@
 (ns noumenon.introspect-test
   (:require [clojure.test :refer [deftest is]]
-            [noumenon.introspect :as intro]))
+            [datomic.client.api :as d]
+            [noumenon.introspect :as intro]
+            [noumenon.test-helpers :as th]))
 
 ;; --- Proposal parsing ---
 
@@ -200,13 +202,9 @@
 ;; --- Meta-prompt template completeness ---
 
 (deftest meta-prompt-no-unfilled-placeholders
-  ;; Check that all introspect template placeholders are filled.
-  ;; The template intentionally contains {{repo-name}} etc. as documentation
-  ;; for the LLM about the agent system prompt — those are NOT unfilled.
   (let [prompt (intro/build-meta-prompt
                 {:system-prompt "test prompt" :examples ["recent-commits"] :rules []
                  :history [] :baseline-results []})
-        ;; These are the introspect template's own placeholders
         own-placeholders ["{{current-system-prompt}}" "{{current-examples}}"
                           "{{example-count}}" "{{total-queries}}"
                           "{{all-queries}}" "{{current-rules}}"
@@ -222,47 +220,84 @@
                  :history [] :baseline-results []})]
     (is (.contains prompt "UNIQUE_MARKER_XYZ"))))
 
-;; --- Load history ---
+;; --- Datomic history: load-history from meta DB ---
 
-(deftest load-history-missing-file
-  (is (= [] (intro/load-history "/tmp/nonexistent-introspect-history.edn"))))
+(deftest load-history-empty-db
+  (let [conn (th/make-test-conn "introspect-empty")]
+    (is (= [] (intro/load-history (d/db conn))))))
 
-(deftest load-history-corrupted-file
-  (let [path (str "/tmp/introspect-test-corrupted-" (System/currentTimeMillis) ".edn")]
-    (spit path "not valid edn {{")
-    (try
-      (is (= [] (intro/load-history path)))
-      (finally
-        (.delete (java.io.File. path))))))
+(deftest load-history-with-data
+  (let [conn (th/make-test-conn "introspect-history")]
+    (d/transact conn {:tx-data
+                      [{:introspect.run/id "test-run-1"
+                        :introspect.run/repo-path "/test"
+                        :introspect.run/started-at (java.util.Date.)
+                        :introspect.run/completed-at (java.util.Date.)
+                        :introspect.run/iteration-count 2
+                        :introspect.run/improvement-count 1
+                        :introspect.run/iterations
+                        [{:introspect.iter/index 1
+                          :introspect.iter/target :examples
+                          :introspect.iter/outcome :improved
+                          :introspect.iter/rationale "Added better examples"
+                          :introspect.iter/delta 0.05
+                          :introspect.iter/goal "improve accuracy"
+                          :introspect.iter/timestamp (java.util.Date.)}
+                         {:introspect.iter/index 2
+                          :introspect.iter/target :system-prompt
+                          :introspect.iter/outcome :reverted
+                          :introspect.iter/rationale "Tried new instructions"
+                          :introspect.iter/delta -0.02
+                          :introspect.iter/goal "reduce hallucination"
+                          :introspect.iter/timestamp (java.util.Date.)}]}
+                       {:db/id "datomic.tx" :tx/op :introspect}]})
+    (let [history (intro/load-history (d/db conn))]
+      (is (= 2 (count history)))
+      (is (= :examples (:target (first history))))
+      (is (= :improved (:outcome (first history))))
+      (is (= :reverted (:outcome (second history)))))))
 
-(deftest load-history-non-vector-data
-  (let [path (str "/tmp/introspect-test-nonvec-" (System/currentTimeMillis) ".edn")]
-    (spit path "{:not :a-vector}")
-    (try
-      (is (= [] (intro/load-history path)))
-      (finally
-        (.delete (java.io.File. path))))))
+;; --- Datomic persistence: run->tx-data ---
 
-(deftest load-history-valid
-  (let [path (str "/tmp/introspect-test-valid-" (System/currentTimeMillis) ".edn")]
-    (spit path "[{:outcome :improved}]")
-    (try
-      (is (= [{:outcome :improved}] (intro/load-history path)))
-      (finally
-        (.delete (java.io.File. path))))))
-
-;; --- Append history round-trip ---
-
-(deftest append-history-creates-file
-  (let [path (str "/tmp/introspect-test-append-" (System/currentTimeMillis) ".edn")]
-    (try
-      (intro/append-history! path {:outcome :improved :target :examples})
-      (is (= [{:outcome :improved :target :examples}]
-             (intro/load-history path)))
-      (intro/append-history! path {:outcome :reverted :target :rules})
-      (is (= 2 (count (intro/load-history path))))
-      (finally
-        (.delete (java.io.File. path))))))
+(deftest run-tx-data-round-trip
+  (let [conn    (th/make-test-conn "introspect-txdata")
+        tx-data (intro/run->tx-data
+                 {:run-id            "test-run-42"
+                  :repo-path         "/test/repo"
+                  :commit-sha        "abc123"
+                  :started-at        (java.util.Date.)
+                  :model-config      {:provider "glm" :model "sonnet"}
+                  :max-iterations    10
+                  :prompt-hash       "hash1"
+                  :examples-hash     "hash2"
+                  :rules-hash        "hash3"
+                  :db-basis-t        100
+                  :baseline-mean     0.5
+                  :final-mean        0.6
+                  :iteration-count   2
+                  :improvement-count 1
+                  :cost-usd          1.23
+                  :iter-records      [{:target :examples :outcome :improved
+                                       :rationale "test" :goal "test goal"
+                                       :baseline 0.5 :result 0.6 :delta 0.1
+                                       :modification {:examples ["a" "b"]}}
+                                      {:target :system-prompt :outcome :reverted
+                                       :rationale "test2" :goal "test goal 2"
+                                       :baseline 0.6 :result 0.55 :delta -0.05}]})]
+    ;; Transact should succeed
+    (d/transact conn {:tx-data tx-data})
+    ;; Query back the run
+    (let [db  (d/db conn)
+          run (d/pull db '[*] [:introspect.run/id "test-run-42"])]
+      (is (= "test-run-42" (:introspect.run/id run)))
+      (is (= "/test/repo" (:introspect.run/repo-path run)))
+      (is (= 0.5 (:introspect.run/baseline-mean run)))
+      (is (= 0.6 (:introspect.run/final-mean run)))
+      (is (= 2 (count (:introspect.run/iterations run)))))
+    ;; Verify history loads from the new data
+    (let [history (intro/load-history (d/db conn))]
+      (is (= 2 (count history)))
+      (is (= :improved (:outcome (first history)))))))
 
 ;; --- Score calculation ---
 
