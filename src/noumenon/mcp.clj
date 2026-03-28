@@ -10,6 +10,7 @@
             [noumenon.git :as git]
             [noumenon.benchmark :as bench]
             [noumenon.imports :as imports]
+            [noumenon.introspect :as introspect]
             [noumenon.llm :as llm]
             [noumenon.query :as query]
             [noumenon.sync :as sync]
@@ -211,6 +212,16 @@
                                       "max_questions" {:type "integer" :description "Benchmark: limit to N questions"}
                                       "layers" {:type "string" :description "Benchmark layers: raw,import,enrich,full (default: raw,full)"}
                                       "report" {:type "boolean" :description "Generate Markdown benchmark report"}})
+                  :required ["repo_path"]}}
+   {:name "noumenon_introspect"
+    :description "Run an autonomous self-improvement loop: propose prompt changes, evaluate via benchmark, keep improvements. WARNING: Expensive — runs multiple benchmark evaluations. Use max_iterations to limit scope."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"provider" {:type "string" :description "LLM provider: glm, claude-api, or claude-cli"}
+                                      "model" {:type "string" :description "Model alias (e.g. sonnet, haiku, opus)"}
+                                      "max_iterations" {:type "integer" :description "Max improvement iterations (default: 10)"}
+                                      "max_hours" {:type "number" :description "Stop after N hours of wall-clock time"}
+                                      "max_cost" {:type "number" :description "Stop when cost exceeds threshold (dollars)"}})
                   :required ["repo_path"]}}])
 
 ;; --- Tool handlers ---
@@ -593,6 +604,37 @@
                    (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
         (tool-result (format-digest-summary @results))))))
 
+(defn- handle-introspect [args defaults]
+  (validate-llm-inputs! args)
+  (with-conn args defaults
+    (fn [{:keys [db db-name]}]
+      (let [{:keys [invoke-fn]}
+            (llm/make-messages-fn-from-opts
+             {:provider    (or (args "provider") (:provider defaults))
+              :model       (or (args "model") (:model defaults))
+              :temperature 0.7
+              :max-tokens  8192})
+            invoke-fn-factory
+            (fn []
+              (:invoke-fn
+               (llm/make-messages-fn-from-opts
+                {:provider    (or (args "provider") (:provider defaults))
+                 :model       (or (args "model") (:model defaults))
+                 :temperature 0.0
+                 :max-tokens  4096})))
+            result (introspect/run-loop!
+                    {:db                  db
+                     :repo-name           db-name
+                     :invoke-fn-factory   invoke-fn-factory
+                     :optimizer-invoke-fn invoke-fn
+                     :max-iterations      (or (args "max_iterations") 10)
+                     :max-hours           (args "max_hours")
+                     :max-cost            (args "max_cost")})]
+        (tool-result (str "Introspect complete: " (:improvements result)
+                          " improvements in " (:iterations result)
+                          " iterations (final score: "
+                          (format "%.3f" (:final-score result)) ")"))))))
+
 (def ^:private tool-handlers
   {"noumenon_import"            handle-import
    "noumenon_status"            handle-status
@@ -607,7 +649,8 @@
    "noumenon_benchmark_run"     handle-benchmark-run
    "noumenon_benchmark_results" handle-benchmark-results
    "noumenon_benchmark_compare" handle-benchmark-compare
-   "noumenon_digest"            handle-digest})
+   "noumenon_digest"            handle-digest
+   "noumenon_introspect"        handle-introspect})
 
 ;; --- MCP method handlers ---
 
