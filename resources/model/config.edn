@@ -5,6 +5,10 @@
 ;; Architecture: bag-of-words → dense → ReLU → dense → softmax
 ;; Input: question text (tokenized to vocab indices, averaged)
 ;; Output: probability distribution over named query patterns
+;;
+;; To ship pre-trained weights:
+;;   cp data/models/latest.edn resources/model/weights.edn
+;; The agent will load bundled weights automatically when no local model exists.
 
 {:vocab-size      2048        ;; BPE vocabulary size
  :embedding-dim   64          ;; Token embedding dimension
