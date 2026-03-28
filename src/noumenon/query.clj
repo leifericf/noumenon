@@ -2,32 +2,15 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [datomic.client.api :as d]))
-
-;; --- Loading ---
+            [datomic.client.api :as d]
+            [noumenon.artifacts :as artifacts]))
 
 (defn load-edn-resource
-  "Load and parse an EDN file from the classpath. Returns nil if not found."
+  "Load and parse an EDN file from the classpath. Returns nil if not found.
+   Used for non-artifact resources (model config, benchmark questions, etc.)."
   [resource-path]
   (when-let [url (io/resource resource-path)]
     (-> url slurp edn/read-string)))
-
-(defn load-rules
-  "Load reusable Datalog rules from resources/queries/rules.edn."
-  []
-  (load-edn-resource "queries/rules.edn"))
-
-(defn load-named-query
-  "Load a named query definition. Returns the query map or nil if not found."
-  [query-name]
-  (load-edn-resource (str "queries/" query-name ".edn")))
-
-(defn list-query-names
-  "Return available named queries from resources/queries/index.edn."
-  []
-  (->> (load-edn-resource "queries/index.edn")
-       (sort)
-       vec))
 
 ;; --- Schema introspection ---
 
@@ -76,13 +59,12 @@
 ;; --- Execution ---
 
 (defn execute-query
-  "Execute a named query against the given database.
-   `params` is an optional map of input values for parameterized queries,
-   keyed by the names declared in the query-def's :inputs vector."
-  ([db query-def] (execute-query db query-def nil))
-  ([db query-def params]
+  "Execute a query-def against the given database.
+   `rules` is the parsed rules vector (required when query-def has :uses-rules).
+   `params` is an optional map of input values for parameterized queries."
+  ([db query-def rules] (execute-query db query-def rules nil))
+  ([db query-def rules params]
    (let [{:keys [query uses-rules inputs]} query-def
-         rules     (when uses-rules (load-rules))
          extra-args (when (seq inputs)
                       (mapv params inputs))
          args      (cond-> [query db]
@@ -92,15 +74,16 @@
 
 (defn run-named-query
   "Load and execute a named query. Returns {:ok results} or {:error message}.
-   Validates query-name against the index allowlist before loading.
+   Validates query-name against the active allowlist in the meta database.
    `params` is an optional map for parameterized queries."
-  ([db query-name] (run-named-query db query-name {}))
-  ([db query-name params]
-   (if-not ((set (list-query-names)) query-name)
-     {:error (str "Unknown query: " query-name
-                  ". Available: " (pr-str (list-query-names)))}
-     (if-let [query-def (load-named-query query-name)]
-       (if-let [missing (seq (remove (set (keys params)) (:inputs query-def)))]
-         {:error (str "Missing required inputs: " (pr-str (vec missing)))}
-         {:ok (execute-query db query-def params)})
-       {:error (str "Query '" query-name "' is in the index but its definition file is missing.")}))))
+  ([meta-db db query-name] (run-named-query meta-db db query-name {}))
+  ([meta-db db query-name params]
+   (let [active (set (artifacts/list-active-query-names meta-db))]
+     (if-not (active query-name)
+       {:error (str "Unknown query: " query-name
+                    ". Available: " (pr-str (sort active)))}
+       (if-let [query-def (artifacts/load-named-query meta-db query-name)]
+         (if-let [missing (seq (remove (set (keys params)) (:inputs query-def)))]
+           {:error (str "Missing required inputs: " (pr-str (vec missing)))}
+           {:ok (execute-query db query-def (artifacts/load-rules meta-db) params)})
+         {:error (str "Query '" query-name "' is active but has no definition.")})))))

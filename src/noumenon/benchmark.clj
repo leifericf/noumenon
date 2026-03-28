@@ -66,8 +66,8 @@
   "Build context string from a named query's results for the given condition.
    Non-raw conditions query the KG; the layer determines which attributes are meaningful.
    Truncates output to max-total-context-chars for very large result sets."
-  [db query-name]
-  (let [{:keys [ok error]} (query/run-named-query db query-name)]
+  [meta-db db query-name]
+  (let [{:keys [ok error]} (query/run-named-query meta-db db query-name)]
     (if error
       (str "Query error: " error)
       (let [full (pr-str ok)]
@@ -162,11 +162,11 @@
   "Score a single-hop question deterministically using Datalog ground truth.
    Dispatches on question :id. Returns {:score kw :reasoning str}.
    Callers must pass (or answer-text \"\") — nil answer-text is treated as empty."
-  (fn [question _db _answer-text] (:id question)))
+  (fn [question _meta-db _db _answer-text] (:id question)))
 
 (defmethod deterministic-score :q01
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         complex-files (->> ok
                            (filter (fn [[_path complexity]]
                                      (#{:complex :very-complex} complexity)))
@@ -186,11 +186,11 @@
       {:score :wrong :reasoning (str found "/" total " complex files listed (<50%)")})))
 
 (defmethod deterministic-score :q02
-  [question db answer-text]
+  [question meta-db db answer-text]
   (let [target-file (:target-file (:resolved-params question))]
     (if-not target-file
       {:score :wrong :reasoning "No target file resolved for parameterized question"}
-      (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+      (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
             layer (->> ok
                        (filter (fn [[path _]] (str/ends-with? path target-file)))
                        first second)]
@@ -200,8 +200,8 @@
                                          " not found in answer")})))))
 
 (defmethod deterministic-score :q03
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked       (->> ok
                           (sort-by (fn [[_ _ cnt]] cnt) #(compare %2 %1))
                           (take 3)
@@ -232,20 +232,20 @@
       :else {:score :wrong :reasoning (str found "/" n " " label " listed")})))
 
 (defmethod deterministic-score :q11
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by second #(compare %2 %1)) (take 3) (mapv first))]
     (top-n-match-score ranked answer-text 3 "top bug-hotspot files")))
 
 (defmethod deterministic-score :q12
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by (fn [[_ _ cnt]] cnt) #(compare %2 %1)) (take 3) (mapv first))]
     (top-n-match-score ranked answer-text 3 "top fix authors")))
 
 (defmethod deterministic-score :q13
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         low-bus (->> ok (filter (fn [[_ cnt]] (<= cnt 2))) (mapv first))
         found   (count (filter #(str/includes? answer-text %) (take 5 low-bus)))]
     (cond
@@ -254,8 +254,8 @@
       :else {:score :wrong :reasoning "No low-bus-factor files identified"})))
 
 (defmethod deterministic-score :q14
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok
                     (map (fn [[dir adds dels]] [dir (+ (or adds 0) (or dels 0))]))
                     (sort-by second #(compare %2 %1))
@@ -264,13 +264,13 @@
     (top-n-match-score ranked answer-text 3 "top churn directories")))
 
 (defmethod deterministic-score :q27
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by second #(compare %2 %1)) (take 3) (mapv first))]
     (top-n-match-score ranked answer-text 3 "top import hotspots")))
 
 (defmethod deterministic-score :q28
-  [_question db answer-text]
+  [_question _meta-db db answer-text]
   (let [result (d/q '[:find ?a ?b
                       :where [?fa :file/imports ?fb] [?fb :file/imports ?fa]
                       [?fa :file/path ?a] [?fb :file/path ?b]
@@ -292,8 +292,8 @@
                                      (if has-cycles? "cycles exist" "no cycles"))})))
 
 (defmethod deterministic-score :q29
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         orphans (mapv first ok)
         found   (count (filter #(str/includes? answer-text %) (take 5 orphans)))]
     (cond
@@ -312,11 +312,11 @@
       {:score :wrong :reasoning "No orphan files identified"})))
 
 (defmethod deterministic-score :q30
-  [question db answer-text]
+  [question meta-db db answer-text]
   (let [target-path (:target-file (:resolved-params question))]
     (if-not target-path
       {:score :wrong :reasoning "No target file resolved for parameterized question"}
-      (let [{:keys [ok]} (query/run-named-query db (:query-name question)
+      (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question)
                                                 {:file-path target-path})
             imports (mapv first ok)
             found   (count (filter #(str/includes? answer-text %) imports))
@@ -333,9 +333,9 @@
           {:score :wrong :reasoning (str found "/" total " imports listed")})))))
 
 (defmethod deterministic-score :q05
-  [_question db answer-text]
-  (let [{cx :ok} (query/run-named-query db "files-by-complexity")
-        {ly :ok} (query/run-named-query db "files-by-layer")
+  [_question meta-db db answer-text]
+  (let [{cx :ok} (query/run-named-query meta-db db "files-by-complexity")
+        {ly :ok} (query/run-named-query meta-db db "files-by-layer")
         trivial  (into #{} (comp (filter (fn [[_ c]] (= :trivial c))) (map first)) cx)
         core     (into #{} (comp (filter (fn [[_ l]] (= :core l))) (map first)) ly)
         matches  (set/intersection trivial core)]
@@ -352,8 +352,8 @@
           :else            {:score :wrong :reasoning (str found "/" total " trivial+core files listed")})))))
 
 (defmethod deterministic-score :q06
-  [_question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db "component-dependencies")
+  [_question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db "component-dependencies")
         by-comp (frequencies (map first ok))
         top     (when (seq by-comp)
                   (key (apply max-key val by-comp)))]
@@ -366,9 +366,9 @@
         {:score :wrong :reasoning (str "Expected component " top " not found in answer")}))))
 
 (defmethod deterministic-score :q15
-  [_question db answer-text]
-  (let [{hs :ok} (query/run-named-query db "hotspots")
-        {cx :ok} (query/run-named-query db "files-by-complexity")
+  [_question meta-db db answer-text]
+  (let [{hs :ok} (query/run-named-query meta-db db "hotspots")
+        {cx :ok} (query/run-named-query meta-db db "files-by-complexity")
         top-churn  (->> hs (sort-by second #(compare %2 %1)) (take 5) (map first) set)
         complex    (->> cx (filter (fn [[_ c]] (#{:complex :very-complex} c))) (map first) set)
         matches    (set/intersection top-churn complex)]
@@ -386,8 +386,8 @@
           {:score :wrong :reasoning "No overlapping files identified"})))))
 
 (defmethod deterministic-score :q24
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         names (mapv second ok)]
     (if (empty? names)
       (if (re-find #"(?i)(no|none|zero)" answer-text)
@@ -397,14 +397,14 @@
                          "uncalled segments"))))
 
 (defmethod deterministic-score :q25
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by second #(compare %2 %1)) (take 5) (mapv first))]
     (top-n-match-score ranked answer-text (count ranked) "top dependency-heavy files")))
 
 (defmethod deterministic-score :q26
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         names (mapv second ok)]
     (if (empty? names)
       (if (re-find #"(?i)(no|none|zero)" answer-text)
@@ -414,14 +414,14 @@
                          "pure segments"))))
 
 (defmethod deterministic-score :q36
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by second #(compare %2 %1)) (take 5) (mapv first))]
     (top-n-match-score ranked answer-text (count ranked) "top shared dependencies")))
 
 (defmethod deterministic-score :q37
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         paths (take 5 (distinct (map first ok)))]
     (if (empty? paths)
       (if (re-find #"(?i)(no|none|zero)" answer-text)
@@ -431,8 +431,8 @@
                          "cross-directory import sources"))))
 
 (defmethod deterministic-score :q38
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by second #(compare %2 %1)) (mapv (comp name first)))
         top    (take 3 ranked)
         found  (filterv #(str/includes? answer-text %) top)
@@ -447,14 +447,14 @@
       {:score :wrong :reasoning (str (count found) "/" (count top) " commit kinds found")})))
 
 (defmethod deterministic-score :q39
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by second) (take 5) (mapv first))]
     (top-n-match-score ranked answer-text (count ranked) "low bus-factor directories")))
 
 (defmethod deterministic-score :q40
-  [question db answer-text]
-  (let [{:keys [ok]} (query/run-named-query db (:query-name question))
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by (fn [[_ _ cnt]] cnt) #(compare %2 %1)) (take 3))
         shas   (mapv (comp #(subs % 0 (min 7 (count %))) first) ranked)
         found  (count (filter #(str/includes? answer-text %) shas))]
@@ -472,8 +472,8 @@
   "Pick dynamic target files for parameterized benchmark questions.
    Queries the DB for a high-fan-in file to use as the benchmark target.
    Returns {:target-file path-string}."
-  [db]
-  (let [{:keys [ok]} (query/run-named-query db "import-hotspots")
+  [meta-db db]
+  (let [{:keys [ok]} (query/run-named-query meta-db db "import-hotspots")
         top-file (when (seq ok)
                    (->> ok (sort-by second #(compare %2 %1)) first first))]
     {:target-file (or top-file "unknown")}))
@@ -912,7 +912,7 @@
 
 (defn- stage-prompt
   "Build the LLM prompt for a benchmark stage."
-  [stage-key {:keys [question rubric-map db raw-ctx stages]}]
+  [stage-key {:keys [question rubric-map meta-db db raw-ctx stages]}]
   (let [[qid layer stage-type] stage-key
         q-text (:question question)]
     (if (= :judge stage-type)
@@ -921,17 +921,17 @@
       ;; :answer stage — context depends on layer
       (if (= :raw layer)
         (answer-prompt q-text raw-ctx)
-        (answer-prompt q-text (query-context db (:query-name question)))))))
+        (answer-prompt q-text (query-context meta-db db (:query-name question)))))))
 
 (defn run-stage
   "Execute a single benchmark stage. Returns {:status :ok :result ... :usage ... :completed-at ...}."
-  [stage-key {:keys [question db stages invoke-llm judge-llm] :as opts}]
+  [stage-key {:keys [question meta-db db stages invoke-llm judge-llm] :as opts}]
   (let [[qid condition stage-type] stage-key
         deterministic? (and (= :judge stage-type)
                             (= :deterministic (:scoring question)))]
     (if deterministic?
       (let [answer (or (get-in stages [[qid condition :answer] :result]) "")
-            score  (deterministic-score question db answer)]
+            score  (deterministic-score question meta-db db answer)]
         (log! (str "bench/deterministic-score q=" (name qid)
                    " condition=" (name condition)
                    " score=" (name (:score score))))
@@ -1037,11 +1037,11 @@
 
 (defn- execute-and-record-stage!
   "Execute one stage, record result in checkpoint, write to disk."
-  [{:keys [stage-key question rubric-map db raw-ctx checkpoint cp-path
+  [{:keys [stage-key question rubric-map meta-db db raw-ctx checkpoint cp-path
            invoke-llm judge-llm session-cost total]}]
   (let [stage-start (System/currentTimeMillis)
         result      (run-stage stage-key {:question question :rubric-map rubric-map
-                                          :db db :raw-ctx raw-ctx
+                                          :meta-db meta-db :db db :raw-ctx raw-ctx
                                           :stages (:stages @checkpoint)
                                           :invoke-llm invoke-llm :judge-llm judge-llm})
         dur-ms      (- (System/currentTimeMillis) stage-start)
@@ -1430,8 +1430,8 @@
 (defn run-benchmark!
   "Run the full benchmark with per-stage checkpointing, resume, and budget controls.
    Returns {:results [...] :aggregate {...} :total-usage {...} :run-id str :checkpoint-path str :stop-reason kw-or-nil}."
-  [db repo-path invoke-llm & {:keys [resume-checkpoint canary conn report?] :as opts}]
-  (let [targets        (pick-benchmark-targets db)
+  [db repo-path invoke-llm & {:keys [meta-db resume-checkpoint canary conn report?] :as opts}]
+  (let [targets        (pick-benchmark-targets meta-db db)
         all-questions  (resolve-question-params (load-questions) targets)
         rubric-map     (load-rubric)
         {:keys [checkpoint-dir budget judge-llm model-config
@@ -1468,7 +1468,7 @@
                                 :mode mode
                                 :budget budget})))
         pairs          (for [q questions, layer layers] [(:id q) layer q])
-        shared         {:rubric-map rubric-map :db db :raw-ctx raw-ctx
+        shared         {:rubric-map rubric-map :meta-db meta-db :db db :raw-ctx raw-ctx
                         :checkpoint checkpoint :cp-path cp-path
                         :invoke-llm invoke-llm :judge-llm judge-llm
                         :session-cost session-cost :budget budget :start-ms start-ms

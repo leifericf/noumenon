@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
+            [noumenon.artifacts :as artifacts]
             [noumenon.llm :as llm]
             [noumenon.model :as model]
             [noumenon.query :as query]))
@@ -84,49 +85,32 @@
 
 ;; --- Prompt assembly ---
 
-(def ^:private prompt-template
-  (delay (-> (query/load-edn-resource "prompts/agent-system.edn") :template)))
+(defn- sanitize-repo-name
+  "Allowlist-sanitize repo-name to prevent prompt injection via the system prompt."
+  [repo-name]
+  (str/replace repo-name #"[^a-zA-Z0-9\-_.]" ""))
 
-(def ^:private agent-example-names
-  (delay (query/load-edn-resource "prompts/agent-examples.edn")))
-
-(def ^:private formatted-examples
-  (delay
-    (->> @agent-example-names
-         (keep query/load-named-query)
+(defn- format-examples
+  "Build formatted example string from Datomic artifacts."
+  [meta-db]
+  (let [example-names (some-> (artifacts/load-prompt meta-db "agent-examples")
+                              edn/read-string)]
+    (->> example-names
+         (keep (partial artifacts/load-named-query meta-db))
          (map (fn [{:keys [name description query uses-rules]}]
                 (str ";;; " name " — " description "\n"
                      (pr-str query)
                      (when uses-rules "\n;; (uses rules — pass % as second input)"))))
          (str/join "\n\n"))))
 
-(defn- sanitize-repo-name
-  "Allowlist-sanitize repo-name to prevent prompt injection via the system prompt."
-  [repo-name]
-  (str/replace repo-name #"[^a-zA-Z0-9\-_.]" ""))
-
-(defn reset-prompt-cache!
-  "Force re-read of prompt resources from classpath. Call after modifying prompt EDN files."
-  []
-  (alter-var-root #'prompt-template (constantly (delay (-> (query/load-edn-resource "prompts/agent-system.edn") :template))))
-  (alter-var-root #'agent-example-names (constantly (delay (query/load-edn-resource "prompts/agent-examples.edn"))))
-  (alter-var-root #'formatted-examples
-                  (constantly (delay (->> @agent-example-names
-                                          (keep query/load-named-query)
-                                          (map (fn [{:keys [name description query uses-rules]}]
-                                                 (str ";;; " name " — " description "\n"
-                                                      (pr-str query)
-                                                      (when uses-rules "\n;; (uses rules — pass % as second input)"))))
-                                          (str/join "\n\n"))))))
-
 (defn build-system-prompt
   "Render the agent system prompt with live schema, rules, and examples."
-  [db repo-name]
-  (-> @prompt-template
+  [meta-db db repo-name]
+  (-> (artifacts/load-prompt meta-db "agent-system")
       (str/replace "{{repo-name}}" (sanitize-repo-name repo-name))
       (str/replace "{{schema}}" (query/schema-summary db))
-      (str/replace "{{rules}}" (pr-str (query/load-rules)))
-      (str/replace "{{examples}}" @formatted-examples)))
+      (str/replace "{{rules}}" (pr-str (artifacts/load-rules meta-db)))
+      (str/replace "{{examples}}" (format-examples meta-db))))
 
 ;; --- Response parsing ---
 
@@ -176,13 +160,13 @@
 
 (defn- dispatch-query
   "Execute a Datalog query against db. Returns result text with optional truncation note."
-  [db parsed-args]
+  [meta-db db parsed-args]
   (let [q (:query parsed-args)]
     (if-let [err (validate-query q)]
       (str "Query rejected: " err)
       (try
         (let [limit  (min (or (:limit parsed-args) default-row-limit) max-row-limit)
-              rules  (query/load-rules)
+              rules  (artifacts/load-rules meta-db)
               f      (future (try
                                (d/q q db rules)
                                (catch Exception e
@@ -216,15 +200,15 @@
 (defn- dispatch-schema [db]
   (query/schema-summary db))
 
-(defn- dispatch-rules []
-  (pr-str (query/load-rules)))
+(defn- dispatch-rules [meta-db]
+  (pr-str (artifacts/load-rules meta-db)))
 
 (defn dispatch-tool
   "Dispatch a parsed tool call. Returns {:result string} or {:answer string}."
-  [db tool-call]
-  (let [handlers {:query  (fn [args] {:result (dispatch-query db args)})
+  [meta-db db tool-call]
+  (let [handlers {:query  (fn [args] {:result (dispatch-query meta-db db args)})
                   :schema (fn [_] {:result (dispatch-schema db)})
-                  :rules  (fn [_] {:result (dispatch-rules)})
+                  :rules  (fn [_] {:result (dispatch-rules meta-db)})
                   :answer (fn [args] {:answer (:text args "")})}]
     (if-let [handle (handlers (:tool tool-call))]
       (handle (:args tool-call))
@@ -305,7 +289,7 @@
       :else            messages)))
 
 (defn- next-state
-  [{:keys [db invoke-fn system-prompt]}
+  [{:keys [meta-db db invoke-fn system-prompt]}
    {:keys [messages steps iterations total-usage max-iterations]}]
   (if (>= iterations max-iterations)
     (let [state {:messages messages :steps steps
@@ -336,15 +320,15 @@
          :max-iterations max-iterations}
         ;; parsed is a vector of tool calls — check for :answer first
         (if-let [answer-call (some #(when (= :answer (:tool %)) %) parsed)]
-          (let [{:keys [answer]} (dispatch-tool db answer-call)]
+          (let [{:keys [answer]} (dispatch-tool meta-db db answer-call)]
             {:done {:answer answer
                     :steps  (conj steps (assoc step :answer answer))
                     :usage  (assoc usage :iterations (inc iterations))
                     :status :answered}})
           ;; Execute all tool calls (in parallel if >1)
           (let [results (if (= 1 (count parsed))
-                          [(dispatch-tool db (first parsed))]
-                          (pmap #(dispatch-tool db %) parsed))
+                          [(dispatch-tool meta-db db (first parsed))]
+                          (pmap #(dispatch-tool meta-db db %) parsed))
                 combined (if (= 1 (count results))
                            (:result (first results))
                            (->> results
@@ -362,9 +346,9 @@
 (defn- model-hint
   "If a trained model is available, generate a hint suggesting which
    named queries to try first. Returns a string or nil."
-  [question]
+  [meta-db question]
   (when-let [mdl (model/load-best-model)]
-    (when-let [suggestions (seq (model/suggest-queries mdl question 3))]
+    (when-let [suggestions (seq (model/suggest-queries mdl meta-db question 3))]
       (str "\n\nHint: a query routing model suggests these named queries "
            "may be relevant (try them first if they fit):\n"
            (->> suggestions
@@ -378,11 +362,11 @@
    Returns {:answer string :steps vec :usage {:iterations n :input-tokens n :output-tokens n}
             :status :answered|:budget-exhausted :session-id string?}.
    Pass :continue-from session-id to resume a budget-exhausted session."
-  [db question {:keys [invoke-fn repo-name max-iterations continue-from]
-                :or   {max-iterations default-max-iterations}}]
-  (let [sys-prompt (build-system-prompt db repo-name)
-        context    {:db db :invoke-fn invoke-fn :system-prompt sys-prompt}
-        hint       (model-hint question)
+  [meta-db db question {:keys [invoke-fn repo-name max-iterations continue-from]
+                        :or   {max-iterations default-max-iterations}}]
+  (let [sys-prompt (build-system-prompt meta-db db repo-name)
+        context    {:meta-db meta-db :db db :invoke-fn invoke-fn :system-prompt sys-prompt}
+        hint       (model-hint meta-db question)
         user-msg   (if hint (str question hint) question)
         initial    (if-let [prev (when continue-from (load-session! continue-from))]
                      (assoc prev :max-iterations (+ (:iterations prev) max-iterations))

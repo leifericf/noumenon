@@ -1,0 +1,82 @@
+[;; --- Named Queries ---
+ {:db/ident       :artifact.query/name
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Unique query identifier (e.g. \"hotspots\")"}
+
+ {:db/ident       :artifact.query/description
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Human-readable description of what the query finds"}
+
+ {:db/ident       :artifact.query/query-edn
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Datalog query vector as pr-str EDN"}
+
+ {:db/ident       :artifact.query/inputs
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Parameter names as pr-str EDN vector (e.g. \"[:file-path]\")"}
+
+ {:db/ident       :artifact.query/uses-rules
+  :db/valueType   :db.type/boolean
+  :db/cardinality :db.cardinality/one
+  :db/doc         "True if query requires Datalog rules passed as %"}
+
+ {:db/ident       :artifact.query/active
+  :db/valueType   :db.type/boolean
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Whether this query is available for execution (replaces index.edn allowlist)"}
+
+ ;; --- Datalog Rules ---
+ {:db/ident       :artifact.rules/id
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Rules identifier (always \"default\")"}
+
+ {:db/ident       :artifact.rules/edn
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Datalog rules vector as pr-str EDN"}
+
+ ;; --- Prompt Templates ---
+ {:db/ident       :artifact.prompt/name
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Prompt identifier (e.g. \"agent-system\", \"analyze-file\")"}
+
+ {:db/ident       :artifact.prompt/template
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Prompt template string — for templates under 4KB"}
+
+ {:db/ident       :artifact.prompt/chunks
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/isComponent true
+  :db/doc         "Ordered chunks for templates exceeding 4KB string limit"}
+
+ {:db/ident       :artifact.chunk/ordinal
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Zero-based ordering of chunk within parent"}
+
+ {:db/ident       :artifact.chunk/content
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Chunk content string (up to 4KB)"}
+
+ {:db/ident       :artifact.prompt/version
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Prompt version string (e.g. \"0.6.0\")"}
+
+ ;; --- Transaction metadata ---
+ {:db/ident       :tx/artifact-source
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Source of artifact change: :bootstrap, :reseed, :introspect, :manual-cli, :manual-mcp"}]

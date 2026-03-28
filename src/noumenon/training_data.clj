@@ -4,8 +4,8 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [noumenon.artifacts :as artifacts]
             [noumenon.benchmark :as bench]
-            [noumenon.query :as query]
             [noumenon.util :refer [log!]]))
 
 ;; --- Tokenization (simple word-level) ---
@@ -35,14 +35,14 @@
 
 (defn- query-name->index
   "Build a map from query-name to output index."
-  []
-  (let [names (sort (query/list-query-names))]
+  [meta-db]
+  (let [names (artifacts/list-active-query-names meta-db)]
     (into {} (map-indexed (fn [i n] [n i]) names))))
 
 (defn benchmark-examples
   "Generate (question-text, query-name) pairs from benchmark questions."
-  [db]
-  (let [targets   (bench/pick-benchmark-targets db)
+  [meta-db db]
+  (let [targets   (bench/pick-benchmark-targets meta-db db)
         questions (bench/resolve-question-params (bench/load-questions) targets)]
     (->> questions
          (filter :query-name)
@@ -70,11 +70,11 @@
   "Build a complete training dataset.
    Returns {:examples [{:text str :tokens [int] :label int}...]
             :vocab {str int} :label-index {int str}}."
-  [db {:keys [vocab-size] :or {vocab-size 2048}}]
-  (let [examples   (benchmark-examples db)
+  [meta-db db {:keys [vocab-size] :or {vocab-size 2048}}]
+  (let [examples   (benchmark-examples meta-db db)
         token-seqs (mapv (comp tokenize :text) examples)
         vocab      (build-vocab token-seqs vocab-size)
-        labels     (query-name->index)
+        labels     (query-name->index meta-db)
         dropped    (remove #(labels (:query-name %)) examples)
         _          (when (seq dropped)
                      (log! (str "training-data: dropped " (count dropped)

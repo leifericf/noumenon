@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
+            [noumenon.db :as db]
             [noumenon.test-helpers :as th]))
 
 ;; --- Tier 0: Pure function tests ---
@@ -291,7 +292,8 @@
   (is (nil? (analyze/analysis->tx-data "src/foo.clj" {} {}))))
 
 (deftest load-prompt-template-works
-  (let [pt (analyze/load-prompt-template)]
+  (let [meta-db (d/db (db/ensure-meta-db :mem))
+        pt      (analyze/load-prompt-template meta-db)]
     (is (string? (:template pt)))
     (is (str/includes? (:template pt) "{{file-path}}"))))
 

@@ -1,6 +1,7 @@
 (ns noumenon.db
   (:require [clojure.java.io :as io]
             [datomic.client.api :as d]
+            [noumenon.artifacts :as artifacts]
             [noumenon.schema :as schema]))
 
 (defn create-client
@@ -26,6 +27,14 @@
   (let [client (create-client storage-dir)
         conn   (create-db client db-name)]
     (schema/ensure-schema conn)
+    conn))
+
+(defn ensure-meta-db
+  "Connect to the noumenon-internal meta database, ensure schema, and seed
+   artifacts from classpath if needed. Returns the connection."
+  [storage-dir]
+  (let [conn (connect-and-ensure-schema storage-dir "noumenon-internal")]
+    (artifacts/seed-from-classpath! conn)
     conn))
 
 (defn delete-db

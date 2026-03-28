@@ -1,9 +1,9 @@
 (ns noumenon.analyze
   (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
             [datomic.client.api :as d]
+            [noumenon.artifacts :as artifacts]
             [noumenon.files :as files]
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
@@ -66,9 +66,10 @@
 ;; --- Prompt ---
 
 (defn load-prompt-template
-  "Load the analyze-file prompt template from classpath. Returns the template map."
-  []
-  (-> (io/resource "prompts/analyze-file.edn") slurp edn/read-string))
+  "Load the analyze-file prompt template from Datomic. Returns {:template str :version str}."
+  [meta-db]
+  {:template (artifacts/load-prompt meta-db "analyze-file")
+   :version  (artifacts/load-prompt-version meta-db "analyze-file")})
 
 (defn prompt-hash
   "SHA-256 hash of the prompt template string, truncated to 16 hex chars."
@@ -581,14 +582,14 @@
    `opts` may include :model-id, :concurrency, :min-delay-ms.
    Returns summary map with :total-usage."
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
-  ([conn repo-path invoke-llm {:keys [model-id concurrency min-delay-ms max-files]
+  ([conn repo-path invoke-llm {:keys [meta-db model-id concurrency min-delay-ms max-files]
                                :or   {concurrency 3 min-delay-ms 0}}]
    (let [head-paths    (into #{} (map :path) (files/parse-ls-tree (files/git-ls-tree repo-path)))
          all-files     (->> (files-needing-analysis (d/db conn))
                             (filterv (comp head-paths :file/path)))
          files         (if max-files (vec (take max-files all-files)) all-files)
          total         (count files)
-         prompt-map    (load-prompt-template)
+         prompt-map    (load-prompt-template meta-db)
          analysis-opts {:prompt-template (:template prompt-map)
                         :prompt-hash-val (prompt-hash (:template prompt-map))
                         :invoke-llm invoke-llm}]

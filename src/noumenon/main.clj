@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
+            [noumenon.artifacts :as artifacts]
             [noumenon.benchmark :as bench]
             [noumenon.cli :as cli]
             [noumenon.db :as db]
@@ -64,8 +65,11 @@
   [ctx run!]
   (if-not (db-exists? (:db-dir ctx) (:db-name ctx))
     (do (print-error! (missing-db-msg ctx)) {:exit 1})
-    (let [conn (db/connect-and-ensure-schema (:db-dir ctx) (:db-name ctx))]
-      (run! (assoc ctx :conn conn :db (d/db conn))))))
+    (let [conn      (db/connect-and-ensure-schema (:db-dir ctx) (:db-name ctx))
+          meta-conn (db/ensure-meta-db (:db-dir ctx))]
+      (run! (assoc ctx
+                   :conn conn :db (d/db conn)
+                   :meta-conn meta-conn :meta-db (d/db meta-conn))))))
 
 (defn- resolve-repo-path
   "If repo-path is a Git URL, clone to data/repos/<name>/ and return local path.
@@ -133,14 +137,15 @@
       (try
         (with-existing-db
           ctx
-          (fn [{:keys [conn]}]
+          (fn [{:keys [conn meta-db]}]
             (let [{:keys [prompt-fn model-id]}
                   (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})
-                  prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template)))]
+                  prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template meta-db)))]
               (prepare-reanalysis! conn (d/db conn) reanalyze
                                    {:prompt-hash prompt-hash :model-id model-id})
               (let [result (analyze/analyze-repo! conn repo-path prompt-fn
-                                                  (cond-> {:model-id     model-id
+                                                  (cond-> {:meta-db      meta-db
+                                                           :model-id     model-id
                                                            :concurrency  (or concurrency 3)
                                                            :min-delay-ms (or min-delay 0)}
                                                     max-files (assoc :max-files max-files)))]
@@ -228,11 +233,11 @@
 
 (defn- do-query-list
   "List available named queries with descriptions."
-  []
-  (let [queries (->> (query/list-query-names)
+  [meta-db]
+  (let [queries (->> (artifacts/list-active-query-names meta-db)
                      (mapv (fn [qname]
                              {:name        qname
-                              :description (or (:description (query/load-named-query qname)) "")})))
+                              :description (or (:description (artifacts/load-named-query meta-db qname)) "")})))
         width   (+ 4 (reduce max 0 (map (comp count :name) queries)))
         fmt-str (str "  %-" width "s %s")]
     (doseq [{:keys [name description]} queries]
@@ -242,16 +247,16 @@
 (defn do-query
   "Run the query subcommand. Returns {:exit n :result map-or-nil}."
   [{:keys [query-name list-queries params] :as opts}]
-  (if list-queries
-    (do-query-list)
-    (with-valid-repo
-      opts
-      (fn [ctx]
-        (with-existing-db
-          ctx
-          (fn [{:keys [db]}]
+  (with-valid-repo
+    opts
+    (fn [ctx]
+      (with-existing-db
+        ctx
+        (fn [{:keys [db meta-db]}]
+          (if list-queries
+            (do-query-list meta-db)
             (let [kw-params (into {} (map (fn [[k v]] [(keyword k) v])) params)
-                  {:keys [ok error]} (query/run-named-query db query-name kw-params)]
+                  {:keys [ok error]} (query/run-named-query meta-db db query-name kw-params)]
               (if error
                 (do (print-error! error)
                     (when (str/starts-with? (str error) "Missing required inputs")
@@ -268,13 +273,13 @@
       (try
         (with-existing-db
           ctx
-          (fn [{:keys [db db-name]}]
+          (fn [{:keys [db meta-db db-name]}]
             (let [{:keys [invoke-fn]}
                   (llm/make-messages-fn-from-opts {:provider    provider
                                                    :model       model
                                                    :temperature 0.3
                                                    :max-tokens  4096})
-                  result (agent/ask db question
+                  result (agent/ask meta-db db question
                                     (cond-> {:invoke-fn invoke-fn :repo-name db-name}
                                       max-iterations (assoc :max-iterations max-iterations)
                                       continue-from  (assoc :continue-from continue-from)))]
@@ -403,6 +408,7 @@
   [db repo-path answer-llm opts]
   (try
     (bench/run-benchmark! db repo-path answer-llm
+                          :meta-db (:meta-db opts)
                           :judge-llm (:judge-llm opts)
                           :model-config (:model-config opts)
                           :checkpoint-dir (:checkpoint-dir opts)
@@ -485,8 +491,9 @@
   [{:keys [max-questions stop-after max-cost model judge-model provider
            concurrency min-delay skip-raw skip-judge deterministic-only
            canary layers report]}
-   conn]
-  {:judge-llm      (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
+   conn meta-db]
+  {:meta-db        meta-db
+   :judge-llm      (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
                                 {:provider provider
                                  :model    (or judge-model model)}))
    :model-config   {:model model :judge-model (or judge-model model)
@@ -515,10 +522,10 @@
       (try
         (with-existing-db
           ctx
-          (fn [{:keys [conn db]}]
+          (fn [{:keys [conn db meta-db]}]
             (let [answer-llm (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
                                           {:provider provider :model model}))
-                  run-opts   (build-benchmark-opts opts conn)]
+                  run-opts   (build-benchmark-opts opts conn meta-db)]
               (if resume
                 (do-benchmark-resume "data/benchmarks/runs" resume db
                                      (:repo-path opts) answer-llm run-opts)
@@ -546,6 +553,8 @@
     (fn [{:keys [repo-path db-dir db-name]}]
       (try
         (let [conn      (db/connect-and-ensure-schema db-dir db-name)
+              meta-conn (db/ensure-meta-db db-dir)
+              meta-db   (d/db meta-conn)
               repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
               needs-llm (not (and skip-analyze skip-benchmark))
               {:keys [prompt-fn model-id]}
@@ -560,7 +569,8 @@
           (when-not skip-analyze
             (run-digest-step! results :analyze "analyze"
                               #(analyze/analyze-repo! conn repo-path prompt-fn
-                                                      {:model-id model-id
+                                                      {:meta-db     meta-db
+                                                       :model-id    model-id
                                                        :concurrency (or concurrency 3)})))
           (when-not skip-benchmark
             (run-digest-step! results :benchmark "benchmark"
@@ -568,6 +578,7 @@
                                      mode (cond-> {} layers (assoc :layers layers))]
                                  (select-keys
                                   (bench/run-benchmark! db repo-path prompt-fn
+                                                        :meta-db meta-db
                                                         :conn conn :mode mode
                                                         :budget {:max-questions max-questions}
                                                         :report? report
@@ -590,10 +601,8 @@
       (try
         (with-existing-db
           ctx
-          (fn [{:keys [db db-name]}]
-            (let [meta-conn (db/connect-and-ensure-schema
-                             (util/resolve-db-dir opts) "noumenon-internal")
-                  {:keys [invoke-fn]}
+          (fn [{:keys [db meta-conn db-name]}]
+            (let [{:keys [invoke-fn]}
                   (llm/make-messages-fn-from-opts {:provider    provider
                                                    :model       model
                                                    :temperature 0.7
@@ -633,6 +642,34 @@
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
           {:exit 1})))))
+
+;; --- Reseed + Artifact History ---
+
+(defn do-reseed
+  "Reseed artifacts from classpath into the meta database."
+  [opts]
+  (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir opts))]
+    (artifacts/reseed! meta-conn)
+    (let [meta-db (d/db meta-conn)]
+      (log! (str "Reseeded: " (count (artifacts/list-active-query-names meta-db))
+                 " queries, rules, and prompts."))
+      {:exit 0})))
+
+(defn do-artifact-history
+  "Show change history for an artifact."
+  [{:keys [artifact-type artifact-name] :as opts}]
+  (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir opts))
+        history   (case artifact-type
+                    "prompt" (artifacts/prompt-history meta-conn artifact-name)
+                    "rules"  (artifacts/rules-history meta-conn)
+                    (do (print-error! (str "Unknown artifact type: " artifact-type
+                                           ". Must be 'prompt' or 'rules'."))
+                        nil))]
+    (if history
+      (do (doseq [{:keys [tx-time source]} history]
+            (log! (str "  " tx-time " [" (name source) "]")))
+          {:exit 0 :result history})
+      {:exit 1})))
 
 ;; --- Error dispatch ---
 
@@ -739,6 +776,8 @@
                      "benchmark"      (do-benchmark parsed)
                      "digest"         (do-digest parsed)
                      "introspect"     (do-introspect parsed)
+                     "reseed"         (do-reseed parsed)
+                     "artifact-history" (do-artifact-history parsed)
                      "serve"          (do (mcp/serve! parsed) {:exit 0}))]
         (when (and (:result result)
                    (zero? (:exit result))

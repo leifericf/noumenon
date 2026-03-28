@@ -5,6 +5,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [noumenon.artifacts :as artifacts]
             [noumenon.query :as query]
             [noumenon.util :refer [log!]])
   (:import [java.util Random]))
@@ -110,8 +111,8 @@
 
 (defn- index->query-name
   "Build a reverse map from output index to query name."
-  []
-  (let [names (sort (query/list-query-names))]
+  [meta-db]
+  (let [names (artifacts/list-active-query-names meta-db)]
     (into {} (map-indexed (fn [i n] [i n]) names))))
 
 (defn suggest-queries
@@ -119,12 +120,12 @@
    Uses the vocab and label-index stored with the model for consistent tokenization
    and index mapping. Falls back to live query names only when label-index is absent.
    Returns a seq of {:query-name str :probability double}, or nil if no model is available."
-  [model question k]
+  [model meta-db question k]
   (when (and model (:vocab model))
     (let [tokens    (->> (str/lower-case question) (re-seq #"[a-z0-9_\-]+") vec)
           encoded   (mapv #(get (:vocab model) % 1) tokens)
           preds     (predict model encoded k)
-          idx->name (or (:label-index model) (index->query-name))]
+          idx->name (or (:label-index model) (index->query-name meta-db))]
       (->> preds
            (keep (fn [{:keys [index probability]}]
                    (when-let [qname (idx->name index)]

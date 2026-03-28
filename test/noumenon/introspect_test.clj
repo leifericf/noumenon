@@ -1,8 +1,13 @@
 (ns noumenon.introspect-test
   (:require [clojure.test :refer [deftest is]]
             [datomic.client.api :as d]
+            [noumenon.artifacts]
+            [noumenon.db :as db]
             [noumenon.introspect :as intro]
             [noumenon.test-helpers :as th]))
+
+(defn- meta-db []
+  (d/db (db/ensure-meta-db :mem)))
 
 ;; --- Proposal parsing ---
 
@@ -32,124 +37,124 @@
 ;; --- Proposal validation ---
 
 (deftest validate-proposal-invalid-target
-  (is (string? (intro/validate-proposal
-                {:target :invalid :modification {} :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :invalid :modification {} :rationale "test"}))))
 
 (deftest validate-proposal-missing-rationale
-  (is (string? (intro/validate-proposal
-                {:target :examples :modification {:examples ["recent-commits"]} :rationale nil}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :examples :modification {:examples ["recent-commits"]} :rationale nil}))))
 
 (deftest validate-proposal-system-prompt-missing-placeholders
-  (is (string? (intro/validate-proposal
-                {:target :system-prompt
-                 :modification {:template "No placeholders here"}
-                 :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :system-prompt
+                                         :modification {:template "No placeholders here"}
+                                         :rationale "test"}))))
 
 (deftest validate-proposal-system-prompt-valid
-  (is (nil? (intro/validate-proposal
-             {:target :system-prompt
-              :modification {:template "Prompt for {{repo-name}} with {{schema}} and {{rules}} plus {{examples}}"}
-              :rationale "test"}))))
+  (is (nil? (intro/validate-proposal (meta-db)
+                                     {:target :system-prompt
+                                      :modification {:template "Prompt for {{repo-name}} with {{schema}} and {{rules}} plus {{examples}}"}
+                                      :rationale "test"}))))
 
 (deftest validate-proposal-rules-valid
-  (is (nil? (intro/validate-proposal
-             {:target :rules
-              :modification {:rules "[[(my-rule ?x ?y) [?x :file/path ?y]]]"}
-              :rationale "test"}))))
+  (is (nil? (intro/validate-proposal (meta-db)
+                                     {:target :rules
+                                      :modification {:rules "[[(my-rule ?x ?y) [?x :file/path ?y]]]"}
+                                      :rationale "test"}))))
 
 (deftest validate-proposal-rules-invalid-edn
-  (is (string? (intro/validate-proposal
-                {:target :rules
-                 :modification {:rules "not valid edn {{"}
-                 :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :rules
+                                         :modification {:rules "not valid edn {{"}
+                                         :rationale "test"}))))
 
 (deftest validate-proposal-rules-non-vector
-  (is (string? (intro/validate-proposal
-                {:target :rules
-                 :modification {:rules "{:not :a-vector}"}
-                 :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :rules
+                                         :modification {:rules "{:not :a-vector}"}
+                                         :rationale "test"}))))
 
 (deftest validate-proposal-code-valid
-  (is (nil? (intro/validate-proposal
-             {:target :code
-              :modification {:file "src/noumenon/query.clj"
-                             :content "(ns noumenon.query)"}
-              :rationale "test"}))))
+  (is (nil? (intro/validate-proposal (meta-db)
+                                     {:target :code
+                                      :modification {:file "src/noumenon/query.clj"
+                                                     :content "(ns noumenon.query)"}
+                                      :rationale "test"}))))
 
 (deftest validate-proposal-code-wrong-dir
-  (is (string? (intro/validate-proposal
-                {:target :code
-                 :modification {:file "test/foo.clj" :content "x"}
-                 :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :code
+                                         :modification {:file "test/foo.clj" :content "x"}
+                                         :rationale "test"}))))
 
 (deftest validate-proposal-code-not-clj
-  (is (string? (intro/validate-proposal
-                {:target :code
-                 :modification {:file "src/noumenon/foo.py" :content "x"}
-                 :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :code
+                                         :modification {:file "src/noumenon/foo.py" :content "x"}
+                                         :rationale "test"}))))
 
 ;; --- Security: path traversal in :code target ---
 
 (deftest validate-proposal-code-path-traversal
-  (is (string? (intro/validate-proposal
-                {:target :code
-                 :modification {:file "src/noumenon/../../.env" :content "x"}
-                 :rationale "test"})))
-  (is (string? (intro/validate-proposal
-                {:target :code
-                 :modification {:file "src/noumenon/../../etc/passwd.clj" :content "x"}
-                 :rationale "test"})))
-  (is (string? (intro/validate-proposal
-                {:target :code
-                 :modification {:file "src/noumenon/../../../tmp/evil.clj" :content "x"}
-                 :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :code
+                                         :modification {:file "src/noumenon/../../.env" :content "x"}
+                                         :rationale "test"})))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :code
+                                         :modification {:file "src/noumenon/../../etc/passwd.clj" :content "x"}
+                                         :rationale "test"})))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :code
+                                         :modification {:file "src/noumenon/../../../tmp/evil.clj" :content "x"}
+                                         :rationale "test"}))))
 
 (deftest validate-proposal-code-nil-file
-  (is (string? (intro/validate-proposal
-                {:target :code
-                 :modification {:file nil :content "x"}
-                 :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :code
+                                         :modification {:file nil :content "x"}
+                                         :rationale "test"}))))
 
 (deftest validate-proposal-code-nil-content
-  (is (string? (intro/validate-proposal
-                {:target :code
-                 :modification {:file "src/noumenon/foo.clj" :content nil}
-                 :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :code
+                                         :modification {:file "src/noumenon/foo.clj" :content nil}
+                                         :rationale "test"}))))
 
 (deftest validate-proposal-train-valid
-  (is (nil? (intro/validate-proposal
-             {:target :train
-              :modification {:config {:learning-rate 0.002}}
-              :rationale "test"}))))
+  (is (nil? (intro/validate-proposal (meta-db)
+                                     {:target :train
+                                      :modification {:config {:learning-rate 0.002}}
+                                      :rationale "test"}))))
 
 (deftest validate-proposal-train-invalid
-  (is (string? (intro/validate-proposal
-                {:target :train
-                 :modification {:config "not a map"}
-                 :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target :train
+                                         :modification {:config "not a map"}
+                                         :rationale "test"}))))
 
 (deftest validate-proposal-nil-target
-  (is (string? (intro/validate-proposal
-                {:target nil :modification {} :rationale "test"}))))
+  (is (string? (intro/validate-proposal (meta-db)
+                                        {:target nil :modification {} :rationale "test"}))))
 
 (deftest validate-proposal-empty-examples
-  (is (nil? (intro/validate-proposal
-             {:target :examples
-              :modification {:examples []}
-              :rationale "test"}))))
+  (is (nil? (intro/validate-proposal (meta-db)
+                                     {:target :examples
+                                      :modification {:examples []}
+                                      :rationale "test"}))))
 
 ;; --- Gap analysis ---
 
 (deftest gap-analysis-empty
   (let [prompt (intro/build-meta-prompt
-                {:system-prompt "test" :examples ["a"] :rules []
+                {:meta-db (meta-db) :system-prompt "test" :examples ["a"] :rules []
                  :history [] :baseline-results []})]
     (is (string? prompt))
     (is (.contains prompt "No baseline data"))))
 
 (deftest gap-analysis-with-results
   (let [prompt (intro/build-meta-prompt
-                {:system-prompt "test" :examples ["a"] :rules []
+                {:meta-db (meta-db) :system-prompt "test" :examples ["a"] :rules []
                  :history []
                  :baseline-results [{:id :q01 :score :correct :reasoning "ok"}
                                     {:id :q02 :score :wrong :reasoning "missed"}]})]
@@ -158,7 +163,7 @@
 
 (deftest gap-analysis-all-correct
   (let [prompt (intro/build-meta-prompt
-                {:system-prompt "test" :examples ["a"] :rules []
+                {:meta-db (meta-db) :system-prompt "test" :examples ["a"] :rules []
                  :history []
                  :baseline-results [{:id :q01 :score :correct :reasoning "ok"}
                                     {:id :q02 :score :correct :reasoning "ok"}]})]
@@ -167,7 +172,7 @@
 
 (deftest gap-analysis-nil-reasoning
   (let [prompt (intro/build-meta-prompt
-                {:system-prompt "test" :examples ["a"] :rules []
+                {:meta-db (meta-db) :system-prompt "test" :examples ["a"] :rules []
                  :history []
                  :baseline-results [{:id :q01 :score :wrong :reasoning nil}]})]
     (is (string? prompt))
@@ -177,7 +182,7 @@
 
 (deftest format-history-with-goals
   (let [prompt (intro/build-meta-prompt
-                {:system-prompt "test" :examples ["a"] :rules []
+                {:meta-db (meta-db) :system-prompt "test" :examples ["a"] :rules []
                  :history [{:target :examples :rationale "test" :outcome :improved
                             :delta 0.05 :goal "improve accuracy"}]
                  :baseline-results []})]
@@ -185,7 +190,7 @@
 
 (deftest format-history-with-skipped-records
   (let [prompt (intro/build-meta-prompt
-                {:system-prompt "test" :examples ["a"] :rules []
+                {:meta-db (meta-db) :system-prompt "test" :examples ["a"] :rules []
                  :history [{:outcome :skipped :rationale "Parse failure"}]
                  :baseline-results []})]
     (is (string? prompt))
@@ -193,7 +198,7 @@
 
 (deftest format-history-nil-fields
   (let [prompt (intro/build-meta-prompt
-                {:system-prompt "test" :examples ["a"] :rules []
+                {:meta-db (meta-db) :system-prompt "test" :examples ["a"] :rules []
                  :history [{:target nil :outcome nil :rationale nil :delta nil :goal nil}]
                  :baseline-results []})]
     (is (string? prompt))
@@ -203,7 +208,7 @@
 
 (deftest meta-prompt-no-unfilled-placeholders
   (let [prompt (intro/build-meta-prompt
-                {:system-prompt "test prompt" :examples ["recent-commits"] :rules []
+                {:meta-db (meta-db) :system-prompt "test prompt" :examples ["recent-commits"] :rules []
                  :history [] :baseline-results []})
         own-placeholders ["{{current-system-prompt}}" "{{current-examples}}"
                           "{{example-count}}" "{{total-queries}}"
@@ -216,7 +221,7 @@
 
 (deftest meta-prompt-contains-system-prompt
   (let [prompt (intro/build-meta-prompt
-                {:system-prompt "UNIQUE_MARKER_XYZ" :examples [] :rules []
+                {:meta-db (meta-db) :system-prompt "UNIQUE_MARKER_XYZ" :examples [] :rules []
                  :history [] :baseline-results []})]
     (is (.contains prompt "UNIQUE_MARKER_XYZ"))))
 
@@ -314,15 +319,17 @@
 
 (deftest apply-modification-examples-round-trip
   ;; apply-modification! returns the original, which can be used to revert
-  (let [orig-content (slurp (#'intro/resource-path "prompts/agent-examples.edn"))
+  (let [meta-conn    (db/ensure-meta-db :mem)
+        orig-content (noumenon.artifacts/load-prompt (d/db meta-conn) "agent-examples")
         proposal     {:target :examples
+                      :meta-conn meta-conn
                       :modification {:examples ["recent-commits"]}}
         saved-orig   (intro/apply-modification! proposal)]
-    ;; File was modified
-    (is (not= orig-content (slurp (#'intro/resource-path "prompts/agent-examples.edn"))))
-    ;; Revert restores exact original
+    ;; Datomic was modified
+    (is (not= orig-content (noumenon.artifacts/load-prompt (d/db meta-conn) "agent-examples")))
+    ;; Revert restores original
     (intro/revert-modification! proposal saved-orig)
-    (is (= orig-content (slurp (#'intro/resource-path "prompts/agent-examples.edn"))))))
+    (is (= orig-content (noumenon.artifacts/load-prompt (d/db meta-conn) "agent-examples")))))
 
 ;; --- Score calculation ---
 

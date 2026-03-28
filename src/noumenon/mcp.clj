@@ -5,6 +5,7 @@
             [datomic.client.api :as d]
             [noumenon.agent :as agent]
             [noumenon.analyze :as analyze]
+            [noumenon.artifacts :as artifacts]
             [noumenon.db :as db]
             [noumenon.files :as files]
             [noumenon.git :as git]
@@ -282,27 +283,43 @@
                                                     "introspect-failed-approaches"]}
                                "limit" {:type "integer"
                                         :description "Maximum result rows (default: 100)"}}
-                  :required ["query_name"]}}])
+                  :required ["query_name"]}}
+   {:name "noumenon_reseed"
+    :description "Reseed prompts, queries, and rules from classpath EDN into the meta database. Use after editing seed files."
+    :inputSchema {:type "object" :properties {}}}
+   {:name "noumenon_artifact_history"
+    :description "Show change history for a prompt or rules artifact. Returns timestamps and sources."
+    :inputSchema {:type "object"
+                  :properties {"type" {:type "string"
+                                       :description "Artifact type"
+                                       :enum ["prompt" "rules"]}
+                               "name" {:type "string"
+                                       :description "Artifact name (required for prompt, ignored for rules)"}}
+                  :required ["type"]}}])
 
 ;; --- Tool handlers ---
 
 (defn- with-conn
   "Resolve db-dir and db-name from arguments, get/create connection, call f with conn and db.
+   Also connects to the meta database for artifact access.
    When auto-update is enabled (default), transparently updates stale databases before returning."
   [args defaults f]
   (let [raw-path  (args "repo_path")]
     (validate-string-length! "repo_path" raw-path max-repo-path-len)
     (let [repo-path (.getCanonicalPath (io/file raw-path))]
       (validate-repo-path! repo-path)
-      (let [db-dir  (util/resolve-db-dir defaults)
-            db-name (util/derive-db-name repo-path)
-            conn    (get-or-create-conn db-dir db-name)]
+      (let [db-dir    (util/resolve-db-dir defaults)
+            db-name   (util/derive-db-name repo-path)
+            conn      (get-or-create-conn db-dir db-name)
+            meta-conn (db/ensure-meta-db db-dir)]
         (when (:auto-update defaults true)
           (let [db (d/db conn)]
             (when (sync/stale? db repo-path)
               (log! "auto-update" "HEAD changed, updating...")
               (sync/update-repo! conn repo-path repo-path {:concurrency 8}))))
-        (f {:conn conn :db (d/db conn) :repo-path repo-path :db-name db-name})))))
+        (f {:conn conn :db (d/db conn)
+            :meta-conn meta-conn :meta-db (d/db meta-conn)
+            :repo-path repo-path :db-name db-name})))))
 
 (defn- format-import-summary [git-r files-r]
   (str "Import complete. "
@@ -331,7 +348,7 @@
 (defn- handle-query [args defaults]
   (validate-string-length! "query_name" (args "query_name") 256)
   (with-conn args defaults
-    (fn [{:keys [db]}]
+    (fn [{:keys [db meta-db]}]
       (let [raw-params (args "params")
             _          (when (> (count raw-params) 20)
                          (throw (ex-info "Too many params"
@@ -339,7 +356,7 @@
             _          (doseq [[k v] raw-params]
                          (validate-string-length! (str "params." k) (str v) 1024))
             params     (into {} (map (fn [[k v]] [(keyword k) v])) raw-params)
-            result (query/run-named-query db (args "query_name") params)]
+            result (query/run-named-query meta-db db (args "query_name") params)]
         (if (:ok result)
           (let [all-rows   (:ok result)
                 total      (count all-rows)
@@ -347,7 +364,7 @@
                 rows       (take limit all-rows)
                 truncated? (> total limit)
                 query-name (args "query_name")
-                query-def  (query/load-named-query query-name)
+                query-def  (artifacts/load-named-query meta-db query-name)
                 header     (when-let [cols (:columns query-def)]
                              (str "Columns: " (str/join ", " cols) "\n"))
                 summary    (str "Query '" query-name "': " (count rows)
@@ -360,15 +377,18 @@
                                      "Pass a higher `limit` to see more.")))))
           (tool-error (:error result)))))))
 
-(defn- handle-list-queries [_args _defaults]
-  (->> (query/list-query-names)
-       (keep (fn [n]
-               (when-let [q (query/load-named-query n)]
-                 (str n " — " (:description q "no description")
-                      (when (seq (:inputs q))
-                        (str " [requires params: " (str/join ", " (map name (:inputs q))) "]"))))))
-       (str/join "\n")
-       tool-result))
+(defn- handle-list-queries [_args defaults]
+  (let [db-dir    (util/resolve-db-dir defaults)
+        meta-conn (db/ensure-meta-db db-dir)
+        meta-db   (d/db meta-conn)]
+    (->> (artifacts/list-active-query-names meta-db)
+         (keep (fn [n]
+                 (when-let [q (artifacts/load-named-query meta-db n)]
+                   (str n " — " (:description q "no description")
+                        (when (seq (:inputs q))
+                          (str " [requires params: " (str/join ", " (map name (:inputs q))) "]"))))))
+         (str/join "\n")
+         tool-result)))
 
 (defn- handle-get-schema [args defaults]
   (with-conn args defaults
@@ -411,14 +431,14 @@
   (validate-string-length! "question" (args "question") max-question-len)
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [db db-name]}]
+    (fn [{:keys [db meta-db db-name]}]
       (let [{:keys [invoke-fn]}
             (llm/make-messages-fn-from-opts {:provider    (or (args "provider") (:provider defaults))
                                              :model       (or (args "model") (:model defaults))
                                              :temperature 0.3
                                              :max-tokens  4096})
             max-iter    (min (or (args "max_iterations") 10) 50)
-            result      (agent/ask db (args "question")
+            result      (agent/ask meta-db db (args "question")
                                    {:invoke-fn      invoke-fn
                                     :repo-name      db-name
                                     :max-iterations max-iter
@@ -466,17 +486,18 @@
                            ". Must be one of: all, prompt-changed, model-changed, stale")
                       {:scope reanalyze})))
     (with-conn args defaults
-      (fn [{:keys [conn repo-path]}]
+      (fn [{:keys [conn meta-db repo-path]}]
         (let [{:keys [prompt-fn model-id]}
               (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                                 :model    (or (args "model") (:model defaults))})
-              prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template)))]
+              prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template meta-db)))]
           (prepare-reanalysis! conn (d/db conn) reanalyze
                                {:prompt-hash prompt-hash :model-id model-id})
           (let [concurrency (min (or (args "concurrency") 3) 20)
                 max-files   (args "max_files")
                 result      (analyze/analyze-repo! conn repo-path prompt-fn
-                                                   (cond-> {:model-id    model-id
+                                                   (cond-> {:meta-db     meta-db
+                                                            :model-id    model-id
                                                             :concurrency concurrency}
                                                      max-files (assoc :max-files max-files)))]
             (tool-result (str "Analysis complete. "
@@ -519,7 +540,7 @@
 (defn- handle-benchmark-run [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [conn db repo-path]}]
+    (fn [{:keys [conn meta-db db repo-path]}]
       (let [{:keys [prompt-fn]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                               :model    (or (args "model") (:model defaults))})
@@ -527,6 +548,7 @@
             mode        (cond-> {}
                           layers (assoc :layers layers))
             result      (bench/run-benchmark! db repo-path prompt-fn
+                                              :meta-db meta-db
                                               :conn conn
                                               :mode mode
                                               :budget {:max-questions (args "max_questions")}
@@ -635,7 +657,7 @@
 (defn- handle-digest [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [conn repo-path]}]
+    (fn [{:keys [conn meta-db repo-path]}]
       (let [{:keys [prompt-fn model-id]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                               :model    (or (args "model") (:model defaults))})
@@ -648,7 +670,7 @@
         ;; Analyze
         (when-not (args "skip_analyze")
           (let [r (analyze/analyze-repo! conn repo-path prompt-fn
-                                         {:model-id model-id :concurrency 3})]
+                                         {:meta-db meta-db :model-id model-id :concurrency 3})]
             (swap! results assoc :analyze r)))
         ;; Benchmark
         (when-not (args "skip_benchmark")
@@ -656,6 +678,7 @@
                 layers (validate-layers (args "layers"))
                 mode   (cond-> {} layers (assoc :layers layers))
                 r      (bench/run-benchmark! db repo-path prompt-fn
+                                             :meta-db meta-db
                                              :conn conn :mode mode
                                              :budget {:max-questions (args "max_questions")}
                                              :report? (args "report")
@@ -667,11 +690,9 @@
 (defn- handle-introspect [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [db db-name repo-path]}]
+    (fn [{:keys [db meta-conn db-name repo-path]}]
       (let [provider (or (args "provider") (:provider defaults))
             model    (or (args "model") (:model defaults))
-            meta-conn (get-or-create-conn (util/resolve-db-dir defaults)
-                                          "noumenon-internal")
             {:keys [invoke-fn]}
             (llm/make-messages-fn-from-opts
              {:provider provider :model model
@@ -713,11 +734,9 @@
                     {:user-message (str "Maximum " max-introspect-sessions
                                         " concurrent sessions. Stop one first.")})))
   (with-conn args defaults
-    (fn [{:keys [db db-name repo-path]}]
+    (fn [{:keys [db meta-conn db-name repo-path]}]
       (let [provider  (or (args "provider") (:provider defaults))
             model     (or (args "model") (:model defaults))
-            meta-conn (get-or-create-conn (util/resolve-db-dir defaults)
-                                          "noumenon-internal")
             stop-flag (atom false)
             {:keys [invoke-fn]}
             (llm/make-messages-fn-from-opts
@@ -798,10 +817,9 @@
     (when-not (str/starts-with? (str query-name) "introspect-")
       (throw (ex-info "Only introspect-* queries are available"
                       {:user-message "Use one of: introspect-runs, introspect-improvements, introspect-by-target, introspect-score-trend, introspect-failed-approaches"})))
-    (let [meta-conn (get-or-create-conn (util/resolve-db-dir defaults)
-                                        "noumenon-internal")
-          db        (d/db meta-conn)
-          result    (query/run-named-query db query-name)]
+    (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir defaults))
+          meta-db   (d/db meta-conn)
+          result    (query/run-named-query meta-db meta-db query-name)]
       (if (:ok result)
         (let [rows  (take (min (or (some-> (args "limit") long) 100) 1000)
                           (:ok result))
@@ -811,6 +829,31 @@
                               (str "\n;; Showing " (count rows)
                                    " of " total " results")))))
         (tool-error (str "Query error: " (:error result)))))))
+
+(defn- handle-reseed [_args defaults]
+  (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir defaults))]
+    (artifacts/reseed! meta-conn)
+    (let [meta-db (d/db meta-conn)]
+      (tool-result (str "Reseeded: " (count (artifacts/list-active-query-names meta-db))
+                        " queries, rules, and prompts.")))))
+
+(defn- handle-artifact-history [args defaults]
+  (let [atype (args "type")
+        aname (args "name")]
+    (when-not (#{"prompt" "rules"} atype)
+      (throw (ex-info "Invalid type" {:user-message "type must be 'prompt' or 'rules'"})))
+    (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir defaults))
+          history   (case atype
+                      "prompt" (do (validate-string-length! "name" aname 256)
+                                   (artifacts/prompt-history meta-conn aname))
+                      "rules"  (artifacts/rules-history meta-conn))]
+      (tool-result
+       (if (empty? history)
+         "No history found."
+         (->> history
+              (map (fn [{:keys [tx-time source]}]
+                     (str tx-time " [" (name source) "]")))
+              (str/join "\n")))))))
 
 (def ^:private tool-handlers
   {"noumenon_import"            handle-import
@@ -831,7 +874,9 @@
    "noumenon_introspect_start"   handle-introspect-start
    "noumenon_introspect_status"  handle-introspect-status
    "noumenon_introspect_stop"    handle-introspect-stop
-   "noumenon_introspect_history" handle-introspect-history})
+   "noumenon_introspect_history" handle-introspect-history
+   "noumenon_reseed"             handle-reseed
+   "noumenon_artifact_history"   handle-artifact-history})
 
 ;; --- MCP method handlers ---
 

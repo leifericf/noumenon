@@ -29,10 +29,10 @@
   [opts & body]
   (let [qs (or (:questions opts) `test-qs)]
     `(with-redefs [bench/load-questions        (fn [] ~qs)
-                   bench/query-context          (fn [_db# _qn#] "mock query context")
+                   bench/query-context          (fn [_meta-db# _db# _qn#] "mock query context")
                    bench/raw-context            (fn [_rp#] "mock raw context")
                    bench/repo-head-sha          (fn [_rp#] "abc123")
-                   bench/pick-benchmark-targets (fn [_db#] {:target-file "mock/target.clj"})]
+                   bench/pick-benchmark-targets (fn [_meta-db# _db#] {:target-file "mock/target.clj"})]
        ~@body)))
 
 ;; --- Tier 0: Pure function tests ---
@@ -262,9 +262,9 @@
   (testing "nil answer at call site is coerced to empty string, scoring :wrong"
     (let [q {:id :q01 :question "Q?" :query-name "files-by-complexity"
              :rubric "r" :category :test}]
-      (with-redefs [query/run-named-query (fn [_db _qn]
+      (with-redefs [query/run-named-query (fn [_meta-db _db _qn]
                                             {:ok [["src/a.clj" :complex]]})]
-        (let [result (bench/deterministic-score q nil "")]
+        (let [result (bench/deterministic-score q nil nil "")]
           (is (= :wrong (:score result))))))))
 
 (deftest checkpoint-write-is-atomic
@@ -1031,92 +1031,92 @@
 
 (deftest deterministic-score-q01-correct
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["ring/core.clj" :complex]
                         ["ring/handler.clj" :very-complex]
                         ["ring/util.clj" :trivial]]})]
     (let [q      {:id :q01 :query-name "files-by-complexity" :scoring :deterministic}
           answer "The complex files are ring/core.clj and ring/handler.clj."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :correct (:score result))))))
 
 (deftest deterministic-score-q01-partial
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["ring/core.clj" :complex]
                         ["ring/handler.clj" :very-complex]
                         ["ring/util.clj" :trivial]]})]
     (let [q      {:id :q01 :query-name "files-by-complexity" :scoring :deterministic}
           answer "The complex file is ring/core.clj."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :partial (:score result))))))
 
 (deftest deterministic-score-q01-wrong
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["ring/core.clj" :complex]
                         ["ring/handler.clj" :very-complex]
                         ["ring/adapter.clj" :complex]
                         ["ring/util.clj" :trivial]]})]
     (let [q      {:id :q01 :query-name "files-by-complexity" :scoring :deterministic}
           answer "I don't know which files are complex."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :wrong (:score result))))))
 
 (deftest deterministic-score-q02-correct
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["ring/middleware/params.clj" :middleware]
                         ["ring/core.clj" :core]]})]
     (let [q      {:id :q02 :query-name "files-by-layer" :scoring :deterministic
                   :resolved-params {:target-file "ring/middleware/params.clj"}}
           answer "ring/middleware/params.clj is classified as middleware."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :correct (:score result))))))
 
 (deftest deterministic-score-q02-wrong
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["ring/middleware/params.clj" :middleware]
                         ["ring/core.clj" :core]]})]
     (let [q      {:id :q02 :query-name "files-by-layer" :scoring :deterministic
                   :resolved-params {:target-file "ring/middleware/params.clj"}}
           answer "That file is in the utility layer."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :wrong (:score result))))))
 
 (deftest deterministic-score-q03-correct
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["Alice" "alice@test.com" 50]
                         ["Bob" "bob@test.com" 30]
                         ["Carol" "carol@test.com" 20]
                         ["Dave" "dave@test.com" 5]]})]
     (let [q      {:id :q03 :query-name "top-contributors" :scoring :deterministic}
           answer "Top contributors: 1. Alice (50 commits), 2. Bob (30 commits), 3. Carol (20 commits)."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :correct (:score result))))))
 
 (deftest deterministic-score-q03-partial
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["Alice" "alice@test.com" 50]
                         ["Bob" "bob@test.com" 30]
                         ["Carol" "carol@test.com" 20]]})]
     (let [q      {:id :q03 :query-name "top-contributors" :scoring :deterministic}
           answer "The top contributors are Alice and Bob."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :partial (:score result))))))
 
 (deftest deterministic-score-q03-wrong
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["Alice" "alice@test.com" 50]
                         ["Bob" "bob@test.com" 30]
                         ["Carol" "carol@test.com" 20]]})]
     (let [q      {:id :q03 :query-name "top-contributors" :scoring :deterministic}
           answer "The top contributor is Dave."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :wrong (:score result))))))
 
 (deftest questions-edn-has-scoring-on-single-hop
@@ -1130,7 +1130,7 @@
 
 (deftest run-stage-deterministic-no-llm-call
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["ring/core.clj" :complex]]})]
     (let [q       {:id :q01 :question "?" :query-name "files-by-complexity"
                    :scoring :deterministic :rubric "r" :category :single-hop}
@@ -1236,11 +1236,11 @@
                                               :scoring :deterministic}
                                              {:id :q07 :question "Q2?" :category :architectural
                                               :query-name "test" :rubric "r2"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
+                bench/query-context  (fn [_meta-db _db _qn] "mock query context")
                 bench/raw-context    (fn [_rp] (throw (ex-info "Should not be called" {})))
                 bench/repo-head-sha  (fn [_rp] "abc123")
-                bench/pick-benchmark-targets (fn [_db] {:target-file "mock/target.clj"})
-                query/run-named-query (fn [_db _qn]
+                bench/pick-benchmark-targets (fn [_meta-db _db] {:target-file "mock/target.clj"})
+                query/run-named-query (fn [_meta-db _db _qn]
                                         {:ok [["ring/core.clj" :complex]]})]
     (let [dir   (str (io/file (System/getProperty "java.io.tmpdir")
                               (str "bench-fast-" (System/currentTimeMillis))))
@@ -1308,11 +1308,11 @@
                                               :scoring :deterministic}
                                              {:id :q04 :question "Q3?" :category :multi-hop
                                               :query-name "test" :rubric "r3"}])
-                bench/query-context  (fn [_db _qn] "mock query context")
+                bench/query-context  (fn [_meta-db _db _qn] "mock query context")
                 bench/raw-context    (fn [_rp] "mock raw context")
                 bench/repo-head-sha  (fn [_rp] "abc123")
-                bench/pick-benchmark-targets (fn [_db] {:target-file "mock/target.clj"})
-                query/run-named-query (fn [_db qn]
+                bench/pick-benchmark-targets (fn [_meta-db _db] {:target-file "mock/target.clj"})
+                query/run-named-query (fn [_meta-db _db qn]
                                         (case qn
                                           "files-by-complexity"
                                           {:ok [["ring/core.clj" :complex]]}
@@ -1393,7 +1393,7 @@
         rubric   (bench/load-rubric)
         mock-fn  (fn [_prompt]
                    {:text "Ring is a web library" :usage mock-usage :resolved-model "mock-v1"})
-        result   (with-redefs [bench/query-context (fn [_db _qn] "mock context")]
+        result   (with-redefs [bench/query-context (fn [_meta-db _db _qn] "mock context")]
                    (bench/run-stage [:t01 :full :answer]
                                     {:question q :rubric-map rubric :db nil :raw-ctx nil
                                      :stages {} :invoke-llm mock-fn :judge-llm mock-fn}))]
@@ -1421,53 +1421,53 @@
 
 (deftest deterministic-score-q05-found
   (with-redefs [query/run-named-query
-                (fn [_db qn]
+                (fn [_meta-db _db qn]
                   (case qn
                     "files-by-complexity" {:ok [["a.clj" :trivial] ["b.clj" :complex]]}
                     "files-by-layer"      {:ok [["a.clj" :core] ["b.clj" :middleware]]}))]
     (let [q      {:id :q05 :query-name "files-by-complexity" :scoring :deterministic}
           answer "a.clj is both trivial and in the core layer."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :correct (:score result))))))
 
 (deftest deterministic-score-q05-empty
   (with-redefs [query/run-named-query
-                (fn [_db qn]
+                (fn [_meta-db _db qn]
                   (case qn
                     "files-by-complexity" {:ok [["a.clj" :complex]]}
                     "files-by-layer"      {:ok [["a.clj" :middleware]]}))]
     (let [q      {:id :q05 :query-name "files-by-complexity" :scoring :deterministic}
           answer "There are none that match both criteria."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :correct (:score result))))))
 
 (deftest deterministic-score-q06-correct
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["ring-core" "ring-util"]
                         ["ring-core" "ring-codec"]
                         ["ring-servlet" "ring-core"]]})]
     (let [q      {:id :q06 :query-name "component-dependencies" :scoring :deterministic}
           answer "ring-core has the most transitive dependencies."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :correct (:score result))))))
 
 (deftest deterministic-score-q25-correct
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [["heavy.clj" 15] ["medium.clj" 8] ["light.clj" 3]]})]
     (let [q      {:id :q25 :query-name "dependency-hotspots" :scoring :deterministic}
           answer "heavy.clj (15 deps), medium.clj (8 deps), light.clj (3 deps)"
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :correct (:score result))))))
 
 (deftest deterministic-score-q38-correct
   (with-redefs [query/run-named-query
-                (fn [_db _qn]
+                (fn [_meta-db _db _qn]
                   {:ok [[:feat 50] [:fix 30] [:refactor 10]]})]
     (let [q      {:id :q38 :query-name "commit-kinds" :scoring :deterministic}
           answer "The most common commit type is feat (50), followed by fix (30), then refactor (10)."
-          result (bench/deterministic-score q nil answer)]
+          result (bench/deterministic-score q nil nil answer)]
       (is (= :correct (:score result))))))
 
 ;; --- Tier 0: Per-tier aggregation ---
