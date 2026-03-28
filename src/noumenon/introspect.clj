@@ -464,7 +464,7 @@
 
 (defn- iter->tx-data [index {:keys [target goal rationale outcome baseline
                                     result delta modification error]}]
-  (let [base {:introspect.iter/index     (long index)
+  (let [base {:introspect.iter/index     (inc (long index))
               :introspect.iter/outcome   (or outcome :unknown)
               :introspect.iter/timestamp (java.util.Date.)}]
     (cond-> base
