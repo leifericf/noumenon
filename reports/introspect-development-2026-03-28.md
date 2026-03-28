@@ -640,3 +640,9 @@ Each question creates a fresh `agent/ask` session. The system prompt is re-sent 
 | `model_test.clj` | 20 | Model init, forward pass probabilities, predict top-k, training time budget, tokenization (basic, empty, punctuation-only), vocabulary (special tokens, empty corpus), encoding (UNK mapping), empty dataset (evaluate, train), empty tokens, OOB labels, save/load round-trip, training loss reduction |
 
 Total: 53 new tests, 461 total in suite, 1,545 assertions.
+
+---
+
+## A Personal Note from the Puny Human Behind the Curtains
+
+I have a busy life with my wife, three-year-old son, and dog. I've been thinking about this idea for many months — and several decades, if I include my obsession with epistemology and learning. But it was implemented in a single weekend, almost entirely from my iPhone in short stints while folding laundry, washing the dishes (yay, voice chat!), vacuuming the apartment, and walking the dog. That would not have been possible without the assistance of [Claude Code](https://claude.ai/code).
