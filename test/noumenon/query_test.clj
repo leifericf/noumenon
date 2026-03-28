@@ -26,7 +26,7 @@
   (let [names (query/list-query-names)]
     (is (some #{"files-by-complexity"} names))
     (is (some #{"co-changed-files"} names))
-    (is (some #{"component-dependencies"} names))))
+    (is (some #{"boundary-crossings"} names))))
 
 (deftest list-query-names-sorted
   (let [names (query/list-query-names)]
@@ -97,7 +97,8 @@
       (is (nil? error)))))
 
 (deftest transitive-deps-rule
-  (let [conn (make-conn)]
+  (let [conn  (make-conn)
+        rules (query/load-rules)]
     ;; A depends-on B, B depends-on C
     (d/transact conn {:tx-data [{:component/name "A"
                                  :component/depends-on "comp-b"}
@@ -106,13 +107,19 @@
                                  :component/depends-on "comp-c"}
                                 {:db/id "comp-c"
                                  :component/name "C"}]})
-    (let [{:keys [ok]} (query/run-named-query (d/db conn) "component-dependencies")]
+    (let [results (d/q '[:find ?from-name ?to-name
+                         :in $ %
+                         :where
+                         [?from :component/name ?from-name]
+                         (transitive-dep ?from ?to)
+                         [?to :component/name ?to-name]]
+                       (d/db conn) rules)
+          pairs   (set (map vec results))]
       ;; Should include A->B, A->C (transitive), B->C
-      (is (>= (count ok) 3))
-      (let [pairs (set (map (fn [[from to]] [from to]) ok))]
-        (is (contains? pairs ["A" "B"]))
-        (is (contains? pairs ["A" "C"]))
-        (is (contains? pairs ["B" "C"]))))))
+      (is (>= (count pairs) 3))
+      (is (contains? pairs ["A" "B"]))
+      (is (contains? pairs ["A" "C"]))
+      (is (contains? pairs ["B" "C"])))))
 
 (deftest co-changed-files-rule
   (let [conn (make-conn)]
