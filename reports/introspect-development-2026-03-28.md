@@ -84,26 +84,21 @@ Autoresearch uses `git reset --hard` to discard failed experiments. Introspect s
 
 ### 3.1 Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   introspect loop                    │
-│                                                      │
-│  ┌──────────┐   ┌──────────┐   ┌──────────────┐    │
-│  │ Gap       │──▶│ Propose  │──▶│ Apply +      │    │
-│  │ Analysis  │   │ (LLM)    │   │ Gate         │    │
-│  └──────────┘   └──────────┘   └──────┬───────┘    │
-│       ▲                               │             │
-│       │                               ▼             │
-│  ┌────┴─────┐                  ┌──────────────┐    │
-│  │ Decide   │◀─────────────────│ Evaluate     │    │
-│  │ keep/    │                  │ (agent/ask   │    │
-│  │ revert   │                  │  + scoring)  │    │
-│  └──────────┘                  └──────────────┘    │
-│                                                      │
-│  Budget: iterations │ wall-clock │ cost              │
-│  History: EDN log of all experiments                 │
-│  Rollback: raw file byte restore                     │
-└─────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  G[Gap\nAnalysis] --> P[Propose\nLLM optimizer]
+  P --> A[Apply +\nGate]
+  A --> E[Evaluate\nagent/ask\n+ scoring]
+  E --> D{Improved?}
+  D -->|yes| K[Keep\nmodification]
+  D -->|no| R[Revert\nraw bytes]
+  K --> G
+  R --> G
+
+  B[Budget\niterations / hours / cost] -.->|stop| D
+  H[History\nEDN log] -.-> G
+  K -.-> H
+  R -.-> H
 ```
 
 ### 3.2 Evaluation function
