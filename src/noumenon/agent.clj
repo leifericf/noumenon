@@ -222,8 +222,8 @@
   (str "You have reached your iteration budget. "
        "You MUST respond with {:tool :answer :args {:text \"...\"}} NOW. "
        "Synthesize the best answer you can from the information gathered so far. "
-       "If your answer is incomplete, end with a note about what additional queries "
-       "you would have run given more budget."))
+       "If your answer is incomplete, state what is missing in one sentence. "
+       "Do not describe hypothetical queries or what you would do with more budget."))
 
 (defn- parse-error-transition
   [messages response-text parse-error]
