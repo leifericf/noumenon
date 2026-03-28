@@ -1,9 +1,15 @@
 {:name "uncalled-segments"
- :description "Code segments whose name does not appear in any other segment's call-names"
+ :description "Source code segments whose name does not appear in any other segment's call-names — excludes tests, data files, and import statements"
  :query [:find ?path ?name ?kind
          :where
          [?seg :code/name ?name]
          [?seg :code/file ?file]
          [?file :file/path ?path]
          [(get-else $ ?seg :code/kind :unknown) ?kind]
-         (not [_ :code/call-names ?name])]}
+         (not [_ :code/call-names ?name])
+         ;; Exclude test files — test runners invoke them reflectively
+         (not [(re-matches #"test/.*|.*_test\.[^/]+|.*\.test\.[^/]+|.*Test\.[^/]+" ?path)])
+         ;; Exclude data/config files — loaded via readers, not calls
+         (not [(re-matches #".*\.(edn|json|ya?ml|toml|xml|html|css|md)" ?path)])
+         ;; Exclude import/include/namespace segments — they are not callable
+         (not [(contains? #{:include :namespace} ?kind)])]}
