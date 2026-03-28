@@ -4,6 +4,7 @@
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
             [noumenon.llm :as llm]
+            [noumenon.model :as model]
             [noumenon.query :as query]))
 
 ;; --- Query validation ---
@@ -358,6 +359,20 @@
              :total-usage usage
              :max-iterations max-iterations}))))))
 
+(defn- model-hint
+  "If a trained model is available, generate a hint suggesting which
+   named queries to try first. Returns a string or nil."
+  [question]
+  (when-let [mdl (model/load-best-model)]
+    (when-let [suggestions (seq (model/suggest-queries mdl question 3))]
+      (str "\n\nHint: a query routing model suggests these named queries "
+           "may be relevant (try them first if they fit):\n"
+           (->> suggestions
+                (map (fn [{:keys [query-name probability]}]
+                       (str "  - " query-name
+                            " (confidence: " (format "%.0f%%" (* 100 probability)) ")")))
+                (str/join "\n"))))))
+
 (defn ask
   "Run the agent loop: prompt → parse → dispatch → repeat.
    Returns {:answer string :steps vec :usage {:iterations n :input-tokens n :output-tokens n}
@@ -367,9 +382,11 @@
                 :or   {max-iterations default-max-iterations}}]
   (let [sys-prompt (build-system-prompt db repo-name)
         context    {:db db :invoke-fn invoke-fn :system-prompt sys-prompt}
+        hint       (model-hint question)
+        user-msg   (if hint (str question hint) question)
         initial    (if-let [prev (when continue-from (load-session! continue-from))]
                      (assoc prev :max-iterations (+ (:iterations prev) max-iterations))
-                     {:messages [{:role "user" :content question}]
+                     {:messages [{:role "user" :content user-msg}]
                       :steps []
                       :iterations 0
                       :total-usage llm/zero-usage

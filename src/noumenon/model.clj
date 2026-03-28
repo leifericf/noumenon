@@ -4,6 +4,7 @@
    and inference on CPU (DNNL backend)."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [noumenon.query :as query]
             [noumenon.util :refer [log!]])
   (:import [java.util Random]))
@@ -100,12 +101,33 @@
     (softmax z)))
 
 (defn predict
-  "Predict top-k query names for a token sequence."
+  "Predict top-k query indices for a token sequence."
   [model tokens k]
   (let [probs    (forward model tokens)
         indexed  (map-indexed vector probs)
         top-k    (->> indexed (sort-by second >) (take k))]
     (mapv (fn [[idx prob]] {:index idx :probability prob}) top-k)))
+
+(defn- index->query-name
+  "Build a reverse map from output index to query name."
+  []
+  (let [names (sort (query/list-query-names))]
+    (into {} (map-indexed (fn [i n] [i n]) names))))
+
+(defn suggest-queries
+  "Given a question string, return the top-k most relevant named query suggestions.
+   Uses the vocab stored with the model for consistent tokenization.
+   Returns a seq of {:query-name str :probability double}, or nil if no model is available."
+  [model question k]
+  (when (and model (:vocab model))
+    (let [tokens  (->> (str/lower-case question) (re-seq #"[a-z0-9_\-]+") vec)
+          encoded (mapv #(get (:vocab model) % 1) tokens) ;; 1 = <UNK>
+          preds   (predict model encoded k)
+          idx->name (index->query-name)]
+      (->> preds
+           (keep (fn [{:keys [index probability]}]
+                   (when-let [qname (idx->name index)]
+                     {:query-name qname :probability probability})))))))
 
 ;; --- Training ---
 
@@ -204,24 +226,41 @@
 ;; --- Persistence ---
 
 (defn save-model!
-  "Save model weights to EDN file."
+  "Save model weights and vocab to EDN file."
   [model path]
   (.mkdirs (.getParentFile (io/file path)))
   (spit path (pr-str {:w1     (vec (:w1 model))
                       :b1     (vec (:b1 model))
                       :w2     (vec (:w2 model))
                       :b2     (vec (:b2 model))
-                      :config (:config model)}))
+                      :config (:config model)
+                      :vocab  (:vocab model)}))
   (log! (str "model: saved to " path)))
 
 (defn load-model
-  "Load model weights from EDN file. Returns nil if not found."
+  "Load model weights and vocab from EDN file. Returns nil if not found."
   [path]
   (let [f (io/file path)]
     (when (.exists f)
-      (let [{:keys [w1 b1 w2 b2 config]} (edn/read-string (slurp f))]
+      (let [{:keys [w1 b1 w2 b2 config vocab]} (edn/read-string (slurp f))]
         {:w1     (double-array w1)
          :b1     (double-array b1)
          :w2     (double-array w2)
          :b2     (double-array b2)
-         :config config}))))
+         :config config
+         :vocab  vocab}))))
+
+(defn load-pretrained
+  "Load pre-trained model from classpath resource. Returns nil if not bundled."
+  []
+  (when-let [url (io/resource "model/weights.edn")]
+    (let [{:keys [w1 b1 w2 b2 config vocab]} (edn/read-string (slurp url))]
+      {:w1 (double-array w1) :b1 (double-array b1)
+       :w2 (double-array w2) :b2 (double-array b2)
+       :config config :vocab vocab})))
+
+(defn load-best-model
+  "Load the best available model: local trained > bundled pretrained > nil."
+  []
+  (or (load-model "data/models/latest.edn")
+      (load-pretrained)))

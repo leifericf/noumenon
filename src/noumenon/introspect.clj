@@ -505,7 +505,8 @@
                   (log! (str "introspect: model accuracy="
                              (format "%.3f" (:accuracy eval-r))
                              " top3=" (format "%.3f" (:top3-accuracy eval-r))))
-                  (model/save-model! mdl "data/models/latest.edn")))
+                  (model/save-model! (assoc mdl :vocab (:vocab dataset))
+                                     "data/models/latest.edn")))
 
               ;; Reset prompt cache for prompt/example/rule changes
               (when (#{:examples :system-prompt :rules} target)
