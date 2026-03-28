@@ -229,8 +229,8 @@
                   :properties (merge repo-path-prop
                                      {"provider" {:type "string" :description "LLM provider"}
                                       "model" {:type "string" :description "Model alias"}
-                                      "skip_import" {:type "boolean" :description "Skip the combined import+enrich step (alias for skip_enrich)"}
-                                      "skip_enrich" {:type "boolean" :description "Skip the combined import+enrich step (alias for skip_import)"}
+                                      "skip_import" {:type "boolean" :description "Skip the import+enrich step (either flag skips the combined step)"}
+                                      "skip_enrich" {:type "boolean" :description "Skip the import+enrich step (either flag skips the combined step)"}
                                       "skip_analyze" {:type "boolean" :description "Skip analyze step"}
                                       "skip_benchmark" {:type "boolean" :description "Skip benchmark step"}
                                       "max_questions" {:type "integer" :description "Benchmark: limit to N questions"}
@@ -246,7 +246,7 @@
                                       "max_iterations" {:type "integer" :description "Max improvement iterations (default: 10)"}
                                       "max_hours" {:type "number" :description "Stop after N hours of wall-clock time"}
                                       "max_cost" {:type "number" :description "Stop when cost exceeds threshold (dollars)"}
-                                      "target" {:type "string" :description "Comma-separated targets: examples, system-prompt, rules, code, train (default: all)"}
+                                      "target" {:type "string" :description "Comma-separated targets: examples, system-prompt, rules, code, train (default: all — LLM chooses)"}
                                       "eval_runs" {:type "integer" :description "Evaluation passes per iteration for median variance reduction (default: 1)"}
                                       "git_commit" {:type "boolean" :description "Git commit after each improvement"}})
                   :required ["repo_path"]}}
@@ -259,7 +259,7 @@
                                       "max_iterations" {:type "integer" :description "Max iterations (default: 10)"}
                                       "max_hours" {:type "number" :description "Stop after N hours"}
                                       "max_cost" {:type "number" :description "Cost threshold"}
-                                      "target" {:type "string" :description "Comma-separated targets: examples, system-prompt, rules, code, train (default: all)"}
+                                      "target" {:type "string" :description "Comma-separated targets: examples, system-prompt, rules, code, train (default: all — LLM chooses)"}
                                       "eval_runs" {:type "integer" :description "Evaluation passes per iteration for median variance reduction (default: 1)"}
                                       "git_commit" {:type "boolean" :description "Git commit after each improvement"}})
                   :required ["repo_path"]}}
@@ -277,7 +277,7 @@
     :description "Query the introspect improvement history from the internal meta database."
     :inputSchema {:type "object"
                   :properties {"query_name" {:type "string"
-                                             :description "Named query for introspect history"
+                                             :description "Named query: introspect-runs (list all runs), introspect-improvements (accepted changes), introspect-by-target (grouped by target), introspect-score-trend (score over time), introspect-failed-approaches (rejected changes)"
                                              :enum ["introspect-runs" "introspect-improvements"
                                                     "introspect-by-target" "introspect-score-trend"
                                                     "introspect-failed-approaches"]}
@@ -380,15 +380,18 @@
 (defn- handle-list-queries [_args defaults]
   (let [db-dir    (util/resolve-db-dir defaults)
         meta-conn (db/ensure-meta-db db-dir)
-        meta-db   (d/db meta-conn)]
-    (->> (artifacts/list-active-query-names meta-db)
-         (keep (fn [n]
-                 (when-let [q (artifacts/load-named-query meta-db n)]
-                   (str n " — " (:description q "no description")
-                        (when (seq (:inputs q))
-                          (str " [requires params: " (str/join ", " (map name (:inputs q))) "]"))))))
-         (str/join "\n")
-         tool-result)))
+        meta-db   (d/db meta-conn)
+        lines     (->> (artifacts/list-active-query-names meta-db)
+                       (keep (fn [n]
+                               (when-let [q (artifacts/load-named-query meta-db n)]
+                                 (str n " — " (:description q "no description")
+                                      (when (seq (:inputs q))
+                                        (str " [requires params: " (str/join ", " (map name (:inputs q))) "]")))))))]
+    (tool-result
+     (if (seq lines)
+       (str "Available queries (pass the name to noumenon_query):\n"
+            (str/join "\n" lines))
+       "No named queries found. Run noumenon_reseed or noumenon_import to initialize."))))
 
 (defn- handle-get-schema [args defaults]
   (with-conn args defaults
@@ -462,7 +465,7 @@
                              (:output-tokens usage 0) " out tokens) with no answer. "
                              "Try increasing max_iterations or narrowing the question.")))
           (tool-result (or answer
-                           (str "No answer found (status: " (name (:status result)) ")"))))))))
+                           "The agent completed without finding an answer. Try rephrasing the question or increasing max_iterations.")))))))
 
 (def ^:private valid-reanalyze-scopes
   #{"all" "prompt-changed" "model-changed" "stale"})
@@ -523,6 +526,16 @@
                           (:files-processed result 0) " files processed, "
                           (:imports-resolved result 0) " imports resolved."))))))
 
+(defn- format-pipeline-stages
+  "Format pipeline stages as [import:3 analyze:42 enrich:1], or nil."
+  [ops]
+  (let [stages (keep (fn [op]
+                       (when-let [n (ops op)]
+                         (str (name op) ":" n)))
+                     [:import :analyze :enrich])]
+    (when (seq stages)
+      (str " [" (str/join " " stages) "]"))))
+
 (defn- handle-list-databases [_args defaults]
   (let [db-dir (util/resolve-db-dir defaults)
         names  (db/list-db-dirs db-dir)]
@@ -531,11 +544,12 @@
             stats  (mapv #(db/db-stats client %) names)]
         (tool-result
          (str/join "\n"
-                   (map (fn [{:keys [name commits files dirs cost error]}]
+                   (map (fn [{:keys [name commits files dirs cost ops error]}]
                           (if error
                             (str name " (error: " error ")")
                             (str name ": " commits " commits, " files " files, " dirs " dirs"
-                                 (when (pos? cost) (str ", $" (format "%.2f" cost))))))
+                                 (when (pos? cost) (str ", $" (format "%.2f" cost)))
+                                 (format-pipeline-stages ops))))
                         stats))))
       (tool-result "No databases found."))))
 
@@ -808,9 +822,13 @@
   (let [run-id (args "run_id")]
     (validate-string-length! "run_id" run-id max-run-id-len)
     (if-let [session (get @introspect-sessions run-id)]
-      (do (reset! (:stop-flag session) true)
-          (tool-result (str "Stop requested for " run-id
-                            ". Will halt after current iteration.")))
+      (case (:status session)
+        :running   (do (reset! (:stop-flag session) true)
+                       (tool-result (str "Stop requested for " run-id
+                                         ". Will halt after current iteration.")))
+        :completed (tool-result (str "Run " run-id " already completed."))
+        :stopped   (tool-result (str "Run " run-id " already stopped."))
+        :error     (tool-result (str "Run " run-id " already terminated with an error.")))
       (tool-error (str "Unknown run ID: " run-id)))))
 
 (defn- handle-introspect-history [args defaults]
@@ -821,15 +839,22 @@
                       {:user-message "Use one of: introspect-runs, introspect-improvements, introspect-by-target, introspect-score-trend, introspect-failed-approaches"})))
     (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir defaults))
           meta-db   (d/db meta-conn)
+          query-def (artifacts/load-named-query meta-db query-name)
           result    (query/run-named-query meta-db meta-db query-name)]
       (if (:ok result)
         (let [rows  (take (min (or (some-> (args "limit") long) 100) 1000)
                           (:ok result))
-              total (count (:ok result))]
-          (tool-result (str (pr-str (vec rows))
+              total (count (:ok result))
+              header (str "Query '" query-name "': " (count rows)
+                          (when (> total (count rows)) (str " of " total))
+                          " results"
+                          (when-let [cols (:columns query-def)]
+                            (str "\nColumns: " (str/join ", " cols)))
+                          "\n")]
+          (tool-result (str header
+                            (str/join "\n" (map pr-str rows))
                             (when (> total (count rows))
-                              (str "\n;; Showing " (count rows)
-                                   " of " total " results")))))
+                              (str "\n... truncated (" (- total (count rows)) " more rows)")))))
         (tool-error (str "Query error: " (:error result)))))))
 
 (defn- handle-reseed [_args defaults]
