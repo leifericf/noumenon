@@ -371,22 +371,24 @@
   (case kw :correct 1.0 :partial 0.5 :wrong 0.0 0.0))
 
 (defn- evaluate-once!
-  "Run one evaluation pass. Returns {:mean double :results [...]}"
+  "Run one evaluation pass. Returns {:mean double :results [...] :total-iterations long}"
   [db repo-name invoke-fn-factory questions]
-  (let [results (mapv (fn [q]
-                        (log! (str "  eval: " (name (:id q))))
-                        (let [{:keys [answer]}
-                              (agent/ask db (:question q)
-                                         {:invoke-fn      (invoke-fn-factory)
-                                          :repo-name      repo-name
-                                          :max-iterations 6})
-                              {:keys [score reasoning]}
-                              (bench/deterministic-score q db (or answer ""))]
-                          {:id (:id q) :score score :reasoning reasoning}))
-                      questions)
-        scores  (mapv (comp score-kw->num :score) results)]
-    {:mean    (if (seq scores) (/ (reduce + scores) (count scores)) 0.0)
-     :results results}))
+  (let [ask-results (mapv (fn [q]
+                            (log! (str "  eval: " (name (:id q))))
+                            (let [ask-r (agent/ask db (:question q)
+                                                   {:invoke-fn      (invoke-fn-factory)
+                                                    :repo-name      repo-name
+                                                    :max-iterations 6})
+                                  {:keys [score reasoning]}
+                                  (bench/deterministic-score q db (or (:answer ask-r) ""))]
+                              {:id (:id q) :score score :reasoning reasoning
+                               :iterations (get-in ask-r [:usage :iterations] 0)}))
+                          questions)
+        scores          (mapv (comp score-kw->num :score) ask-results)
+        total-iters     (reduce + (map :iterations ask-results))]
+    {:mean             (if (seq scores) (/ (reduce + scores) (count scores)) 0.0)
+     :results          (mapv #(dissoc % :iterations) ask-results)
+     :total-iterations total-iters}))
 
 (defn- median [nums]
   (let [sorted (sort nums)
@@ -572,12 +574,24 @@
 
               ;; Evaluate
               (log! "introspect: evaluating...")
-              (let [eval-result (evaluate-agent! db repo-name invoke-fn-factory
-                                                 :eval-runs (or eval-runs 1))
-                    new-mean    (:mean eval-result)
-                    base-mean   (:mean baseline)
-                    delta       (- new-mean base-mean)
-                    improved?   (> delta 0.001)]
+              (let [eval-result   (evaluate-agent! db repo-name invoke-fn-factory
+                                                   :eval-runs (or eval-runs 1))
+                    new-mean      (:mean eval-result)
+                    base-mean     (:mean baseline)
+                    delta         (- new-mean base-mean)
+                    ;; Multi-objective: penalize if accuracy improved but cost increased significantly
+                    base-iters    (or (:total-iterations baseline) 0)
+                    new-iters     (or (:total-iterations eval-result) 0)
+                    iter-increase (if (pos? base-iters)
+                                    (/ (double (- new-iters base-iters)) base-iters)
+                                    0.0)
+                    ;; Accept if accuracy improved, unless iteration cost increased >50%
+                    improved?     (and (> delta 0.001)
+                                       (< iter-increase 0.5))]
+                (when (and (> delta 0.001) (>= iter-increase 0.5))
+                  (log! (str "introspect: accuracy improved but iteration cost increased "
+                             (format "%.0f%%" (* 100 iter-increase))
+                             " — rejecting")))
                 (if improved?
                   (do (log! (str "introspect: IMPROVED " (format "%+.3f" delta)
                                  " (" (format "%.3f" base-mean)
