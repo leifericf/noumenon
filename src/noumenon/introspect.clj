@@ -57,30 +57,23 @@
 
 ;; --- Gap analysis ---
 
-(defn- gap-analysis
-  "Analyze benchmark results to identify weakest areas."
-  [results]
+(defn- gap-analysis [results]
   (if (empty? results)
     "No baseline data for gap analysis."
-    (let [wrong   (filterv #(= :wrong (:score %)) results)
-          partial (filterv #(= :partial (:score %)) results)
-          correct (filterv #(= :correct (:score %)) results)]
+    (let [by-score (group-by :score results)
+          section  (fn [label kw]
+                     (when-let [items (seq (by-score kw))]
+                       (str label ":\n"
+                            (->> items
+                                 (map #(str "  " (name (:id %)) ": " (:reasoning %)))
+                                 (str/join "\n"))
+                            "\n\n")))]
       (str "Score distribution: "
-           (count correct) " correct, "
-           (count partial) " partial, "
-           (count wrong) " wrong\n\n"
-           (when (seq wrong)
-             (str "WRONG answers (highest priority):\n"
-                  (->> wrong
-                       (map #(str "  " (name (:id %)) ": " (:reasoning %)))
-                       (str/join "\n"))
-                  "\n\n"))
-           (when (seq partial)
-             (str "PARTIAL answers (medium priority):\n"
-                  (->> partial
-                       (map #(str "  " (name (:id %)) ": " (:reasoning %)))
-                       (str/join "\n"))
-                  "\n"))))))
+           (count (by-score :correct)) " correct, "
+           (count (by-score :partial)) " partial, "
+           (count (by-score :wrong)) " wrong\n\n"
+           (section "WRONG answers (highest priority)" :wrong)
+           (section "PARTIAL answers (medium priority)" :partial)))))
 
 ;; --- Meta-prompt assembly ---
 
@@ -118,8 +111,7 @@
   "Assemble the meta-prompt for the optimizer LLM."
   [{:keys [system-prompt examples rules history baseline-results]}]
   (let [template      (load-meta-prompt)
-        all-queries   (query/list-query-names)
-        total-queries (count all-queries)
+        total-queries (count (query/list-query-names))
         base-mean     (if (seq baseline-results)
                         (let [scores (map (fn [{:keys [score]}]
                                             (case score :correct 1.0 :partial 0.5 0.0))
@@ -147,35 +139,13 @@
     (try
       (let [cleaned (analyze/strip-markdown-fences text)
             parsed  (edn/read-string cleaned)]
-        (when (map? parsed)
-          parsed))
+        (when (map? parsed) parsed))
       (catch Exception e
         (log! (str "introspect: parse error: " (.getMessage e)))
         nil))))
 
 (defn- valid-query-names []
   (set (query/list-query-names)))
-
-(defn- validate-code-target
-  "Validate a :code modification. Returns error string or nil."
-  [{:keys [file content]}]
-  (cond
-    (not (string? file))
-    "Code modification must include :file (string path)"
-
-    (not (str/starts-with? file "src/noumenon/"))
-    "Code modifications restricted to src/noumenon/ directory"
-
-    (str/includes? file "..")
-    "Code modification path must not contain '..'"
-
-    (not (str/ends-with? file ".clj"))
-    "Code modifications restricted to .clj files"
-
-    (not (string? content))
-    "Code modification must include :content (string)"
-
-    :else nil))
 
 (defn validate-proposal
   "Validate a parsed proposal. Returns nil if valid, error string if not."
@@ -188,141 +158,206 @@
       (not (string? rationale))
       "Missing or invalid :rationale"
 
+      ;; --- :examples ---
       (and (= :examples target)
            (not (vector? (:examples modification))))
       "For :examples target, :modification must contain {:examples [...]}"
 
       (and (= :examples target)
-           (let [valid (valid-query-names)
-                 names (:examples modification)]
-             (some #(not (valid %)) names)))
+           (some (complement (valid-query-names)) (:examples modification)))
       (str "Invalid query name(s) in :examples — valid: "
            (str/join ", " (sort (valid-query-names))))
 
+      ;; --- :system-prompt ---
       (and (= :system-prompt target)
            (not (string? (:template modification))))
       "For :system-prompt target, :modification must contain {:template \"...\"}"
 
       (and (= :system-prompt target)
-           (let [tmpl (:template modification)]
-             (not-every? #(str/includes? tmpl %)
-                         ["{{repo-name}}" "{{schema}}" "{{rules}}" "{{examples}}"])))
+           (not-every? #(str/includes? (:template modification) %)
+                       ["{{repo-name}}" "{{schema}}" "{{rules}}" "{{examples}}"]))
       "System prompt template must preserve all {{placeholders}}"
 
+      ;; --- :rules ---
       (and (= :rules target)
            (not (string? (:rules modification))))
       "For :rules target, :modification must contain {:rules \"...edn...\"}"
 
       (and (= :rules target)
-           (try (let [parsed (edn/read-string (:rules modification))]
-                  (not (vector? parsed)))
+           (try (not (vector? (edn/read-string (:rules modification))))
                 (catch Exception _ true)))
       "Rules must be a valid EDN vector"
 
-      (and (= :code target)
-           (validate-code-target modification))
-      (validate-code-target modification)
+      ;; --- :code ---
+      (and (= :code target) (not (string? (:file modification))))
+      "Code modification must include :file (string path)"
 
-      (and (= :train target)
-           (not (map? (:config modification))))
+      (and (= :code target) (not (str/starts-with? (:file modification "") "src/noumenon/")))
+      "Code modifications restricted to src/noumenon/ directory"
+
+      (and (= :code target) (str/includes? (str (:file modification)) ".."))
+      "Code modification path must not contain '..'"
+
+      (and (= :code target) (not (str/ends-with? (:file modification "") ".clj")))
+      "Code modifications restricted to .clj files"
+
+      (and (= :code target) (not (string? (:content modification))))
+      "Code modification must include :content (string)"
+
+      ;; --- :train ---
+      (and (= :train target) (not (map? (:config modification))))
       "For :train target, :modification must contain {:config {...}}"
 
       :else nil)))
 
-;; --- Artifact I/O ---
-
-(defn write-examples! [examples]
-  (let [path   (resource-path "prompts/agent-examples.edn")
-        header (str ";;; Curated subset of named queries for the agent system prompt.\n"
-                    ";;; Auto-generated by introspect at " (java.util.Date.) "\n")]
-    (spit path (str header (pr-str examples) "\n"))))
-
-(defn write-system-prompt! [template]
-  (spit (resource-path "prompts/agent-system.edn")
-        (pr-str {:template template})))
-
-(defn write-rules! [rules-str]
-  (spit (resource-path "queries/rules.edn") rules-str))
-
-(defn write-code-file! [file content]
-  (spit file content))
-
-(defn- read-file-content [path]
-  (let [f (io/file path)]
-    (when (.exists f) (slurp f))))
+;; --- Artifact I/O (multimethods — open for extension) ---
 
 (defn- save-raw
   "Read the raw file bytes for a resource. Used for exact rollback."
   [resource-name]
   (slurp (resource-path resource-name)))
 
-(defn- apply-modification!
-  "Apply a proposal's modification to disk. Returns the original raw file content for rollback."
-  [{:keys [target modification]}]
-  (case target
-    :examples
-    (let [orig (save-raw "prompts/agent-examples.edn")]
-      (write-examples! (:examples modification))
-      orig)
+(defmulti apply-modification!
+  "Apply a proposal's modification to disk. Returns the original for rollback."
+  (fn [proposal] (:target proposal)))
 
-    :system-prompt
-    (let [orig (save-raw "prompts/agent-system.edn")]
-      (write-system-prompt! (:template modification))
-      orig)
+(defmulti revert-modification!
+  "Revert a modification by restoring the original."
+  (fn [proposal _original] (:target proposal)))
 
-    :rules
-    (let [orig (save-raw "queries/rules.edn")]
-      (write-rules! (:rules modification))
-      orig)
+(defmethod apply-modification! :examples [{:keys [modification]}]
+  (let [orig (save-raw "prompts/agent-examples.edn")
+        header (str ";;; Curated subset of named queries for the agent system prompt.\n"
+                    ";;; Auto-generated by introspect at " (java.util.Date.) "\n")]
+    (spit (resource-path "prompts/agent-examples.edn")
+          (str header (pr-str (:examples modification)) "\n"))
+    orig))
 
-    :code
-    (let [{:keys [file content]} modification
-          orig (read-file-content file)]
-      (write-code-file! file content)
-      orig)
+(defmethod revert-modification! :examples [_ original]
+  (spit (resource-path "prompts/agent-examples.edn") original))
 
-    :train
-    (let [orig (save-raw "model/config.edn")]
-      (spit (resource-path "model/config.edn")
-            (pr-str (merge (model/load-config) (:config modification))))
-      orig)))
+(defmethod apply-modification! :system-prompt [{:keys [modification]}]
+  (let [orig (save-raw "prompts/agent-system.edn")]
+    (spit (resource-path "prompts/agent-system.edn")
+          (pr-str {:template (:template modification)}))
+    orig))
 
-(defn- revert-modification!
-  "Revert a modification by restoring original raw file content."
-  [{:keys [target modification]} original]
-  (case target
-    :examples      (spit (resource-path "prompts/agent-examples.edn") original)
-    :system-prompt (spit (resource-path "prompts/agent-system.edn") original)
-    :rules         (spit (resource-path "queries/rules.edn") original)
-    :code          (if original
-                     (spit (:file modification) original)
-                     (.delete (io/file (:file modification))))
-    :train         (spit (resource-path "model/config.edn") original)))
+(defmethod revert-modification! :system-prompt [_ original]
+  (spit (resource-path "prompts/agent-system.edn") original))
 
-;; --- Test gate (for code modifications) ---
+(defmethod apply-modification! :rules [{:keys [modification]}]
+  (let [orig (save-raw "queries/rules.edn")]
+    (spit (resource-path "queries/rules.edn") (:rules modification))
+    orig))
 
-(defn- run-tests! []
-  (log! "introspect: running test suite...")
-  (let [{:keys [exit out err]} (shell/sh "clj" "-M:test")]
-    {:pass?  (zero? exit)
-     :output (str (when (seq err) (str err "\n")) out)}))
+(defmethod revert-modification! :rules [_ original]
+  (spit (resource-path "queries/rules.edn") original))
 
-(defn- run-lint! []
-  (log! "introspect: running linter...")
-  (let [{:keys [exit out err]} (shell/sh "clj" "-M:lint")]
-    {:pass?  (zero? exit)
-     :output (str (when (seq err) err) out)}))
+(defmethod apply-modification! :code [{:keys [modification]}]
+  (let [{:keys [file content]} modification
+        f (io/file file)
+        orig (when (.exists f) (slurp f))]
+    (spit file content)
+    orig))
+
+(defmethod revert-modification! :code [{:keys [modification]} original]
+  (if original
+    (spit (:file modification) original)
+    (.delete (io/file (:file modification)))))
+
+(defmethod apply-modification! :train [{:keys [modification]}]
+  (let [orig (save-raw "model/config.edn")]
+    (spit (resource-path "model/config.edn")
+          (pr-str (merge (model/load-config) (:config modification))))
+    orig))
+
+(defmethod revert-modification! :train [_ original]
+  (spit (resource-path "model/config.edn") original))
+
+;; --- with-modification macro ---
+
+(defmacro with-modification
+  "Apply a modification, execute body, revert on :revert result or exception.
+   Binds `original` in body for inspection. Body must return a map with :outcome.
+   If outcome is not :improved, reverts automatically."
+  [proposal & body]
+  `(let [proposal# ~proposal
+         original# (apply-modification! proposal#)]
+     (try
+       (let [result# (do ~@body)]
+         (when-not (= :improved (:outcome result#))
+           (revert-modification! proposal# original#)
+           (when (#{:examples :system-prompt :rules} (:target proposal#))
+             (agent/reset-prompt-cache!)))
+         result#)
+       (catch Exception e#
+         (log! (str "introspect: ERROR, reverting: " (.getMessage e#)))
+         (revert-modification! proposal# original#)
+         (when (#{:examples :system-prompt :rules} (:target proposal#))
+           (agent/reset-prompt-cache!))
+         {:outcome :error
+          :record  {:target    (:target proposal#)
+                    :goal      (:goal proposal#)
+                    :rationale (:rationale proposal#)
+                    :outcome   :error
+                    :error     (.getMessage e#)}}))))
+
+;; --- Code verification (in-process) ---
+
+(defn- verify-code-syntax
+  "Verify that proposed code is valid Clojure. Returns nil if ok, error string if not.
+   Uses read-string to parse — catches syntax errors without a subprocess."
+  [content]
+  (try
+    (let [rdr (java.io.PushbackReader. (java.io.StringReader. content))]
+      (loop []
+        (let [form (read {:eof ::done} rdr)]
+          (if (= ::done form)
+            nil ;; all forms read successfully
+            (recur)))))
+    (catch Exception e
+      (str "Syntax error: " (.getMessage e)))))
+
+(defn- verify-code-compiles
+  "Attempt to compile the modified namespace by requiring it with :reload.
+   Returns nil if ok, error string if compilation fails."
+  [file]
+  (try
+    (let [;; Derive namespace from file path: src/noumenon/foo.clj -> noumenon.foo
+          ns-name (-> file
+                      (str/replace #"^src/" "")
+                      (str/replace #"\.clj$" "")
+                      (str/replace "/" ".")
+                      (str/replace "_" "-")
+                      symbol)]
+      (require ns-name :reload)
+      nil)
+    (catch Exception e
+      (str "Compilation error: " (.getMessage e)))))
+
+(defn- run-code-gate!
+  "Verify a code modification: syntax, compilation, lint, tests.
+   Checks in-process first (fast), falls back to subprocess only for lint.
+   Returns {:pass? bool :error string?}."
+  [file content]
+  (if-let [syntax-err (verify-code-syntax content)]
+    (do (log! (str "introspect: syntax check FAILED: " syntax-err))
+        {:pass? false :error syntax-err})
+    (if-let [compile-err (verify-code-compiles file)]
+      (do (log! (str "introspect: compilation FAILED: " compile-err))
+          {:pass? false :error compile-err})
+      (let [{:keys [exit err]} (shell/sh "clj" "-M:lint")]
+        (if (zero? exit)
+          {:pass? true}
+          (do (log! (str "introspect: lint FAILED"))
+              {:pass? false :error (str "Lint: " (subs (str err) 0 (min 200 (count (str err)))))}))))))
 
 ;; --- Git commit ---
 
 (def ^:private committable-paths
-  "Paths safe to git-add during introspect commits."
   ["resources/prompts/" "resources/queries/" "resources/model/" "src/noumenon/"])
 
-(defn- git-commit-improvement!
-  "Commit an improvement to git with a descriptive message.
-   Only stages files under known safe paths — never stages .env, data/, etc."
-  [repo-path {:keys [target rationale delta]}]
+(defn- git-commit-improvement! [repo-path {:keys [target rationale delta]}]
   (let [msg (str "introspect(" (name target) "): " rationale
                  (when delta (str " [" (format "%+.3f" (double delta)) "]")))]
     (log! (str "introspect: committing: " msg))
@@ -337,7 +372,6 @@
 
 (defn evaluate-agent!
   "Evaluate agent performance on deterministic benchmark questions.
-   Runs each question through agent/ask, scores deterministically.
    Returns {:mean double :results [{:id kw :score kw :reasoning str}...]}."
   [db repo-name invoke-fn-factory]
   (let [targets   (bench/pick-benchmark-targets db)
@@ -361,10 +395,8 @@
 
 ;; --- Datomic transaction builders (pure) ---
 
-(defn- iter->tx-data
-  "Build a Datomic entity map for one iteration. Pure function."
-  [index {:keys [target goal rationale outcome baseline result delta
-                 modification error]}]
+(defn- iter->tx-data [index {:keys [target goal rationale outcome baseline
+                                    result delta modification error]}]
   (let [base {:introspect.iter/index     (long index)
               :introspect.iter/outcome   (or outcome :unknown)
               :introspect.iter/timestamp (java.util.Date.)}]
@@ -413,112 +445,97 @@
 
 ;; --- Iteration ---
 
+(defn- make-record [proposal outcome & {:as extra}]
+  (merge {:target    (:target proposal)
+          :goal      (:goal proposal)
+          :rationale (:rationale proposal)
+          :outcome   outcome}
+         extra))
+
 (defn run-iteration!
   "Run a single introspect iteration.
-   Returns {:outcome :improved/:reverted/:skipped/:error :record map}."
+   Returns {:outcome kw :record map :eval-result map?}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
            baseline history git-commit?]}]
-  (let [orig-examples (load-current-examples)
-        orig-system   (load-current-system-prompt)
-        orig-rules    (load-current-rules)
-        meta-prompt (build-meta-prompt
-                     {:system-prompt    orig-system
-                      :examples         orig-examples
-                      :rules            orig-rules
+  (let [meta-prompt (build-meta-prompt
+                     {:system-prompt    (load-current-system-prompt)
+                      :examples         (load-current-examples)
+                      :rules            (load-current-rules)
                       :history          history
                       :baseline-results (:results baseline)})
         response    (try
                       (log! "introspect: requesting proposal from optimizer...")
-                      (optimizer-invoke-fn
-                       [{:role "user" :content meta-prompt}])
+                      (optimizer-invoke-fn [{:role "user" :content meta-prompt}])
                       (catch Exception e
                         (log! (str "introspect: optimizer error: " (.getMessage e)))
                         nil))
         proposal    (parse-proposal (:text response))]
-    (if-not proposal
+    (cond
+      ;; No proposal — skip
+      (nil? proposal)
       (do (log! "introspect: failed to parse proposal, skipping")
-          {:outcome :skipped
-           :record  {:outcome :skipped :rationale "Parse failure"}})
-      (if-let [err (validate-proposal proposal)]
-        (do (log! (str "introspect: invalid proposal: " err))
-            {:outcome :skipped
-             :record  {:outcome :skipped :rationale (str "Validation: " err)}})
-        (let [{:keys [target modification rationale goal]} proposal
-              _ (log! (str "introspect: target=" (name target)
-                           " goal=" (pr-str goal)
-                           "\n  " rationale))
-              original (apply-modification! proposal)]
-          (try
-            (let [code-gate-ok?
-                  (if (= :code target)
-                    (let [lint-r (run-lint!)
-                          test-r (when (:pass? lint-r) (run-tests!))]
-                      (cond
-                        (not (:pass? lint-r))
-                        (do (log! "introspect: lint FAILED, reverting")
-                            (log! (str "  " (subs (:output lint-r) 0
-                                                  (min 200 (count (:output lint-r))))))
-                            false)
-                        (not (:pass? test-r))
-                        (do (log! "introspect: tests FAILED, reverting")
-                            false)
-                        :else true))
-                    true)]
-              (if-not code-gate-ok?
-                (do (revert-modification! proposal original)
-                    {:outcome :gate-failed
-                     :record  {:target target :goal goal :rationale rationale
-                               :outcome :gate-failed}})
-                (do
-                  (when (= :train target)
-                    (let [config  (model/load-config)
-                          dataset (td/build-dataset db config)
-                          mdl     (model/init-model config)
-                          _       (model/train! mdl dataset config)
-                          eval-r  (model/evaluate mdl dataset)]
-                      (log! (str "introspect: model accuracy="
-                                 (format "%.3f" (:accuracy eval-r))
-                                 " top3=" (format "%.3f" (:top3-accuracy eval-r))))
-                      (model/save-model! mdl "data/models/latest.edn")))
-                  (when (#{:examples :system-prompt :rules} target)
-                    (agent/reset-prompt-cache!))
-                  (log! "introspect: evaluating...")
-                  (let [eval-result (evaluate-agent! db repo-name invoke-fn-factory)
-                        new-mean    (:mean eval-result)
-                        base-mean   (:mean baseline)
-                        delta       (- new-mean base-mean)
-                        improved?   (> delta 0.001)]
-                    (if improved?
-                      (do (log! (str "introspect: IMPROVED " (format "%+.3f" delta)
-                                     " (" (format "%.3f" base-mean)
-                                     " -> " (format "%.3f" new-mean) ")"))
-                          (when git-commit?
-                            (git-commit-improvement! repo-path
-                                                     {:target target :rationale rationale
-                                                      :delta delta}))
-                          {:outcome     :improved
-                           :record      {:target target :goal goal :rationale rationale
-                                         :outcome :improved
-                                         :baseline base-mean :result new-mean
-                                         :delta delta :modification modification}
-                           :eval-result eval-result})
-                      (do (log! (str "introspect: reverted (delta=" (format "%+.3f" delta) ")"))
-                          (revert-modification! proposal original)
-                          (when (#{:examples :system-prompt :rules} target)
-                            (agent/reset-prompt-cache!))
-                          {:outcome :reverted
-                           :record  {:target target :goal goal :rationale rationale
-                                     :outcome :reverted
-                                     :baseline base-mean :result new-mean
-                                     :delta delta}}))))))
-            (catch Exception e
-              (log! (str "introspect: ERROR during evaluation, reverting: " (.getMessage e)))
-              (revert-modification! proposal original)
+          {:outcome :skipped :record {:outcome :skipped :rationale "Parse failure"}})
+
+      ;; Invalid proposal — skip
+      (validate-proposal proposal)
+      (let [err (validate-proposal proposal)]
+        (log! (str "introspect: invalid proposal: " err))
+        {:outcome :skipped :record {:outcome :skipped :rationale (str "Validation: " err)}})
+
+      ;; Valid proposal — apply, gate, evaluate, decide
+      :else
+      (let [{:keys [target modification rationale goal]} proposal
+            _ (log! (str "introspect: target=" (name target)
+                         " goal=" (pr-str goal) "\n  " rationale))]
+        ;; with-modification handles apply, revert-on-failure, and exception recovery
+        (with-modification proposal
+          ;; Code gate: syntax → compile → lint (in-process where possible)
+          (if (and (= :code target)
+                   (not (:pass? (run-code-gate! (:file modification) (:content modification)))))
+            {:outcome :gate-failed :record (make-record proposal :gate-failed)}
+
+            (do
+              ;; Train model if target is :train
+              (when (= :train target)
+                (let [config  (model/load-config)
+                      dataset (td/build-dataset db config)
+                      mdl     (model/init-model config)
+                      _       (model/train! mdl dataset config)
+                      eval-r  (model/evaluate mdl dataset)]
+                  (log! (str "introspect: model accuracy="
+                             (format "%.3f" (:accuracy eval-r))
+                             " top3=" (format "%.3f" (:top3-accuracy eval-r))))
+                  (model/save-model! mdl "data/models/latest.edn")))
+
+              ;; Reset prompt cache for prompt/example/rule changes
               (when (#{:examples :system-prompt :rules} target)
                 (agent/reset-prompt-cache!))
-              {:outcome :error
-               :record  {:target target :goal goal :rationale rationale
-                         :outcome :error :error (.getMessage e)}})))))))
+
+              ;; Evaluate
+              (log! "introspect: evaluating...")
+              (let [eval-result (evaluate-agent! db repo-name invoke-fn-factory)
+                    new-mean    (:mean eval-result)
+                    base-mean   (:mean baseline)
+                    delta       (- new-mean base-mean)
+                    improved?   (> delta 0.001)]
+                (if improved?
+                  (do (log! (str "introspect: IMPROVED " (format "%+.3f" delta)
+                                 " (" (format "%.3f" base-mean)
+                                 " -> " (format "%.3f" new-mean) ")"))
+                      (when git-commit?
+                        (git-commit-improvement! repo-path
+                                                 {:target target :rationale rationale
+                                                  :delta delta}))
+                      {:outcome     :improved
+                       :record      (make-record proposal :improved
+                                                 :baseline base-mean :result new-mean
+                                                 :delta delta :modification modification)
+                       :eval-result eval-result})
+                  (do (log! (str "introspect: reverted (delta=" (format "%+.3f" delta) ")"))
+                      {:outcome :reverted
+                       :record  (make-record proposal :reverted
+                                             :baseline base-mean :result new-mean
+                                             :delta delta)}))))))))))
 
 ;; --- Main loop ---
 
@@ -530,13 +547,11 @@
            meta-conn max-iterations max-hours max-cost git-commit?
            model-config]
     :or   {max-iterations 10}}]
-  (let [run-id     (generate-run-id)
-        start-ms   (System/currentTimeMillis)
-        started-at (java.util.Date.)
-        max-ms     (when max-hours (* max-hours 3600000))
-        meta-db    (d/db meta-conn)
-        history    (load-history meta-db)
-        ;; Capture reproducibility hashes
+  (let [run-id        (generate-run-id)
+        start-ms      (System/currentTimeMillis)
+        started-at    (java.util.Date.)
+        max-ms        (when max-hours (* max-hours 3600000))
+        history       (load-history (d/db meta-conn))
         prompt-hash   (util/sha256-hex (or (load-current-system-prompt) ""))
         examples-hash (util/sha256-hex (pr-str (or (load-current-examples) [])))
         rules-hash    (util/sha256-hex (pr-str (or (load-current-rules) [])))
@@ -546,61 +561,46 @@
         baseline      (evaluate-agent! db repo-name invoke-fn-factory)
         _             (log! (str "introspect: baseline mean="
                                  (format "%.3f" (:mean baseline))))
+        budget-done?  (fn [i cost]
+                        (let [elapsed (- (System/currentTimeMillis) start-ms)]
+                          (cond
+                            (>= i max-iterations)
+                            (str "reached max iterations (" max-iterations ")")
+                            (and max-ms (> elapsed max-ms))
+                            "time budget exhausted"
+                            (and max-cost (> cost max-cost))
+                            (str "cost budget exhausted ($" (format "%.2f" cost) ")"))))
         result
         (loop [i 0, baseline baseline, history history,
-               improvements 0, total-cost 0.0, iter-records []]
-          (let [elapsed-ms (- (System/currentTimeMillis) start-ms)
-                time-up?   (and max-ms (> elapsed-ms max-ms))
-                cost-up?   (and max-cost (> total-cost max-cost))
-                done       (fn [reason]
-                             (log! (str "introspect: " reason))
-                             {:iterations i :improvements improvements
-                              :final-score (:mean baseline)
-                              :iter-records iter-records})]
-            (cond
-              (>= i max-iterations)
-              (done (str "reached max iterations (" max-iterations ")"))
-
-              time-up?  (done "time budget exhausted")
-              cost-up?  (done (str "cost budget exhausted ($"
-                                   (format "%.2f" total-cost) ")"))
-
-              :else
-              (do (log! (str "\nintrospect: === Iteration " (inc i) "/"
-                             max-iterations " ==="))
-                  (let [{:keys [outcome eval-result record]}
-                        (run-iteration!
-                         {:db                  db
-                          :repo-name           repo-name
-                          :repo-path           repo-path
-                          :invoke-fn-factory   invoke-fn-factory
-                          :optimizer-invoke-fn optimizer-invoke-fn
-                          :baseline            baseline
-                          :history             history
-                          :git-commit?         git-commit?})
-                        new-baseline (if (= :improved outcome)
-                                       eval-result baseline)]
-                    (recur (inc i) new-baseline (conj history record)
-                           (if (= :improved outcome) (inc improvements) improvements)
-                           total-cost (conj iter-records record)))))))
+               improvements 0, cost 0.0, iter-records []]
+          (if-let [reason (budget-done? i cost)]
+            (do (log! (str "introspect: " reason))
+                {:iterations i :improvements improvements
+                 :final-score (:mean baseline) :iter-records iter-records})
+            (do (log! (str "\nintrospect: === Iteration " (inc i) "/"
+                           max-iterations " ==="))
+                (let [{:keys [outcome eval-result record]}
+                      (run-iteration!
+                       {:db db :repo-name repo-name :repo-path repo-path
+                        :invoke-fn-factory invoke-fn-factory
+                        :optimizer-invoke-fn optimizer-invoke-fn
+                        :baseline baseline :history history
+                        :git-commit? git-commit?})
+                      new-baseline (if (= :improved outcome) eval-result baseline)]
+                  (recur (inc i) new-baseline (conj history record)
+                         (if (= :improved outcome) (inc improvements) improvements)
+                         cost (conj iter-records record))))))
         tx-data
         (run->tx-data
-         {:run-id            run-id
-          :repo-path         repo-path
-          :commit-sha        commit-sha
-          :started-at        started-at
-          :model-config      model-config
-          :max-iterations    max-iterations
-          :prompt-hash       prompt-hash
-          :examples-hash     examples-hash
-          :rules-hash        rules-hash
-          :db-basis-t        db-basis-t
-          :baseline-mean     (:mean baseline)
-          :final-mean        (:final-score result)
-          :iteration-count   (:iterations result)
+         {:run-id run-id :repo-path repo-path :commit-sha commit-sha
+          :started-at started-at :model-config model-config
+          :max-iterations max-iterations :prompt-hash prompt-hash
+          :examples-hash examples-hash :rules-hash rules-hash
+          :db-basis-t db-basis-t :baseline-mean (:mean baseline)
+          :final-mean (:final-score result)
+          :iteration-count (:iterations result)
           :improvement-count (:improvements result)
-          :cost-usd          0.0
-          :iter-records      (:iter-records result)})]
+          :cost-usd 0.0 :iter-records (:iter-records result)})]
     (d/transact meta-conn {:tx-data tx-data})
     (log! (str "introspect: persisted run " run-id " to meta database"))
     (assoc result :run-id run-id)))
