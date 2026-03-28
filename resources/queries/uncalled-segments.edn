@@ -8,8 +8,19 @@
          [(get-else $ ?seg :code/kind :unknown) ?kind]
          (not [_ :code/call-names ?name])
          ;; Exclude test files — test runners invoke them reflectively
-         (not [(re-matches #"test/.*|.*_test\.[^/]+|.*\.test\.[^/]+|.*Test\.[^/]+" ?path)])
+         (not [(clojure.string/starts-with? ?path "test/")])
+         (not [(clojure.string/includes? ?path "_test.")])
+         (not [(clojure.string/includes? ?path ".test.")])
+         (not [(clojure.string/includes? ?path "Test.")])
          ;; Exclude data/config files — loaded via readers, not calls
-         (not [(re-matches #".*\.(edn|json|ya?ml|toml|xml|html|css|md)" ?path)])
+         (not [(clojure.string/ends-with? ?path ".edn")])
+         (not [(clojure.string/ends-with? ?path ".json")])
+         (not [(clojure.string/ends-with? ?path ".yml")])
+         (not [(clojure.string/ends-with? ?path ".yaml")])
+         (not [(clojure.string/ends-with? ?path ".toml")])
+         (not [(clojure.string/ends-with? ?path ".xml")])
+         (not [(clojure.string/ends-with? ?path ".html")])
+         (not [(clojure.string/ends-with? ?path ".css")])
+         (not [(clojure.string/ends-with? ?path ".md")])
          ;; Exclude import/include/namespace segments — they are not callable
          (not [(contains? #{:include :namespace} ?kind)])]}

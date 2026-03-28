@@ -6,6 +6,19 @@
          [?file :file/lang _]
          (not [?file :file/imports _])
          (not [_ :file/imports ?file])
-         ;; Exclude non-source directories and data file extensions
-         (not [(re-matches #"resources/.*|\.github/.*|docs/.*|dev/.*" ?path)])
-         (not [(re-matches #".*\.(edn|json|ya?ml|toml|xml|html|css|md|txt)" ?path)])]}
+         ;; Exclude non-source directories
+         (not [(clojure.string/starts-with? ?path "resources/")])
+         (not [(clojure.string/starts-with? ?path ".github/")])
+         (not [(clojure.string/starts-with? ?path "docs/")])
+         (not [(clojure.string/starts-with? ?path "dev/")])
+         ;; Exclude data file extensions
+         (not [(clojure.string/ends-with? ?path ".edn")])
+         (not [(clojure.string/ends-with? ?path ".json")])
+         (not [(clojure.string/ends-with? ?path ".yml")])
+         (not [(clojure.string/ends-with? ?path ".yaml")])
+         (not [(clojure.string/ends-with? ?path ".toml")])
+         (not [(clojure.string/ends-with? ?path ".xml")])
+         (not [(clojure.string/ends-with? ?path ".html")])
+         (not [(clojure.string/ends-with? ?path ".css")])
+         (not [(clojure.string/ends-with? ?path ".md")])
+         (not [(clojure.string/ends-with? ?path ".txt")])]}
