@@ -51,6 +51,7 @@
               [(get-else $ ?i :introspect.iter/goal "") ?goal]]
             meta-db)
        (sort-by first)
+       (take-last 100)
        (mapv (fn [[_ target outcome rationale delta goal]]
                {:target target :outcome outcome :rationale rationale
                 :delta delta :goal goal}))))
