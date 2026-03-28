@@ -161,9 +161,11 @@ The CLI and [MCP](https://modelcontextprotocol.io) server expose the same capabi
 | Benchmark | `benchmark <path>` | `noumenon_benchmark_run` | Evaluate knowledge graph efficacy |
 | Benchmark results | -- | `noumenon_benchmark_results` | Get benchmark results (latest or by ID) |
 | Benchmark compare | -- | `noumenon_benchmark_compare` | Compare two benchmark runs by score differences |
-| Introspect | `introspect <path>` | `noumenon_introspect_start` | Autonomous self-improvement loop |
+| Introspect | `introspect <path>` | `noumenon_introspect` (blocking) / `noumenon_introspect_start` (async) | Autonomous self-improvement loop |
 | Introspect status | -- | `noumenon_introspect_status` | Check running introspect session |
 | Introspect history | -- | `noumenon_introspect_history` | Query introspect runs and iterations |
+| Reseed | `reseed` | `noumenon_reseed` | Reload prompts, queries, and rules into meta database |
+| Artifact history | `artifact-history --type <type>` | `noumenon_artifact_history` | Show change history for a prompt or rules artifact |
 | Watch | `watch <path>` | -- | Auto-sync on new commits (CLI-only) |
 | Serve | `serve` | -- | Start MCP server (CLI-only) |
 
