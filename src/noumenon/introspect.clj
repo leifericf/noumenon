@@ -154,7 +154,8 @@
 (defn validate-proposal
   "Validate a parsed proposal. Returns nil if valid, error string if not."
   [proposal]
-  (let [{:keys [target modification rationale]} proposal]
+  (let [{:keys [target modification rationale]} proposal
+        query-names (valid-query-names)]
     (cond
       (not (#{:examples :system-prompt :rules :code :train} target))
       "Invalid :target — must be :examples, :system-prompt, :rules, :code, or :train"
@@ -168,9 +169,9 @@
       "For :examples target, :modification must contain {:examples [...]}"
 
       (and (= :examples target)
-           (some (complement (valid-query-names)) (:examples modification)))
+           (some (complement query-names) (:examples modification)))
       (str "Invalid query name(s) in :examples — valid: "
-           (str/join ", " (sort (valid-query-names))))
+           (str/join ", " (sort query-names)))
 
       ;; --- :system-prompt ---
       (and (= :system-prompt target)
