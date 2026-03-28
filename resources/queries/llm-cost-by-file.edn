@@ -6,5 +6,5 @@
          [?tx :tx/op :analyze]
          [?tx :tx/input-tokens ?in]
          [?tx :tx/output-tokens ?out]
-         [?tx :tx/cost-usd ?cost]
+         [(get-else $ ?tx :tx/cost-usd 0.0) ?cost]
          [?file :file/path ?path]]}

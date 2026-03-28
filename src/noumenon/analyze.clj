@@ -252,6 +252,12 @@
                                   {:seen #{} :txs []})
                           :txs
                           (mapv (partial segment->tx-data file-ref))))
+          cost     (let [raw (:cost-usd usage 0.0)]
+                     (if (pos? raw)
+                       raw
+                       (llm/estimate-cost (or model-version "")
+                                          (:input-tokens usage 0)
+                                          (:output-tokens usage 0))))
           prov-tx  (cond-> {:db/id               "datomic.tx"
                             :tx/op               :analyze
                             :tx/source           :llm
@@ -262,7 +268,7 @@
                             :prov/analyzed-at    (Date.)}
                      (:input-tokens usage)  (assoc :tx/input-tokens (:input-tokens usage))
                      (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
-                     (:cost-usd usage)      (assoc :tx/cost-usd (:cost-usd usage)))]
+                     (pos? cost)            (assoc :tx/cost-usd cost))]
       (into [file-tx prov-tx] seg-txs))))
 
 ;; --- File content ---
