@@ -63,11 +63,12 @@ File-level field guidelines:
   :state-management — stateful stores, caches, atoms, refs, session management.
 
 :complexity — overall cognitive complexity of this file:
-  :trivial — boilerplate, constants, re-exports. No logic.
+  :trivial — boilerplate, constants, re-exports, data files. No logic.
   :simple — straightforward linear code, minimal branching.
   :moderate — some branching and state, but understandable.
   :complex — significant branching, multiple interacting concerns.
   :very-complex — deeply nested logic, complex state machines, hard to follow.
+  Declarative data files (EDN, JSON, YAML, TOML, XML, SQL) are always :trivial — they have no cognitive complexity.
 
 :patterns — design patterns used in this file. Only include if clearly present:
   :state-machine — explicit state transitions based on events/input.
