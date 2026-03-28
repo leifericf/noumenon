@@ -273,7 +273,8 @@
   (let [path (or canonical (validate-code-path! (:file modification)))]
     (if original
       (spit path original)
-      (.delete (io/file path)))))
+      (let [f (io/file path)]
+        (when (.exists f) (.delete f))))))
 
 (defmethod apply-modification! :train [{:keys [modification]}]
   (let [orig (save-raw "model/config.edn")]
@@ -288,7 +289,7 @@
 
 (defmacro with-modification
   "Apply a modification, execute body, revert on :revert result or exception.
-   Binds `original` in body for inspection. Body must return a map with :outcome.
+   Body must return a map with :outcome.
    If outcome is not :improved, reverts automatically."
   [proposal & body]
   `(let [proposal# ~proposal
@@ -328,39 +329,24 @@
     (catch Exception e
       (str "Syntax error: " (.getMessage e)))))
 
-(defn- verify-code-compiles
-  "Attempt to compile the modified namespace by requiring it with :reload.
-   Returns nil if ok, error string if compilation fails."
-  [file]
-  (try
-    (let [;; Derive namespace from file path: src/noumenon/foo.clj -> noumenon.foo
-          ns-name (-> file
-                      (str/replace #"^src/" "")
-                      (str/replace #"\.clj$" "")
-                      (str/replace "/" ".")
-                      (str/replace "_" "-")
-                      symbol)]
-      (require ns-name :reload)
-      nil)
-    (catch Exception e
-      (str "Compilation error: " (.getMessage e)))))
-
 (defn- run-code-gate!
-  "Verify a code modification: syntax, compilation, lint, tests.
-   Checks in-process first (fast), falls back to subprocess only for lint.
-   Returns {:pass? bool :error string?}."
-  [file content]
+  "Verify a code modification: syntax check (in-process read, no eval) then
+   subprocess lint on a temp staging file. Never loads or executes LLM-written
+   code in this process. Returns {:pass? bool :error string?}."
+  [staging-path content]
   (if-let [syntax-err (verify-code-syntax content)]
     (do (log! (str "introspect: syntax check FAILED: " syntax-err))
         {:pass? false :error syntax-err})
-    (if-let [compile-err (verify-code-compiles file)]
-      (do (log! (str "introspect: compilation FAILED: " compile-err))
-          {:pass? false :error compile-err})
-      (let [{:keys [exit err]} (shell/sh "clj" "-M:lint")]
-        (if (zero? exit)
-          {:pass? true}
-          (do (log! (str "introspect: lint FAILED"))
-              {:pass? false :error (str "Lint: " (subs (str err) 0 (min 200 (count (str err)))))}))))))
+    (let [staging (io/file staging-path)]
+      (try
+        (spit staging content)
+        (let [{:keys [exit err]} (shell/sh "clj" "-M:lint" "--" staging-path)]
+          (if (zero? exit)
+            {:pass? true}
+            (do (log! "introspect: lint FAILED")
+                {:pass? false :error (str "Lint: " (subs (str err) 0 (min 200 (count (str err)))))})))
+        (finally
+          (when (.exists staging) (.delete staging)))))))
 
 ;; --- Git commit ---
 
@@ -552,74 +538,76 @@
       :else
       (let [{:keys [target modification rationale goal]} proposal
             _ (log! (str "introspect: target=" (name target)
-                         " goal=" (pr-str goal) "\n  " rationale))]
-        ;; with-modification handles apply, revert-on-failure, and exception recovery
-        (with-modification proposal
-          ;; Code gate: syntax → compile → lint (in-process where possible)
-          (if (and (= :code target)
-                   (not (:pass? (run-code-gate! (:file modification) (:content modification)))))
-            {:outcome :gate-failed :record (make-record proposal :gate-failed)}
-
-            (do
+                         " goal=" (pr-str goal) "\n  " rationale))
+            ;; Code gate runs BEFORE with-modification to avoid TOCTOU:
+            ;; file is not written to real path until gate passes
+            code-gate (when (= :code target)
+                        (run-code-gate!
+                         (str (validate-code-path! (:file modification)) ".staging")
+                         (:content modification)))]
+        (if (and (= :code target) (not (:pass? code-gate)))
+          {:outcome :gate-failed :record (make-record proposal :gate-failed)}
+          ;; with-modification handles apply, revert-on-failure, and exception recovery
+          (with-modification proposal
               ;; Train model if target is :train
-              (when (= :train target)
-                (let [config  (model/load-config)
-                      dataset (td/build-dataset db config)
-                      prev    (model/load-best-model)
-                      mdl     (if (and prev (= (:config prev) config))
-                                (do (log! "introspect: warm-starting from previous model")
-                                    prev)
-                                (model/init-model config))
-                      _       (model/train! mdl dataset config)
-                      eval-r  (model/evaluate mdl dataset)]
-                  (log! (str "introspect: model accuracy="
-                             (format "%.3f" (:accuracy eval-r))
-                             " top3=" (format "%.3f" (:top3-accuracy eval-r))))
-                  (model/save-model! (assoc mdl :vocab (:vocab dataset))
-                                     "data/models/latest.edn")))
+            (when (= :train target)
+              (let [config  (model/load-config)
+                    dataset (td/build-dataset db config)
+                    prev    (model/load-best-model)
+                    mdl     (if (and prev (= (:config prev) config))
+                              (do (log! "introspect: warm-starting from previous model")
+                                  prev)
+                              (model/init-model config))
+                    _       (model/train! mdl dataset config)
+                    eval-r  (model/evaluate mdl dataset)]
+                (log! (str "introspect: model accuracy="
+                           (format "%.3f" (:accuracy eval-r))
+                           " top3=" (format "%.3f" (:top3-accuracy eval-r))))
+                (model/save-model! (assoc mdl :vocab (:vocab dataset))
+                                   "data/models/latest.edn")))
 
               ;; Reset prompt cache for prompt/example/rule changes
-              (when (#{:examples :system-prompt :rules} target)
-                (agent/reset-prompt-cache!))
+            (when (#{:examples :system-prompt :rules} target)
+              (agent/reset-prompt-cache!))
 
               ;; Evaluate
-              (log! "introspect: evaluating...")
-              (let [eval-result   (evaluate-agent! db repo-name invoke-fn-factory
-                                                   :eval-runs (or eval-runs 1))
-                    new-mean      (:mean eval-result)
-                    base-mean     (:mean baseline)
-                    delta         (- new-mean base-mean)
+            (log! "introspect: evaluating...")
+            (let [eval-result   (evaluate-agent! db repo-name invoke-fn-factory
+                                                 :eval-runs (or eval-runs 1))
+                  new-mean      (:mean eval-result)
+                  base-mean     (:mean baseline)
+                  delta         (- new-mean base-mean)
                     ;; Multi-objective: penalize if accuracy improved but cost increased significantly
-                    base-iters    (or (:total-iterations baseline) 0)
-                    new-iters     (or (:total-iterations eval-result) 0)
-                    iter-increase (if (pos? base-iters)
-                                    (/ (double (- new-iters base-iters)) base-iters)
-                                    0.0)
+                  base-iters    (or (:total-iterations baseline) 0)
+                  new-iters     (or (:total-iterations eval-result) 0)
+                  iter-increase (if (pos? base-iters)
+                                  (/ (double (- new-iters base-iters)) base-iters)
+                                  0.0)
                     ;; Accept if accuracy improved, unless iteration cost increased >50%
-                    improved?     (and (> delta 0.001)
-                                       (< iter-increase 0.5))]
-                (when (and (> delta 0.001) (>= iter-increase 0.5))
-                  (log! (str "introspect: accuracy improved but iteration cost increased "
-                             (format "%.0f%%" (* 100 iter-increase))
-                             " — rejecting")))
-                (if improved?
-                  (do (log! (str "introspect: IMPROVED " (format "%+.3f" delta)
-                                 " (" (format "%.3f" base-mean)
-                                 " -> " (format "%.3f" new-mean) ")"))
-                      (when git-commit?
-                        (git-commit-improvement! repo-path
-                                                 {:target target :rationale rationale
-                                                  :delta delta}))
-                      {:outcome     :improved
-                       :record      (make-record proposal :improved
-                                                 :baseline base-mean :result new-mean
-                                                 :delta delta :modification modification)
-                       :eval-result eval-result})
-                  (do (log! (str "introspect: reverted (delta=" (format "%+.3f" delta) ")"))
-                      {:outcome :reverted
-                       :record  (make-record proposal :reverted
-                                             :baseline base-mean :result new-mean
-                                             :delta delta)}))))))))))
+                  improved?     (and (> delta 0.001)
+                                     (< iter-increase 0.5))]
+              (when (and (> delta 0.001) (>= iter-increase 0.5))
+                (log! (str "introspect: accuracy improved but iteration cost increased "
+                           (format "%.0f%%" (* 100 iter-increase))
+                           " — rejecting")))
+              (if improved?
+                (do (log! (str "introspect: IMPROVED " (format "%+.3f" delta)
+                               " (" (format "%.3f" base-mean)
+                               " -> " (format "%.3f" new-mean) ")"))
+                    (when git-commit?
+                      (git-commit-improvement! repo-path
+                                               {:target target :rationale rationale
+                                                :delta delta}))
+                    {:outcome     :improved
+                     :record      (make-record proposal :improved
+                                               :baseline base-mean :result new-mean
+                                               :delta delta :modification modification)
+                     :eval-result eval-result})
+                (do (log! (str "introspect: reverted (delta=" (format "%+.3f" delta) ")"))
+                    {:outcome :reverted
+                     :record  (make-record proposal :reverted
+                                           :baseline base-mean :result new-mean
+                                           :delta delta)})))))))))
 
 ;; --- Main loop ---
 
