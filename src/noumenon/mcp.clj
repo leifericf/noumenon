@@ -37,7 +37,24 @@
 
 (defonce ^:private introspect-sessions (atom {}))
 ;; {run-id {:status :running/:completed/:stopped/:error
-;;          :future <future> :result <map> :stop-flag <atom<bool>>}}
+;;          :future <future> :result <map> :stop-flag <atom<bool>>
+;;          :started-at <epoch-ms> :completed-at <epoch-ms>}}
+
+(def ^:private max-introspect-sessions 5)
+(def ^:private session-ttl-ms (* 30 60 1000))
+
+(defn- evict-stale-sessions!
+  "Remove completed/errored sessions older than session-ttl-ms."
+  []
+  (let [now (System/currentTimeMillis)]
+    (swap! introspect-sessions
+           (fn [sessions]
+             (into {}
+                   (remove (fn [[_ v]]
+                             (and (#{:completed :error :stopped} (:status v))
+                                  (when-let [t (:completed-at v)]
+                                    (> (- now t) session-ttl-ms)))))
+                   sessions)))))
 
 (defn- get-or-create-conn
   "Get or create a connection, keyed on [db-dir db-name].
@@ -227,7 +244,10 @@
                                       "model" {:type "string" :description "Model alias (e.g. sonnet, haiku, opus)"}
                                       "max_iterations" {:type "integer" :description "Max improvement iterations (default: 10)"}
                                       "max_hours" {:type "number" :description "Stop after N hours of wall-clock time"}
-                                      "max_cost" {:type "number" :description "Stop when cost exceeds threshold (dollars)"}})
+                                      "max_cost" {:type "number" :description "Stop when cost exceeds threshold (dollars)"}
+                                      "target" {:type "string" :description "Comma-separated targets: examples, system-prompt, rules, code, train (default: all)"}
+                                      "eval_runs" {:type "integer" :description "Evaluation passes per iteration for median variance reduction (default: 1)"}
+                                      "git_commit" {:type "boolean" :description "Git commit after each improvement"}})
                   :required ["repo_path"]}}
    {:name "noumenon_introspect_start"
     :description "Start an introspect run asynchronously in the background. Returns a run-id immediately. Use noumenon_introspect_status to check progress and noumenon_introspect_stop to halt."
@@ -237,7 +257,10 @@
                                       "model" {:type "string" :description "Model alias"}
                                       "max_iterations" {:type "integer" :description "Max iterations (default: 10)"}
                                       "max_hours" {:type "number" :description "Stop after N hours"}
-                                      "max_cost" {:type "number" :description "Cost threshold"}})
+                                      "max_cost" {:type "number" :description "Cost threshold"}
+                                      "target" {:type "string" :description "Comma-separated targets: examples, system-prompt, rules, code, train (default: all)"}
+                                      "eval_runs" {:type "integer" :description "Evaluation passes per iteration for median variance reduction (default: 1)"}
+                                      "git_commit" {:type "boolean" :description "Git commit after each improvement"}})
                   :required ["repo_path"]}}
    {:name "noumenon_introspect_status"
     :description "Check the status of a running or completed introspect run."
@@ -250,10 +273,13 @@
                   :properties {"run_id" {:type "string" :description "Run ID to stop"}}
                   :required ["run_id"]}}
    {:name "noumenon_introspect_history"
-    :description "Query the introspect improvement history from the internal meta database. Available queries: introspect-runs, introspect-improvements, introspect-by-target, introspect-score-trend, introspect-failed-approaches."
+    :description "Query the introspect improvement history from the internal meta database."
     :inputSchema {:type "object"
                   :properties {"query_name" {:type "string"
-                                             :description "Named query (use one of the introspect-* queries)"}
+                                             :description "Named query for introspect history"
+                                             :enum ["introspect-runs" "introspect-improvements"
+                                                    "introspect-by-target" "introspect-score-trend"
+                                                    "introspect-failed-approaches"]}
                                "limit" {:type "integer"
                                         :description "Maximum result rows (default: 100)"}}
                   :required ["query_name"]}}])
@@ -657,16 +683,21 @@
                 {:provider provider :model model
                  :temperature 0.0 :max-tokens 4096})))
             result (introspect/run-loop!
-                    {:db                  db
-                     :repo-name           db-name
-                     :repo-path           repo-path
-                     :meta-conn           meta-conn
-                     :invoke-fn-factory   invoke-fn-factory
-                     :optimizer-invoke-fn invoke-fn
-                     :max-iterations      (or (args "max_iterations") 10)
-                     :max-hours           (args "max_hours")
-                     :max-cost            (args "max_cost")
-                     :model-config        {:provider provider :model model}})]
+                    (cond-> {:db                  db
+                             :repo-name           db-name
+                             :repo-path           repo-path
+                             :meta-conn           meta-conn
+                             :invoke-fn-factory   invoke-fn-factory
+                             :optimizer-invoke-fn invoke-fn
+                             :max-iterations      (or (args "max_iterations") 10)
+                             :max-hours           (args "max_hours")
+                             :max-cost            (args "max_cost")
+                             :eval-runs           (or (args "eval_runs") 1)
+                             :git-commit?         (args "git_commit")
+                             :model-config        {:provider provider :model model}}
+                      (args "target")
+                      (assoc :allowed-targets
+                             (set (map keyword (str/split (args "target") #","))))))]
         (tool-result (str "Introspect complete: " (:improvements result)
                           " improvements in " (:iterations result)
                           " iterations (final score: "
@@ -675,6 +706,12 @@
 
 (defn- handle-introspect-start [args defaults]
   (validate-llm-inputs! args)
+  (evict-stale-sessions!)
+  (when (>= (->> @introspect-sessions vals (filter (comp #{:running} :status)) count)
+            max-introspect-sessions)
+    (throw (ex-info "Too many active introspect sessions"
+                    {:user-message (str "Maximum " max-introspect-sessions
+                                        " concurrent sessions. Stop one first.")})))
   (with-conn args defaults
     (fn [{:keys [db db-name repo-path]}]
       (let [provider  (or (args "provider") (:provider defaults))
@@ -690,47 +727,65 @@
               (:invoke-fn
                (llm/make-messages-fn-from-opts
                 {:provider provider :model model :temperature 0.0 :max-tokens 4096})))
-            run-opts  {:db db :repo-name db-name :repo-path repo-path
-                       :meta-conn meta-conn
-                       :invoke-fn-factory invoke-fn-factory
-                       :optimizer-invoke-fn invoke-fn
-                       :max-iterations (or (args "max_iterations") 10)
-                       :max-hours (args "max_hours")
-                       :max-cost (args "max_cost")
-                       :model-config {:provider provider :model model}
-                       :stop-flag stop-flag}
+            run-opts  (cond-> {:db db :repo-name db-name :repo-path repo-path
+                               :meta-conn meta-conn
+                               :invoke-fn-factory invoke-fn-factory
+                               :optimizer-invoke-fn invoke-fn
+                               :max-iterations (or (args "max_iterations") 10)
+                               :max-hours (args "max_hours")
+                               :max-cost (args "max_cost")
+                               :eval-runs (or (args "eval_runs") 1)
+                               :git-commit? (args "git_commit")
+                               :model-config {:provider provider :model model}
+                               :stop-flag stop-flag}
+                        (args "target")
+                        (assoc :allowed-targets
+                               (set (map keyword (str/split (args "target") #",")))))
             run-id    (str (System/currentTimeMillis) "-" (java.util.UUID/randomUUID))
-            fut       (future
-                        (try
-                          (let [result (introspect/run-loop! (assoc run-opts :run-id run-id))]
-                            (swap! introspect-sessions assoc-in [run-id :status] :completed)
-                            (swap! introspect-sessions assoc-in [run-id :result] result)
-                            result)
-                          (catch Exception e
-                            (swap! introspect-sessions assoc-in [run-id :status] :error)
-                            (swap! introspect-sessions assoc-in [run-id :error] (.getMessage e)))))]
+            now       (System/currentTimeMillis)]
+        ;; Store session BEFORE starting the future to avoid race condition
         (swap! introspect-sessions assoc run-id
-               {:status :running :future fut :stop-flag stop-flag})
-        (tool-result (str "Introspect started. Run ID: " run-id
-                          "\nUse noumenon_introspect_status to check progress."))))))
+               {:status :running :stop-flag stop-flag :started-at now})
+        (let [fut (future
+                    (try
+                      (let [result (introspect/run-loop! (assoc run-opts :run-id run-id))
+                            final-status (if @stop-flag :stopped :completed)]
+                        (swap! introspect-sessions update run-id merge
+                               {:status final-status :result result
+                                :completed-at (System/currentTimeMillis)})
+                        result)
+                      (catch Exception e
+                        (swap! introspect-sessions update run-id merge
+                               {:status :error :error (.getMessage e)
+                                :completed-at (System/currentTimeMillis)}))))]
+          (swap! introspect-sessions assoc-in [run-id :future] fut)
+          (tool-result (str "Introspect started. Run ID: " run-id
+                            "\nUse noumenon_introspect_status to check progress.")))))))
+
+(defn- format-result-summary [result]
+  (str "Improvements: " (:improvements result)
+       " in " (:iterations result) " iterations"
+       "\nFinal score: " (format "%.3f" (double (:final-score result 0)))))
 
 (defn- handle-introspect-status [args _defaults]
   (let [run-id (args "run_id")]
+    (validate-string-length! "run_id" run-id max-run-id-len)
     (if-let [session (get @introspect-sessions run-id)]
-      (let [{:keys [status result error]} session]
+      (let [{:keys [status result error started-at]} session]
         (tool-result
          (case status
-           :running   (str "Status: running")
-           :completed (str "Status: completed\n"
-                           "Improvements: " (:improvements result)
-                           " in " (:iterations result) " iterations"
-                           "\nFinal score: " (format "%.3f" (:final-score result)))
-           :stopped   (str "Status: stopped")
+           :running   (let [elapsed-min (quot (- (System/currentTimeMillis) (or started-at 0))
+                                              60000)]
+                        (str "Status: running\nElapsed: " elapsed-min " minutes"))
+           :completed (str "Status: completed\n" (format-result-summary result))
+           :stopped   (str "Status: stopped (by request)\n"
+                           (when result (format-result-summary result)))
            :error     (str "Status: error\n" error))))
       (tool-error (str "Unknown run ID: " run-id)))))
 
 (defn- handle-introspect-stop [args _defaults]
   (let [run-id (args "run_id")]
+    (validate-string-length! "run_id" run-id max-run-id-len)
     (if-let [session (get @introspect-sessions run-id)]
       (do (reset! (:stop-flag session) true)
           (tool-result (str "Stop requested for " run-id
