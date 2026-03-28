@@ -151,6 +151,9 @@
     (not (str/starts-with? file "src/noumenon/"))
     "Code modifications restricted to src/noumenon/ directory"
 
+    (str/includes? file "..")
+    "Code modification path must not contain '..'"
+
     (not (str/ends-with? file ".clj"))
     "Code modifications restricted to .clj files"
 
