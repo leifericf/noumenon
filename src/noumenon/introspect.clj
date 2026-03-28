@@ -606,7 +606,9 @@
                 (log! (str "introspect: model accuracy="
                            (format "%.3f" (:accuracy eval-r))
                            " top3=" (format "%.3f" (:top3-accuracy eval-r))))
-                (model/save-model! (assoc mdl :vocab (:vocab dataset))
+                (model/save-model! (assoc mdl
+                                          :vocab (:vocab dataset)
+                                          :label-index (:label-index dataset))
                                    "data/models/latest.edn")))
 
               ;; Reset prompt cache for prompt/example/rule changes
