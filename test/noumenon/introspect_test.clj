@@ -71,6 +71,18 @@
                  :modification {:file "src/noumenon/foo.py" :content "x"}
                  :rationale "test"}))))
 
+(deftest validate-proposal-train-valid
+  (is (nil? (intro/validate-proposal
+             {:target :train
+              :modification {:config {:learning-rate 0.002}}
+              :rationale "test"}))))
+
+(deftest validate-proposal-train-invalid
+  (is (string? (intro/validate-proposal
+                {:target :train
+                 :modification {:config "not a map"}
+                 :rationale "test"}))))
+
 ;; --- Gap analysis ---
 
 (deftest gap-analysis-empty
