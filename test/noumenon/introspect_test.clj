@@ -299,6 +299,31 @@
       (is (= 2 (count history)))
       (is (= :improved (:outcome (first history)))))))
 
+;; --- Code verification ---
+
+(deftest verify-code-syntax-valid
+  (is (nil? (#'intro/verify-code-syntax "(ns foo.bar)\n(defn x [] 1)"))))
+
+(deftest verify-code-syntax-invalid
+  (is (string? (#'intro/verify-code-syntax "(defn x [)"))))
+
+(deftest verify-code-syntax-empty
+  (is (nil? (#'intro/verify-code-syntax ""))))
+
+;; --- Multimethod dispatch ---
+
+(deftest apply-modification-examples-round-trip
+  ;; apply-modification! returns the original, which can be used to revert
+  (let [orig-content (slurp (#'intro/resource-path "prompts/agent-examples.edn"))
+        proposal     {:target :examples
+                      :modification {:examples ["recent-commits"]}}
+        saved-orig   (intro/apply-modification! proposal)]
+    ;; File was modified
+    (is (not= orig-content (slurp (#'intro/resource-path "prompts/agent-examples.edn"))))
+    ;; Revert restores exact original
+    (intro/revert-modification! proposal saved-orig)
+    (is (= orig-content (slurp (#'intro/resource-path "prompts/agent-examples.edn"))))))
+
 ;; --- Score calculation ---
 
 (deftest score-kw-to-num
