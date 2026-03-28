@@ -33,6 +33,12 @@
 
 (defonce ^:private connections (atom {}))
 
+;; --- Async introspect sessions ---
+
+(defonce ^:private introspect-sessions (atom {}))
+;; {run-id {:status :running/:completed/:stopped/:error
+;;          :future <future> :result <map> :stop-flag <atom<bool>>}}
+
 (defn- get-or-create-conn
   "Get or create a connection, keyed on [db-dir db-name].
    Uses locking to avoid retrying side-effecting db/connect-and-ensure-schema."
@@ -223,6 +229,26 @@
                                       "max_hours" {:type "number" :description "Stop after N hours of wall-clock time"}
                                       "max_cost" {:type "number" :description "Stop when cost exceeds threshold (dollars)"}})
                   :required ["repo_path"]}}
+   {:name "noumenon_introspect_start"
+    :description "Start an introspect run asynchronously in the background. Returns a run-id immediately. Use noumenon_introspect_status to check progress and noumenon_introspect_stop to halt."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"provider" {:type "string" :description "LLM provider"}
+                                      "model" {:type "string" :description "Model alias"}
+                                      "max_iterations" {:type "integer" :description "Max iterations (default: 10)"}
+                                      "max_hours" {:type "number" :description "Stop after N hours"}
+                                      "max_cost" {:type "number" :description "Cost threshold"}})
+                  :required ["repo_path"]}}
+   {:name "noumenon_introspect_status"
+    :description "Check the status of a running or completed introspect run."
+    :inputSchema {:type "object"
+                  :properties {"run_id" {:type "string" :description "Run ID from introspect_start"}}
+                  :required ["run_id"]}}
+   {:name "noumenon_introspect_stop"
+    :description "Stop a running introspect run after the current iteration completes."
+    :inputSchema {:type "object"
+                  :properties {"run_id" {:type "string" :description "Run ID to stop"}}
+                  :required ["run_id"]}}
    {:name "noumenon_introspect_history"
     :description "Query the introspect improvement history from the internal meta database. Available queries: introspect-runs, introspect-improvements, introspect-by-target, introspect-score-trend, introspect-failed-approaches."
     :inputSchema {:type "object"
@@ -647,6 +673,70 @@
                           (format "%.3f" (:final-score result))
                           ", run-id: " (:run-id result) ")"))))))
 
+(defn- handle-introspect-start [args defaults]
+  (validate-llm-inputs! args)
+  (with-conn args defaults
+    (fn [{:keys [db db-name repo-path]}]
+      (let [provider  (or (args "provider") (:provider defaults))
+            model     (or (args "model") (:model defaults))
+            meta-conn (get-or-create-conn (util/resolve-db-dir defaults)
+                                          "noumenon-internal")
+            stop-flag (atom false)
+            {:keys [invoke-fn]}
+            (llm/make-messages-fn-from-opts
+             {:provider provider :model model :temperature 0.7 :max-tokens 8192})
+            invoke-fn-factory
+            (fn []
+              (:invoke-fn
+               (llm/make-messages-fn-from-opts
+                {:provider provider :model model :temperature 0.0 :max-tokens 4096})))
+            run-opts  {:db db :repo-name db-name :repo-path repo-path
+                       :meta-conn meta-conn
+                       :invoke-fn-factory invoke-fn-factory
+                       :optimizer-invoke-fn invoke-fn
+                       :max-iterations (or (args "max_iterations") 10)
+                       :max-hours (args "max_hours")
+                       :max-cost (args "max_cost")
+                       :model-config {:provider provider :model model}
+                       :stop-flag stop-flag}
+            run-id    (str (System/currentTimeMillis) "-" (java.util.UUID/randomUUID))
+            fut       (future
+                        (try
+                          (let [result (introspect/run-loop! (assoc run-opts :run-id run-id))]
+                            (swap! introspect-sessions assoc-in [run-id :status] :completed)
+                            (swap! introspect-sessions assoc-in [run-id :result] result)
+                            result)
+                          (catch Exception e
+                            (swap! introspect-sessions assoc-in [run-id :status] :error)
+                            (swap! introspect-sessions assoc-in [run-id :error] (.getMessage e)))))]
+        (swap! introspect-sessions assoc run-id
+               {:status :running :future fut :stop-flag stop-flag})
+        (tool-result (str "Introspect started. Run ID: " run-id
+                          "\nUse noumenon_introspect_status to check progress."))))))
+
+(defn- handle-introspect-status [args _defaults]
+  (let [run-id (args "run_id")]
+    (if-let [session (get @introspect-sessions run-id)]
+      (let [{:keys [status result error]} session]
+        (tool-result
+         (case status
+           :running   (str "Status: running")
+           :completed (str "Status: completed\n"
+                           "Improvements: " (:improvements result)
+                           " in " (:iterations result) " iterations"
+                           "\nFinal score: " (format "%.3f" (:final-score result)))
+           :stopped   (str "Status: stopped")
+           :error     (str "Status: error\n" error))))
+      (tool-error (str "Unknown run ID: " run-id)))))
+
+(defn- handle-introspect-stop [args _defaults]
+  (let [run-id (args "run_id")]
+    (if-let [session (get @introspect-sessions run-id)]
+      (do (reset! (:stop-flag session) true)
+          (tool-result (str "Stop requested for " run-id
+                            ". Will halt after current iteration.")))
+      (tool-error (str "Unknown run ID: " run-id)))))
+
 (defn- handle-introspect-history [args defaults]
   (let [query-name (args "query_name")]
     (validate-string-length! "query_name" query-name 256)
@@ -682,7 +772,10 @@
    "noumenon_benchmark_results" handle-benchmark-results
    "noumenon_benchmark_compare" handle-benchmark-compare
    "noumenon_digest"            handle-digest
-   "noumenon_introspect"         handle-introspect
+   "noumenon_introspect"          handle-introspect
+   "noumenon_introspect_start"   handle-introspect-start
+   "noumenon_introspect_status"  handle-introspect-status
+   "noumenon_introspect_stop"    handle-introspect-stop
    "noumenon_introspect_history" handle-introspect-history})
 
 ;; --- MCP method handlers ---

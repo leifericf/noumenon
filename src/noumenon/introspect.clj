@@ -605,9 +605,9 @@
    Returns {:run-id str :iterations n :improvements n :final-score double}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
            meta-conn max-iterations max-hours max-cost git-commit?
-           model-config allowed-targets eval-runs]
+           model-config allowed-targets eval-runs stop-flag run-id]
     :or   {max-iterations 10 eval-runs 1}}]
-  (let [run-id        (generate-run-id)
+  (let [run-id        (or run-id (generate-run-id))
         start-ms      (System/currentTimeMillis)
         started-at    (java.util.Date.)
         max-ms        (when max-hours (* max-hours 3600000))
@@ -625,6 +625,8 @@
         budget-done?  (fn [i cost]
                         (let [elapsed (- (System/currentTimeMillis) start-ms)]
                           (cond
+                            (and stop-flag @stop-flag)
+                            "stopped by request"
                             (>= i max-iterations)
                             (str "reached max iterations (" max-iterations ")")
                             (and max-ms (> elapsed max-ms))
