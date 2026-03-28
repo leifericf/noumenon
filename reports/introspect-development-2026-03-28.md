@@ -32,7 +32,7 @@ This pattern maps directly onto what Noumenon already has:
 ### 1.4 Goals
 
 1. **Closed-loop self-improvement** — no human in the loop during iteration
-2. **Self-directed goal discovery** — the system identifies what to improve, not just how
+2. **Optimizer-directed goal discovery** — the optimizer analyzes benchmark gaps and chooses what to improve, not just how
 3. **Multi-target optimization** — prompts, examples, rules, code, and ML model hyperparameters
 4. **Safe rollback** — modifications that don't improve the benchmark are reverted automatically
 5. **Budget controls** — cap by iterations, wall-clock hours, or cost
@@ -86,7 +86,7 @@ Benchmark scores for Ring are facts about Ring's knowledge graph. Introspect ite
 |-----------|-------------|------------|
 | Search space | 1 file (`train.py`) | 5 target types (prompts, examples, rules, code, model config) |
 | Objective | Single scalar (`val_bpb`) | Per-question gap analysis with categorized failures |
-| Goal selection | Fixed (minimize metric) | Self-directed (optimizer chooses what to improve) |
+| Goal selection | Fixed (minimize metric) | Optimizer-directed: analyzes gaps and chooses what to improve; human sets budget constraints |
 | Safety | Git reset on failure | Pre-evaluation gates (lint + tests for code), path traversal blocks |
 | Rollback | `git reset --hard` | Raw file byte restore (preserves formatting) |
 | Awareness | Reads own code + results.tsv | Queries own knowledge graph via MCP |
@@ -583,7 +583,11 @@ The ML model is retrained from scratch each iteration. It does not carry over le
 
 The `:code` target auto-reverts on lint or test failure, but there is no mechanism for human review before applying code changes. For production use, code changes should be proposed on a branch.
 
-### 9.6 No prompt caching across evaluations
+### 9.6 No human target constraint
+
+The `--target` CLI flag is accepted by the parser but not wired through to the loop — the optimizer always has full freedom to choose any of the 5 targets. A future enhancement would let the human constrain the search space (e.g., `--target examples` to restrict to example selection only).
+
+### 9.7 No prompt caching across evaluations
 
 Each question creates a fresh `agent/ask` session. The system prompt is re-sent with every LLM call. [Anthropic API](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching) prompt caching is used within a single agent session but not across questions.
 
