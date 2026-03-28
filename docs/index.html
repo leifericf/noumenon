@@ -46,7 +46,7 @@
     </div>
     <h1>Ask your codebase precise questions.<br>Get grounded answers.</h1>
     <p class="hero-sub">
-      Noumenon builds a <a href="https://www.datomic.com">Datomic</a> knowledge graph from your repository so agents query structured facts instead of dumping raw files into context windows. In benchmarks across 9 repos and 8 languages, graph-augmented answers scored <strong>2.8&times; higher</strong> on average.
+      Noumenon builds a <a href="https://www.datomic.com">Datomic</a> knowledge graph from your repository so agents query structured facts instead of raw context windows. Across 9 repos and 8 languages, graph-augmented answers scored <strong>2.8&times; higher</strong>.
     </p>
     <div class="hero-actions">
       <a href="#get-started" class="btn btn-primary">Get Started</a>
@@ -68,83 +68,36 @@
 
 <span class="highlight">Risk hotspots</span> (high churn + high complexity + few contributors):
 
-  <span class="highlight">file                      complexity     bus-factor  changes</span>
-  <span class="purple">src/core/parser.ts</span>        very-complex   1           47
-  <span class="purple">src/api/middleware.ts</span>      complex        2           38
-  <span class="purple">src/db/migrations.ts</span>      complex        1           31</pre>
+  <span class="highlight">file                        complexity     bus-factor  changes</span>
+  <span class="purple">src/core/parser.ts</span>          very-complex   1           47
+  <span class="purple">src/api/middleware.ts</span>       complex        2           38
+  <span class="purple">src/db/migrations.ts</span>        complex        1           31</pre>
     </div>
   </div>
 </section>
-
-<!-- Problem -->
-<section id="problem">
-  <div class="container section-center">
-    <h2 class="section-title">Why structured knowledge</h2>
-    <p class="section-sub">
-      Context windows don't scale with repo size. A queryable graph returns exactly what you need.
-    </p>
-    <div class="problem-grid">
-      <div class="card">
-        <h3>Context windows don't scale</h3>
-        <p>A Datalog query returns exactly the entities a question needs. In benchmarks, graph context improved LLM accuracy by <strong>+27.5 percentage points</strong> on average.</p>
-      </div>
-      <div class="card">
-        <h3>Answers you can't verify</h3>
-        <p>When an LLM answers from raw context, you can't tell what it looked at. Grounding answers in queryable facts makes them auditable.</p>
-      </div>
-      <div class="card">
-        <h3>Code structure without history</h3>
-        <p>Who changed this file, how often, and what else changed with it? Churn, bus factor, and co-change patterns live in git history, not the current tree.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<hr class="divider">
 
 <!-- Three layers -->
 <section id="layers" class="section-alt">
   <div class="container section-center">
     <h2 class="section-title">Three complementary layers</h2>
     <p class="section-sub">
-      Each layer adds different information. The first two require no LLM. Use them independently or together.
+      The first two require no LLM. Use them independently or together.
     </p>
     <div class="layers-grid">
       <div class="card card-green">
-        <div class="card-icon">&#9679;</div>
         <span class="tag tag-green">No LLM required</span>
         <h3>Deterministic Facts</h3>
-        <p>Git history, file structure, authorship, change frequency, and cross-file import graphs. Immutable Datomic facts with stable entity identities. Fully reproducible.</p>
+        <p>Git history, file structure, authorship, change frequency, and cross-file import graphs. Immutable Datomic facts, fully reproducible.</p>
       </div>
       <div class="card card-purple">
-        <div class="card-icon">&#9679;</div>
         <span class="tag tag-purple">LLM-powered</span>
         <h3>Semantic Annotations</h3>
-        <p>Complexity ratings, safety concerns, architectural roles, function signatures, deprecation markers. Up to 20 parallel workers with automatic retry and checkpointing.</p>
+        <p>Complexity ratings, safety concerns, architectural roles, and function signatures. Up to 20 parallel workers with automatic retry.</p>
       </div>
       <div class="card card-blue">
-        <div class="card-icon">&#9679;</div>
         <span class="tag tag-blue">Iterative reasoning</span>
         <h3>Recursive LLM Querying</h3>
-        <p><code>ask</code> takes a natural-language question, formulates Datalog queries, reads results, and iterates until it has a grounded answer from the graph.</p>
-      </div>
-    </div>
-    <div class="principles">
-      <div class="principle">
-        <span class="principle-label text-green">Immutable</span>
-        <p>Datomic stores facts, not state. Every transaction is an accretion &mdash; nothing is overwritten.</p>
-      </div>
-      <div class="principle">
-        <span class="principle-label text-blue">Composable</span>
-        <p>Datalog queries compose naturally. Join across git history, code structure, and semantics in a single query.</p>
-      </div>
-      <div class="principle">
-        <span class="principle-label text-purple">Measurable</span>
-        <p>Built-in A/B benchmarks. 9 repos, 8 languages: 15.2% (raw) to 42.7% (graph-augmented).</p>
-      </div>
-      <div class="principle">
-        <span class="principle-label text-muted">Local</span>
-        <p>Runs on your machine. Only the LLM provider you choose sees file contents &mdash; sensitive files are never sent.</p>
+        <p><code>ask</code> formulates Datalog queries, reads results, and iterates until it has a grounded answer from the graph.</p>
       </div>
     </div>
   </div>
@@ -157,7 +110,7 @@
   <div class="container section-center">
     <h2 class="section-title">How it works</h2>
     <p class="section-sub">
-      Independent, idempotent steps. Run individually or together. The graph stays in sync as your codebase evolves.
+      Independent, idempotent steps. Run individually or together.
     </p>
     <div class="pipeline">
       <div class="pipeline-step">
@@ -191,7 +144,7 @@
       </div>
     </div>
     <p class="section-sub" style="margin: 1.5rem auto 0;">
-      <code>update</code> detects HEAD changes and processes only new commits. <code>watch</code> polls continuously. <code>introspect</code> runs its own evaluations to improve prompts, rules, and code.
+      <code>update</code> processes only new commits. <code>watch</code> polls continuously.
     </p>
   </div>
 </section>
@@ -203,20 +156,20 @@
   <div class="container section-center">
     <h2 class="section-title">Self-improving introspection</h2>
     <p class="section-sub">
-      Noumenon can improve itself. The <code>introspect</code> command runs an autonomous optimization loop &mdash; inspired by <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a> &mdash; that proposes changes to its own prompts, rules, example queries, and source code, evaluates them against the benchmark, and keeps what works.
+      An autonomous loop that proposes changes, evaluates them against the benchmark, and keeps what works. Inspired by <a href="https://github.com/karpathy/autoresearch">autoresearch</a>.
     </p>
     <div class="problem-grid">
       <div class="card">
         <h3>Closed-loop optimization</h3>
-        <p>An LLM optimizer analyzes benchmark gaps, proposes a targeted change, applies it, re-evaluates, and keeps or reverts &mdash; no human in the loop. Run overnight and wake up to a better system.</p>
+        <p>Propose a change, re-evaluate, keep or revert. Five targets: prompts, examples, rules, source code, and model config.</p>
       </div>
       <div class="card">
-        <h3>Five optimization targets</h3>
-        <p>System prompt, example query selection, Datalog rules, source code (with lint + test gates), and ML model hyperparameters. The optimizer chooses which target has the highest impact.</p>
+        <h3>Budget-controlled</h3>
+        <p>Cap by iterations, wall-clock hours, or dollar cost. Run <code>--max-hours 8</code> for an overnight session with automatic stopping.</p>
       </div>
       <div class="card">
         <h3>On-device ML model</h3>
-        <p>A pure-Clojure neural network learns which Datalog queries to try for a given question. Trains locally with zero token cost. The ask agent uses its predictions as a head start.</p>
+        <p>A pure-Clojure neural network learns which Datalog queries to try first. Trains locally with zero token cost.</p>
       </div>
     </div>
     <div class="terminal" style="margin-top: 2.5rem;">
@@ -241,26 +194,8 @@
 
 Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
     </div>
-    <div class="principles">
-      <div class="principle">
-        <span class="principle-label text-green">Safe</span>
-        <p>Every modification is reverted automatically if the benchmark doesn't improve. Code changes require passing lint and the full test suite.</p>
-      </div>
-      <div class="principle">
-        <span class="principle-label text-blue">Budget-controlled</span>
-        <p>Cap by iterations, wall-clock hours, or dollar cost. Run <code>--max-hours 8</code> for an overnight session.</p>
-      </div>
-      <div class="principle">
-        <span class="principle-label text-purple">Persistent</span>
-        <p>Results are stored in a dedicated Datomic database with reproducibility hashes. Query improvement history with named Datalog queries.</p>
-      </div>
-      <div class="principle">
-        <span class="principle-label text-muted">MCP-first</span>
-        <p>Available as CLI and MCP tools. External agents can start, monitor, and stop introspect runs programmatically.</p>
-      </div>
-    </div>
     <p class="section-sub" style="margin-top: 1.5rem;">
-      <a href="https://github.com/leifericf/noumenon/blob/main/reports/introspect-development-2026-03-28.md">Read the full development report &rarr;</a>
+      <a href="https://github.com/leifericf/noumenon/blob/main/reports/introspect-development-2026-03-28.md">Development report &rarr;</a>
     </p>
   </div>
 </section>
@@ -299,22 +234,8 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
         <tr><td><strong>Average</strong></td><td></td><td><strong>15.2%</strong></td><td><strong>42.7%</strong></td><td class="text-green"><strong>+27.5pp</strong></td></tr>
       </tfoot>
     </table>
-    <div class="benchmark-notes">
-      <div class="card">
-        <h3>Biggest gains on unfamiliar repos</h3>
-        <p>Fresh scored 0% without the graph and 41% with it &mdash; the knowledge graph provides what the LLM simply doesn't know.</p>
-      </div>
-      <div class="card">
-        <h3>Best overall: Ring at 73.8%</h3>
-        <p>Ring scored the highest absolute Full score. Deterministic accuracy hit 75.0%, with LLM-judged questions close behind at 72.2%.</p>
-      </div>
-      <div class="card">
-        <h3>8 languages, zero failures</h3>
-        <p>Clojure, Python, JavaScript, TypeScript, C, Go, Rust, and Java all completed the full pipeline successfully.</p>
-      </div>
-    </div>
     <p class="section-sub" style="margin-top: 1.5rem;">
-      Last updated: 2026-03-28. <a href="https://github.com/leifericf/noumenon/blob/main/reports/digest-run-2026-03-28.md">Read the full benchmark report &rarr;</a>
+      <a href="https://github.com/leifericf/noumenon/blob/main/reports/digest-run-2026-03-28.md">Full benchmark report &rarr;</a>
     </p>
   </div>
 </section>
@@ -324,46 +245,31 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
 <!-- Features -->
 <section id="features" class="section-alt">
   <div class="container section-center">
-    <h2 class="section-title">Built for developers and agents</h2>
-    <p class="section-sub">
-      CLI and MCP tools for people who work in terminals and agents that query programmatically.
-    </p>
+    <h2 class="section-title">Features</h2>
     <div class="features-grid">
       <div class="card">
-        <h3>Concurrent &amp; built for scale</h3>
-        <p>1&ndash;20 parallel workers with automatic retry. Incremental sync processes only new commits. Append-only storage keeps memory predictable as the graph grows.</p>
-      </div>
-      <div class="card">
         <h3>Git history as a first-class citizen</h3>
-        <p>Commits, authorship, change frequency, co-changed files, and fix-commit ratios are all queryable &mdash; not just the current tree.</p>
+        <p>Commits, authorship, change frequency, co-changed files, and fix-commit ratios are all queryable.</p>
       </div>
       <div class="card">
         <h3>MCP server</h3>
-        <p>Expose the graph as MCP tools for Claude Desktop, Claude Code, or any MCP-compatible agent.</p>
+        <p>Expose the full knowledge graph as MCP tools for Claude Desktop, Claude Code, or any MCP client.</p>
       </div>
       <div class="card">
-        <h3>Multi-language import extraction</h3>
-        <p>Deterministic import graphs for Clojure, Python, JS/TS, Rust, Java, C#, C/C++, Elixir, and Erlang. LLM analysis works with any language.</p>
+        <h3>Multi-language imports</h3>
+        <p>Deterministic import graphs for Clojure, Python, JS/TS, Rust, Java, C#, C/C++, Go, Elixir, and Erlang.</p>
       </div>
       <div class="card">
         <h3>Cost transparency</h3>
-        <p>Token estimates before you start, per-file telemetry as it runs, aggregate totals when it finishes. Query LLM spend with <code>llm-cost-by-file</code> and <code>llm-cost-by-model</code>.</p>
-      </div>
-      <div class="card">
-        <h3>Benchmark framework</h3>
-        <p>40-question A/B test comparing graph-augmented vs. raw-context answers on your repo. Deterministic scoring by default, LLM-judged opt-in.</p>
+        <p>Token estimates before you start, per-file telemetry as it runs, and aggregate totals when done.</p>
       </div>
       <div class="card">
         <h3>Sensitive file protection</h3>
-        <p>Files matching known secret patterns (<code>.env</code>, <code>*.pem</code>, credentials) are tracked as entities but never read or sent to any provider.</p>
+        <p><code>.env</code>, <code>*.pem</code>, credentials &mdash; tracked as entities but never read or sent to LLMs.</p>
       </div>
       <div class="card">
-        <h3>Open data model</h3>
-        <p>Stable entity identities. <code>show-schema</code> lists every attribute. Named queries are plain EDN files you can read, edit, and version control.</p>
-      </div>
-      <div class="card">
-        <h3>Perforce support</h3>
-        <p>Works with Helix Core repositories via <code>git-p4</code>. Import a P4 depot as a Git mirror, then query it like any other repo. Helix4Git mirrors work directly.</p>
+        <h3>Concurrent &amp; incremental</h3>
+        <p>Up to 20 parallel workers with automatic retry. Incremental sync picks up new commits only.</p>
       </div>
     </div>
   </div>
@@ -382,15 +288,10 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
         </p>
         <ul>
           <li>Complexity and change hotspots</li>
-          <li>Bug-prone files by fix commit frequency</li>
-          <li>Co-changed file pairs</li>
-          <li>Top contributors per subsystem</li>
-          <li>Component dependency graph</li>
+          <li>Bug-prone files and co-change pairs</li>
+          <li>Contributor and dependency graphs</li>
           <li>LLM cost tracking by model and file</li>
         </ul>
-        <p style="margin-top: 1rem;">
-          Or use <code>ask</code> to query the graph with natural language &mdash; the LLM formulates Datalog queries and iterates until it has a grounded answer.
-        </p>
       </div>
       <div class="terminal">
         <div class="terminal-header">
@@ -431,7 +332,7 @@ src/auth/session.ts       28       complex</span></pre>
   <div class="container section-center">
     <h2 class="section-title">Get started</h2>
     <p class="section-sub">
-      Requires JDK 21+ and Clojure CLI. See the <a href="https://github.com/leifericf/noumenon#readme">README</a> for JAR and dependency options.
+      Requires JDK 21+ and Clojure CLI. See the <a href="https://github.com/leifericf/noumenon#readme">README</a> for details.
     </p>
     <div class="steps">
       <div class="step">
