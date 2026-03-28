@@ -3,7 +3,7 @@
 **Date:** 2026-03-28
 **Operator:** Claude Opus 4.6 (automated)
 **LLM Provider:** GLM (Z.ai proxy) for all evaluation and optimizer calls
-**Branch:** `feat/introspect` (32 commits, ~2,550 lines added across 21 files)
+**Branch:** `feat/introspect` (44 commits, ~2,800 lines added across 21 files)
 **Test suite:** 465 tests, 1,550 assertions, 0 failures
 
 ---
@@ -38,7 +38,7 @@ This pattern maps directly onto what Noumenon already has:
 5. **Budget controls** — cap by iterations, wall-clock hours, or cost
 6. **MCP-first design** — usable by both humans (CLI) and AI agents (MCP tool)
 
-The vision: tell Noumenon to improve itself, walk away, and come back to a measurably better system.
+The vision: tell Noumenon to improve itself, walk away, and come back to a measurably better system. An incidental benefit: Claude Code seems to do better when developing Noumenon now that we're using Noumenon on Noumenon. Dogfooding for the win.
 
 ---
 
@@ -598,18 +598,23 @@ Each question creates a fresh `agent/ask` session. The system prompt is re-sent 
 
 ---
 
-## 10. Future Directions
+## 10. Implemented Since Initial Development
 
-1. **Reduce evaluation variance** — run each question 2-3 times, use median score
-2. **Multi-repo evaluation** — aggregate scores across a corpus of repos to avoid overfitting to one codebase
-3. **Async MCP tools** — `noumenon_introspect` returns a run ID, `noumenon_introspect_status` checks progress, `noumenon_introspect_stop` halts the loop
-4. **[Deep Diamond](https://github.com/uncomplicate/deep-diamond) GPU training** — swap the pure-Clojure model for GPU-accelerated training when the model grows beyond toy size
-5. **Cross-iteration model warm-start** — initialize from previous best weights instead of random
-6. **Prompts and queries in Datomic** — store prompt templates and named queries in the meta database instead of classpath resources, enabling transactional modification with automatic rollback via Datomic's immutable history
-7. **Multi-objective optimization** — optimize for both accuracy AND cost (fewer agent iterations per question)
-8. **Meta-database queries via MCP** — expose introspect queries through the MCP server so external agents can query improvement history
-9. **Human target constraint** — wire the `--target` CLI flag through to the loop so humans can restrict the optimizer's search space
-10. **Ship pre-trained weights** — once the model demonstrably helps, copy weights to `resources/model/weights.edn` as a bundled default
+The following items were originally listed as future directions and have since been implemented:
+
+- **Evaluation variance reduction** (`--eval-runs N`) — runs each evaluation N times, takes the median score
+- **Multi-repo evaluation** (`:extra-repos` parameter) — evaluates across multiple repos, averages scores to prevent overfitting
+- **Async MCP tools** — `noumenon_introspect_start` (background), `noumenon_introspect_status`, `noumenon_introspect_stop`
+- **Cross-iteration model warm-start** — loads previous best weights when config matches
+- **Multi-objective optimization** — rejects changes that improve accuracy but increase agent iteration cost by >50%
+- **Meta-database queries via MCP** — `noumenon_introspect_history` routes introspect-* queries to the internal database
+- **Human target constraint** (`--target examples,rules`) — restricts which targets the optimizer may choose
+- **Pre-trained weight shipping** — documented workflow: `cp data/models/latest.edn resources/model/weights.edn`
+
+## 11. Remaining Future Directions
+
+1. **[Deep Diamond](https://github.com/uncomplicate/deep-diamond) GPU training** — swap the pure-Clojure model for GPU-accelerated training when the model grows beyond toy size (requires a feasibility spike)
+2. **Prompts and queries in Datomic** — store prompt templates and named queries in the meta database instead of classpath resources, enabling transactional modification with automatic rollback via Datomic's immutable history (significant refactor, better as its own branch)
 
 ---
 
