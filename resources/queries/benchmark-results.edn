@@ -1,6 +1,6 @@
 {:name "benchmark-results"
  :description "Per-question results for a benchmark run"
- :params {:run-id "Benchmark run ID"}
+ :inputs [:run-id]
  :query [:find ?qid ?cat ?scoring ?full-score ?raw-score
          :in $ ?run-id
          :where
