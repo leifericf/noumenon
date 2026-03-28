@@ -222,7 +222,15 @@
                                       "max_iterations" {:type "integer" :description "Max improvement iterations (default: 10)"}
                                       "max_hours" {:type "number" :description "Stop after N hours of wall-clock time"}
                                       "max_cost" {:type "number" :description "Stop when cost exceeds threshold (dollars)"}})
-                  :required ["repo_path"]}}])
+                  :required ["repo_path"]}}
+   {:name "noumenon_introspect_history"
+    :description "Query the introspect improvement history from the internal meta database. Available queries: introspect-runs, introspect-improvements, introspect-by-target, introspect-score-trend, introspect-failed-approaches."
+    :inputSchema {:type "object"
+                  :properties {"query_name" {:type "string"
+                                             :description "Named query (use one of the introspect-* queries)"}
+                               "limit" {:type "integer"
+                                        :description "Maximum result rows (default: 100)"}}
+                  :required ["query_name"]}}])
 
 ;; --- Tool handlers ---
 
@@ -639,6 +647,26 @@
                           (format "%.3f" (:final-score result))
                           ", run-id: " (:run-id result) ")"))))))
 
+(defn- handle-introspect-history [args defaults]
+  (let [query-name (args "query_name")]
+    (validate-string-length! "query_name" query-name 256)
+    (when-not (str/starts-with? (str query-name) "introspect-")
+      (throw (ex-info "Only introspect-* queries are available"
+                      {:user-message "Use one of: introspect-runs, introspect-improvements, introspect-by-target, introspect-score-trend, introspect-failed-approaches"})))
+    (let [meta-conn (get-or-create-conn (util/resolve-db-dir defaults)
+                                        "noumenon-internal")
+          db        (d/db meta-conn)
+          result    (query/run-named-query db query-name)]
+      (if (:ok result)
+        (let [rows  (take (min (or (some-> (args "limit") long) 100) 1000)
+                          (:ok result))
+              total (count (:ok result))]
+          (tool-result (str (pr-str (vec rows))
+                            (when (> total (count rows))
+                              (str "\n;; Showing " (count rows)
+                                   " of " total " results")))))
+        (tool-error (str "Query error: " (:error result)))))))
+
 (def ^:private tool-handlers
   {"noumenon_import"            handle-import
    "noumenon_status"            handle-status
@@ -654,7 +682,8 @@
    "noumenon_benchmark_results" handle-benchmark-results
    "noumenon_benchmark_compare" handle-benchmark-compare
    "noumenon_digest"            handle-digest
-   "noumenon_introspect"        handle-introspect})
+   "noumenon_introspect"         handle-introspect
+   "noumenon_introspect_history" handle-introspect-history})
 
 ;; --- MCP method handlers ---
 
