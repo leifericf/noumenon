@@ -112,7 +112,9 @@
 (defn- cross-entropy-loss
   "Compute cross-entropy loss for a single example."
   ^double [^doubles probs ^long label]
-  (- (Math/log (Math/max 1e-7 (aget probs label)))))
+  (if (or (neg? label) (>= label (alength probs)))
+    10.0 ;; max penalty for out-of-range labels
+    (- (Math/log (Math/max 1e-7 (aget probs label))))))
 
 (defn- numerical-gradient
   "Compute numerical gradient of loss w.r.t. a parameter array.
@@ -160,41 +162,44 @@
         budget-ms  (* time-budget-sec 1000)]
     (log! (str "model/train: " n " examples, "
                time-budget-sec "s budget, lr=" learning-rate))
-    (loop [epoch      0
-           total-loss 0.0
-           steps      0]
-      (let [elapsed (- (System/currentTimeMillis) start-ms)]
-        (if (>= elapsed budget-ms)
-          (do (log! (str "model/train: " epoch " epochs, " steps " steps, "
-                         "avg loss=" (format "%.4f" (if (pos? steps) (/ total-loss steps) 0.0))))
-              {:epochs epoch :steps steps
-               :avg-loss (if (pos? steps) (/ total-loss steps) 0.0)
-               :elapsed-ms elapsed})
-          (let [;; Shuffle and iterate through examples
-                indices (shuffle (range n))
-                batch   (take batch-size indices)
-                losses  (mapv (fn [idx]
-                                (let [{:keys [tokens label]} (nth examples idx)]
-                                  (train-step! model tokens label learning-rate)))
-                              batch)]
-            (recur (inc epoch)
-                   (+ total-loss (reduce + losses))
-                   (+ steps (count batch)))))))))
+    (when (zero? n)
+      (log! "model/train: no examples, skipping"))
+    (if (zero? n)
+      {:epochs 0 :steps 0 :avg-loss 0.0 :elapsed-ms 0}
+      (loop [epoch 0, total-loss 0.0, steps 0]
+        (let [elapsed (- (System/currentTimeMillis) start-ms)]
+          (if (>= elapsed budget-ms)
+            (do (log! (str "model/train: " epoch " epochs, " steps " steps, "
+                           "avg loss=" (format "%.4f" (if (pos? steps) (/ total-loss steps) 0.0))))
+                {:epochs epoch :steps steps
+                 :avg-loss (if (pos? steps) (/ total-loss steps) 0.0)
+                 :elapsed-ms elapsed})
+            (let [indices (shuffle (range n))
+                  batch   (take batch-size indices)
+                  losses  (mapv (fn [idx]
+                                  (let [{:keys [tokens label]} (nth examples idx)]
+                                    (train-step! model tokens label learning-rate)))
+                                batch)]
+              (recur (inc epoch)
+                     (+ total-loss (reduce + losses))
+                     (+ steps (count batch))))))))))
 
 ;; --- Evaluation ---
 
 (defn evaluate
   "Evaluate model accuracy on a dataset. Returns {:accuracy double :top3-accuracy double}."
   [model dataset]
-  (let [examples (:examples dataset)
-        results  (mapv (fn [{:keys [tokens label]}]
-                         (let [preds (predict model tokens 3)]
-                           {:correct?   (= label (:index (first preds)))
-                            :in-top3?   (some #(= label (:index %)) preds)}))
-                       examples)
-        n        (count results)]
-    {:accuracy      (/ (double (count (filter :correct? results))) n)
-     :top3-accuracy (/ (double (count (filter :in-top3? results))) n)}))
+  (let [examples (:examples dataset)]
+    (if (empty? examples)
+      {:accuracy 0.0 :top3-accuracy 0.0}
+      (let [results (mapv (fn [{:keys [tokens label]}]
+                            (let [preds (predict model tokens 3)]
+                              {:correct? (= label (:index (first preds)))
+                               :in-top3? (some #(= label (:index %)) preds)}))
+                          examples)
+            n       (count results)]
+        {:accuracy      (/ (double (count (filter :correct? results))) n)
+         :top3-accuracy (/ (double (count (filter :in-top3? results))) n)}))))
 
 ;; --- Persistence ---
 

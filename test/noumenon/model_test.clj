@@ -53,3 +53,28 @@
 (deftest encode-uses-unk-for-missing
   (let [v (td/build-vocab [["hello"]] 3)]
     (is (= [1] (td/encode v ["unknown"])))))
+
+(deftest evaluate-empty-dataset
+  ;; Must not throw on empty dataset
+  (let [m (model/init-model test-config)
+        r (model/evaluate m {:examples []})]
+    (is (= 0.0 (:accuracy r)))
+    (is (= 0.0 (:top3-accuracy r)))))
+
+(deftest train-empty-dataset
+  ;; Must not throw or infinite-loop on empty dataset
+  (let [m      (model/init-model test-config)
+        result (model/train! m {:examples []} (assoc test-config :time-budget-sec 1))]
+    (is (zero? (:steps result)))))
+
+(deftest forward-with-empty-tokens
+  ;; Must not throw on empty input
+  (let [m     (model/init-model test-config)
+        probs (model/forward m [])]
+    (is (= 4 (alength probs)))
+    (is (< (Math/abs (- 1.0 (reduce + (vec probs)))) 0.001))))
+
+(deftest cross-entropy-oob-label
+  ;; Label beyond output-dim must not crash
+  (let [m (model/init-model test-config)]
+    (is (number? (model/train-step! m [1 2 3] 999 0.01)))))
