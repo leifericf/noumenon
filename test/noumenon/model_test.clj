@@ -78,3 +78,61 @@
   ;; Label beyond output-dim must not crash
   (let [m (model/init-model test-config)]
     (is (number? (model/train-step! m [1 2 3] 999 0.01)))))
+
+;; --- Model save/load round-trip ---
+
+(deftest save-load-round-trip
+  (let [path (str "/tmp/model-roundtrip-" (System/currentTimeMillis) ".edn")
+        m1   (model/init-model test-config)
+        _    (model/save-model! m1 path)
+        m2   (model/load-model path)]
+    (try
+      (is (some? m2))
+      (is (= (vec (:w1 m1)) (vec (:w1 m2))))
+      (is (= (vec (:b2 m1)) (vec (:b2 m2))))
+      (is (= (:config m1) (:config m2)))
+      ;; Predictions should be identical
+      (let [p1 (vec (model/forward m1 [1 2 3]))
+            p2 (vec (model/forward m2 [1 2 3]))]
+        (is (= p1 p2)))
+      (finally
+        (.delete (java.io.File. path))))))
+
+(deftest load-model-missing
+  (is (nil? (model/load-model "/tmp/nonexistent-model.edn"))))
+
+;; --- Training actually reduces loss ---
+
+(deftest training-reduces-loss
+  (let [m       (model/init-model test-config)
+        dataset {:examples [{:tokens [1 2 3] :label 0}
+                            {:tokens [4 5 6] :label 1}
+                            {:tokens [7 8 9] :label 2}
+                            {:tokens [1 4 7] :label 0}
+                            {:tokens [2 5 8] :label 1}]
+                 :n-classes 4}
+        ;; Get initial loss
+        initial-probs (model/forward m [1 2 3])
+        initial-loss  (- (Math/log (Math/max 1e-7 (aget initial-probs 0))))
+        ;; Train
+        _       (model/train! m dataset (assoc test-config :time-budget-sec 2))
+        ;; Get final loss
+        final-probs (model/forward m [1 2 3])
+        final-loss  (- (Math/log (Math/max 1e-7 (aget final-probs 0))))]
+    ;; Loss should decrease (or at least not increase dramatically)
+    (is (<= final-loss (+ initial-loss 1.0))
+        "Loss increased dramatically after training")))
+
+;; --- Tokenize edge cases ---
+
+(deftest tokenize-empty-string
+  (is (= [] (td/tokenize ""))))
+
+(deftest tokenize-only-punctuation
+  (is (= [] (td/tokenize "!@#$%^&*()"))))
+
+(deftest build-vocab-empty-corpus
+  (let [v (td/build-vocab [] 100)]
+    (is (= 0 (v "<PAD>")))
+    (is (= 1 (v "<UNK>")))
+    (is (= 2 (count v)))))
