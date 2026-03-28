@@ -573,8 +573,8 @@
           "introspect"     (if (contains-help? rest-args)
                              {:help "introspect"}
                              (let [result (parse-command introspect-command-spec rest-args)]
-                               (if (:error result) result
-                                   (assoc result :subcommand "introspect"))))
+                               (cond-> (assoc result :subcommand "introspect")
+                                 (:error result) (select-keys [:error :subcommand :flag :value]))))
           (if (#{"import" "status" "show-schema" "analyze" "enrich" "query" "update" "watch"} sub)
             (parse-simple-args sub rest-args)
             {:error :unknown-subcommand :subcommand sub}))))))
