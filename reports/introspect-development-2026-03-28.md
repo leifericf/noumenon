@@ -56,7 +56,7 @@ The optimizer LLM can propose bad changes — broken [EDN](https://edn-format.or
 
 ### 2.3 LLM output is unreliable
 
-The optimizer might return unparseable text, propose changes to nonexistent files, suggest path traversals, or produce modifications that violate constraints (missing template placeholders, invalid query names). Every proposal must be validated before application.
+The optimizer might return unparseable text, propose changes to nonexistent files, suggest path traversals, or produce modifications that violate constraints (missing template placeholders, invalid query names). Every proposal must be validated before application. Optimism is an occupational hazard of programming; it is doubly hazardous when the programmer is an LLM.
 
 ### 2.4 Evaluation has variance
 
@@ -297,7 +297,7 @@ This is the same Datomic API, same schema, same queries — just no persistence.
 
 ## 6. Bugs Found and Fixed
 
-The implementation went through two thorough testing passes. Eleven bugs were found and fixed, each committed separately.
+The implementation went through two thorough testing passes. Eleven bugs were found and fixed, each committed separately. (Beware of the above code; I have only proved it correct, not tested it. The testing revealed that proving and correctness are, as usual, unrelated.)
 
 ### 6.1 Argument order swap in resolve-question-params (Critical)
 
