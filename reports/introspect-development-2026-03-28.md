@@ -148,26 +148,64 @@ The `:code` target allows the optimizer to propose modifications to Noumenon's o
 - The full test suite must pass before benchmark evaluation
 - Failure at any gate triggers immediate revert
 
-### 3.6 New files
+### 3.6 Internal meta database
+
+Introspect results are persisted to a dedicated Datomic database (`noumenon-internal`), separate from per-repo databases. This design follows a clear conceptual boundary:
+
+| Database | Contains | Identity |
+|----------|----------|----------|
+| Per-repo databases | Facts about code (commits, files, imports, analysis, benchmarks) | Derived from repo path |
+| Internal meta database | Facts about Noumenon itself (introspect runs, prompt versions, improvement history) | Fixed: `noumenon-internal` |
+
+**Why a separate database?**
+
+1. **Introspect data is cross-cutting.** A prompt change affects how Noumenon answers questions about *every* repo. Storing history per-repo fragments the signal.
+2. **No import dependency.** The meta database exists automatically — you don't need to import Noumenon's own repo to use introspect.
+3. **Future meta-data has a home.** Cost tracking, provider config, user preferences, model weights — all belong here.
+
+**Schema** (`resources/schema/introspect.edn`):
+
+Two entity types following the benchmark pattern:
+
+- `introspect.run/*` — run-level metadata with identity (`introspect.run/id`), config, reproducibility hashes (`prompt-hash`, `examples-hash`, `rules-hash`, `db-basis-t`), aggregate scores, and component ref to iterations
+- `introspect.iter/*` — per-iteration results (target, goal, outcome, scores, delta, modification text)
+
+**Named queries** (5 new, all queryable against the meta database):
+
+| Query | Purpose |
+|-------|---------|
+| `introspect-runs` | List all runs with scores, newest first |
+| `introspect-improvements` | Only kept improvements, with deltas |
+| `introspect-by-target` | Group outcomes by target type |
+| `introspect-score-trend` | Score progression over time |
+| `introspect-failed-approaches` | Reverted/failed iterations (avoid repeating) |
+
+**Reproducibility:** Each run captures SHA-256 hashes of the agent system prompt, example selection, and Datalog rules at the start of the run, plus the Datomic `basis-t` of the target repo's database. This means any run can be exactly reproduced by restoring these artifacts to the hashed state and replaying against the same database version.
+
+### 3.7 New files
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/noumenon/introspect.clj` | 560 | Core loop, gap analysis, proposal validation, artifact I/O, evaluation |
+| `src/noumenon/introspect.clj` | 610 | Core loop, gap analysis, proposal validation, artifact I/O, Datomic persistence |
 | `src/noumenon/model.clj` | 227 | Neural network: init, forward pass, training, persistence |
 | `src/noumenon/training_data.clj` | 100 | Tokenization, vocabulary, dataset generation from benchmark |
 | `resources/prompts/introspect.edn` | 80 | Meta-prompt template for the optimizer LLM |
+| `resources/schema/introspect.edn` | 167 | Datomic schema for introspect runs and iterations |
 | `resources/model/config.edn` | 17 | Model hyperparameter configuration |
-| `test/noumenon/introspect_test.clj` | 272 | 35 tests for parsing, validation, history, gap analysis, security |
+| `resources/queries/introspect-*.edn` | 63 | 5 named Datalog queries for introspect data |
+| `test/noumenon/introspect_test.clj` | 278 | 33 tests: parsing, validation, Datomic round-trips, gap analysis, security |
 | `test/noumenon/model_test.clj` | 138 | 20 tests for model, training, tokenization, round-trips |
 
-### 3.7 Modified files
+### 3.8 Modified files
 
 | File | Change |
 |------|--------|
 | `src/noumenon/agent.clj` | Added `reset-prompt-cache!` to invalidate delay-cached prompt resources |
 | `src/noumenon/cli.clj` | Added `introspect` command spec, parser, and help |
-| `src/noumenon/main.clj` | Added `do-introspect` dispatcher with optimizer + evaluator LLM setup |
-| `src/noumenon/mcp.clj` | Added `noumenon_introspect` tool definition and handler |
+| `src/noumenon/main.clj` | Added `do-introspect` dispatcher; creates meta-conn for internal database |
+| `src/noumenon/mcp.clj` | Added `noumenon_introspect` tool; creates meta-conn via connection cache |
+| `src/noumenon/schema.clj` | Added `introspect.edn` to schema file list |
+| `resources/queries/index.edn` | Registered 5 new introspect queries (total: 54) |
 | `deps.edn` | Added `uncomplicate/deep-diamond` and `uncomplicate/neanderthal` |
 
 ---
@@ -450,13 +488,7 @@ The agent can then use `noumenon_benchmark_results` to inspect the detailed scor
 
 ### 6.3 History file
 
-All iterations are logged to `data/introspect/history.edn`, including:
-- Timestamp, target, goal, rationale
-- Baseline and result scores, delta
-- Outcome (`:improved`, `:reverted`, `:skipped`, `:gate-failed`, `:error`)
-- The full modification (for improved iterations)
-
-This allows post-hoc analysis of what the optimizer tried, what worked, and what didn't.
+All iterations are persisted to the internal Datomic meta database (`noumenon-internal`) as component entities of the run. This enables Datalog queries for post-hoc analysis — e.g., `introspect-improvements` shows all kept improvements with deltas, `introspect-failed-approaches` shows what was tried and didn't work (so the optimizer can avoid repeating failures), and `introspect-score-trend` tracks progress over time.
 
 ---
 
@@ -491,12 +523,13 @@ Each question in the evaluation creates a fresh `agent/ask` session. The system 
 ## 8. Future Directions
 
 1. **Reduce evaluation variance** -- run each question 2-3 times, use median score, or use temperature 0 for the agent (currently 0 but LLM behavior still varies)
-2. **Multi-repo evaluation** -- aggregate scores across a corpus of repos to avoid overfitting to one codebase
+2. **Multi-repo evaluation** -- aggregate scores across a corpus of repos to avoid overfitting to one codebase; the meta database's cross-repo score summaries would enable this
 3. **Async MCP tools** -- `noumenon_introspect` returns a run ID, `noumenon_introspect_status` checks progress, `noumenon_introspect_stop` halts the loop
 4. **Deep Diamond GPU training** -- swap the pure-Clojure model for GPU-accelerated training when the model grows beyond toy size
 5. **Cross-iteration model warm-start** -- initialize from previous best weights instead of random
-6. **Prompt version tracking** -- tag each benchmark run with the exact prompt version so improvements can be traced to specific changes
+6. **Prompts and queries in Datomic** -- store prompt templates and named queries in the meta database instead of classpath resources, enabling transactional modification with automatic rollback via Datomic's immutable history
 7. **Multi-objective optimization** -- optimize for both accuracy AND cost (fewer agent iterations per question)
+8. **Meta-database queries via MCP** -- expose the introspect named queries through the MCP server so external agents can query Noumenon's improvement history
 
 ---
 
@@ -519,12 +552,15 @@ Each question in the evaluation creates a fresh `agent/ask` session. The system 
 | `f485d09` | test | Comprehensive test coverage (55 new tests) |
 | `6cf60eb` | fix | CLI subcommand in parse errors |
 | `80274ac` | fix | Exception recovery during evaluation |
+| `7b8eac2` | feat | Datomic schema for introspect runs and iterations |
+| `099a4df` | feat | Persist results to internal Datomic meta database |
+| `1571803` | feat | Named Datalog queries for introspect data |
 
 ## Appendix B: Test Suite Additions
 
 | Test File | Tests Added | Coverage Areas |
 |-----------|-------------|----------------|
-| `introspect_test.clj` | 35 | Parsing (valid, fenced, invalid, nil, empty, non-map), validation (all 5 targets, nil fields, path traversal x3, empty examples), gap analysis (empty, with results, all correct, nil reasoning), history (skipped records, nil fields, missing file, corrupted file, non-vector, valid, round-trip), meta-prompt (no unfilled placeholders, content passthrough), score conversion |
+| `introspect_test.clj` | 33 | Parsing (valid, fenced, invalid, nil, empty, non-map), validation (all 5 targets, nil fields, path traversal x3, empty examples), gap analysis (empty, with results, all correct, nil reasoning), history (empty DB, Datomic round-trip, tx-data round-trip), meta-prompt (no unfilled placeholders, content passthrough), score conversion |
 | `model_test.clj` | 20 | Model init, forward pass probabilities, predict top-k, training time budget, tokenization (basic, empty, punctuation-only), vocabulary (special tokens, empty corpus), encoding (UNK mapping), empty dataset (evaluate, train), empty tokens, OOB labels, save/load round-trip, training loss reduction |
 
-Total: 55 new tests, 463 total in suite, 1,529 assertions.
+Total: 53 new tests, 461 total in suite, 1,545 assertions.
