@@ -300,29 +300,9 @@ This is the same Datomic API, same schema, same queries — just no persistence.
 
 ---
 
-## 6. Bugs Found and Fixed
+## 6. Preliminary Test Results
 
-Eleven bugs were found and fixed across two testing passes. (Beware of the above code; I have only proved it correct, not tested it. The testing revealed that proving and correctness are, as usual, unrelated.)
-
-| # | Severity | Bug | Fix |
-|---|----------|-----|-----|
-| 1 | Critical | `->>` threading swapped argument order in `resolve-question-params` → NPE on startup | Direct function call instead of threading |
-| 2 | Critical | `format-history` NPE on skipped records (nil `:target`) | Default to `"unknown"` for nil fields |
-| 3 | Medium | `load-history` crash on corrupted/partial EDN files | try/catch with `[]` fallback |
-| 4 | Medium | `parse-proposal` NPE when LLM returns nil text | Early return nil |
-| 5 | Security | `git add -A` staged `.env` and `data/` | Allowlist: only `resources/` and `src/noumenon/` |
-| 6 | Medium | Division by zero in model evaluation on empty dataset | Early return zero scores |
-| 7 | Medium | `cross-entropy-loss` ArrayIndexOutOfBounds on OOB labels | Bounds check with max penalty fallback |
-| 8 | Low | Revert destroyed file formatting (`pr-str` flattens multi-line) | Save/restore raw bytes instead of parsed data |
-| 9 | Security | Path traversal: `src/noumenon/../../etc/passwd.clj` passed validation | Reject paths containing `..` |
-| 10 | Low | CLI error showed global help instead of introspect help | Include `:subcommand` in parse results |
-| 11 | Critical | No exception recovery: thrown exception after apply leaves modified file on disk | try/catch with automatic revert, record as `:error` |
-
----
-
-## 7. Preliminary Test Results
-
-### 7.1 End-to-end runs
+### 6.1End-to-end runs
 
 Four end-to-end runs were completed during development, exercising all major code paths. All runs targeted the Noumenon repository itself using the GLM provider with Sonnet.
 
@@ -333,7 +313,7 @@ Four end-to-end runs were completed during development, exercising all major cod
 | 3 | 0.659 | -- | -- | Skipped | -- | LLM parse failure |
 | 4 | 0.636 | -- | -- | Skipped | -- | LLM parse failure |
 
-### 7.2 Run 1: Successful improvement (+6.8%)
+### 6.2Run 1: Successful improvement (+6.8%)
 
 **Optimizer's gap analysis input** (excerpt from the actual meta-prompt sent to the LLM):
 
@@ -374,7 +354,7 @@ WRONG answers (highest priority):
 
 **Result:** Mean score improved from **0.523 to 0.591** (+6.8 percentage points). The system kept the modification.
 
-### 7.3 Run 2: Correctly reverted regression (-4.5%)
+### 6.3Run 2: Correctly reverted regression (-4.5%)
 
 **Optimizer's response** (verbatim):
 
@@ -388,7 +368,7 @@ WRONG answers (highest priority):
 
 **Result:** Mean score dropped from **0.682 to 0.636** (-4.5 percentage points). The system correctly reverted the change, restoring the original example selection with exact byte-level fidelity.
 
-### 7.4 Runs 3-4: Graceful parse failure handling
+### 6.4Runs 3-4: Graceful parse failure handling
 
 The optimizer LLM returned malformed EDN. Actual error message:
 
@@ -399,7 +379,7 @@ introspect: failed to parse proposal, skipping
 
 The parse error was caught, the iteration was logged as `:skipped`, no files were modified, and the loop completed normally. This validates the nil-handling and error recovery paths.
 
-### 7.5 Datomic persistence verified
+### 6.5Datomic persistence verified
 
 After the e2e run, the meta database was queried to confirm persistence:
 
@@ -410,7 +390,7 @@ Runs: 1
 
 The run ID, baseline, final score, and all iteration records survived the Datomic round-trip.
 
-### 7.6 Baseline variability
+### 6.6Baseline variability
 
 The baseline scores varied across runs (0.523, 0.682, 0.659, 0.636) despite using the same database and prompt configuration. This is because the evaluation runs each question through `agent/ask`, which makes multiple LLM calls. The agent may choose different query strategies each run, and the LLM's output varies even at temperature 0 due to server-side batching effects.
 
@@ -418,13 +398,13 @@ This variability is the main technical risk for the introspect loop: a modificat
 
 ---
 
-## 8. User and Agent Affordances
+## 7. User and Agent Affordances
 
-### 8.1 The need
+### 7.1The need
 
 Two audiences use Noumenon: humans via the CLI, and AI agents via MCP. Both need to be able to trigger self-improvement runs, control their cost, and inspect results. The CLI user might run an overnight optimization session. The MCP agent might trigger introspect when it notices the ask agent performing poorly on a particular class of questions.
 
-### 8.2 CLI interface
+### 7.2CLI interface
 
 ```bash
 # Run 10 iterations with default settings
@@ -447,33 +427,33 @@ clj -M:run introspect --max-iterations 20 --git-commit .
 | `--git-commit` | Auto-commit each improvement |
 | `--verbose` | Log verbose output to stderr |
 
-### 8.3 MCP tools
+### 7.3MCP tools
 
 The `noumenon_introspect_start` tool launches an async run and returns a run ID. `noumenon_introspect_status` and `noumenon_introspect_stop` monitor and control it. `noumenon_introspect_history` routes introspect queries to the internal meta database.
 
-### 8.4 Queryable history
+### 7.4Queryable history
 
 All iterations are persisted to the internal Datomic meta database as component entities of the run. This enables Datalog queries for post-hoc analysis — `introspect-improvements` shows all kept improvements with deltas, `introspect-failed-approaches` shows what was tried and didn't work (so the optimizer can avoid repeating failures), and `introspect-score-trend` tracks progress over time.
 
 ---
 
-## 9. Known Limitations
+## 8. Known Limitations
 
-### 9.1 No statistical significance testing
+### 8.1 No statistical significance testing
 
 The evaluation runs each question once per iteration (or N times with `--eval-runs`). With LLM non-determinism, small deltas may be noise. The current improvement threshold of +0.001 catches true improvements but also false positives. Increasing `--eval-runs` helps but also increases cost.
 
-### 9.2 No human review gate for code changes
+### 8.2 No human review gate for code changes
 
 The `:code` target auto-reverts on lint or test failure, but there is no mechanism for human review before applying code changes. For production use, code changes should be proposed on a branch.
 
-### 9.3 No prompt caching across evaluations
+### 8.3 No prompt caching across evaluations
 
 Each question creates a fresh `agent/ask` session. The system prompt is re-sent with every LLM call. [Anthropic API](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching) prompt caching is used within a single agent session but not across questions.
 
 ---
 
-## 10. Implemented Since Initial Development
+## 9. Implemented Since Initial Development
 
 The following items were originally listed as future directions and have since been implemented:
 
@@ -486,7 +466,7 @@ The following items were originally listed as future directions and have since b
 - **Human target constraint** (`--target examples,rules`) — restricts which targets the optimizer may choose
 - **Pre-trained weight shipping** — documented workflow: `cp data/models/latest.edn resources/model/weights.edn`
 
-## 11. Remaining Future Directions
+## 10. Remaining Future Directions
 
 1. **[Deep Diamond](https://github.com/uncomplicate/deep-diamond) GPU training** — swap the pure-Clojure model for GPU-accelerated training when the model grows beyond toy size (requires a feasibility spike)
 2. **Prompts and queries in Datomic** — store prompt templates and named queries in the meta database instead of classpath resources, enabling transactional modification with automatic rollback via Datomic's immutable history (significant refactor, better as its own branch)
