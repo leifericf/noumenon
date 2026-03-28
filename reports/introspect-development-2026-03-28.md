@@ -239,6 +239,8 @@ It is worth remembering that Clojure is a [Lisp](https://en.wikipedia.org/wiki/L
 
 Clojure brings these ideas into the modern era: immutable persistent data structures, first-class concurrency, seamless Java interop, and a data-oriented philosophy that treats everything — schema, queries, configuration, even database transactions — as plain data that can be inspected, transformed, and composed. Datomic extends this philosophy to the database itself. Together they form a foundation where building a self-improving system feels less like engineering and more like assembly from well-designed parts.
 
+Standing on the shoulders of giants makes it possible to refine good ideas to make them great, and then unify these ideas into something greater than each constituent part.
+
 > *"If I have seen further it is by standing on the shoulders of Giants."*
 > — Isaac Newton, 1675
 
