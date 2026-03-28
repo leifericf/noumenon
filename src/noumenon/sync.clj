@@ -195,6 +195,27 @@
                                               :tx/source :deterministic})}))
     (count stale)))
 
+(defn backfill-issue-refs!
+  "Extract issue references from all commit messages that don't have any yet.
+   Returns count of commits updated."
+  [conn]
+  (let [db       (d/db conn)
+        commits  (d/q '[:find ?e ?msg
+                        :where
+                        [?e :commit/message ?msg]
+                        (not [?e :commit/issue-refs])]
+                      db)
+        updates  (->> commits
+                      (keep (fn [[eid msg]]
+                              (when-let [refs (git/extract-issue-refs msg)]
+                                {:db/id eid :commit/issue-refs refs})))
+                      vec)]
+    (when (seq updates)
+      (d/transact conn {:tx-data (conj updates {:db/id "datomic.tx"
+                                                :tx/op :import
+                                                :tx/source :deterministic})}))
+    (count updates)))
+
 ;; --- Sync orchestration ---
 
 (defn update-repo!
@@ -229,6 +250,9 @@
               reclass-n (reclassify-commits! conn)
               _         (when (pos? reclass-n)
                           (log! (str "Reclassified " reclass-n " commit kinds")))
+              issues-n  (backfill-issue-refs! conn)
+              _         (when (pos? issues-n)
+                          (log! (str "Extracted issue refs for " issues-n " commits")))
               files-r   (files/import-files! conn repo-path repo-uri)
               post-r    (when (or fresh?
                                   (seq (:added changes))

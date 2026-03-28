@@ -165,6 +165,26 @@
                 :message         (str/trim body)}
                numstat)))))
 
+;; --- Issue reference extraction ---
+
+(def ^:private issue-ref-patterns
+  "Patterns for extracting issue references from commit messages."
+  [#"https?://[^\s\)\]>\"']+"          ;; URLs
+   #"(?<![A-Za-z0-9/])[A-Z][A-Z0-9]+-\d+" ;; Jira-style: PROJ-123
+   #"(?<=\s|^|\()#\d+"                 ;; GitHub-style: #123
+   #"(?<=\s|^|\()GH-\d+"])             ;; GitHub alt: GH-42
+
+(defn extract-issue-refs
+  "Extract unique issue references (URLs, keys like #123, PROJ-456) from text.
+   Returns a sorted set of strings, or nil if none found."
+  [text]
+  (when-not (str/blank? text)
+    (let [refs (->> issue-ref-patterns
+                    (mapcat #(re-seq % text))
+                    (map str/trim)
+                    (into (sorted-set)))]
+      (when (seq refs) refs))))
+
 ;; --- Commit classification ---
 
 (def ^:private conventional-prefix-re
@@ -241,7 +261,9 @@
                         (pos? (or deletions 0)) (assoc :commit/deletions deletions)
                         (seq parent-shas)        (assoc :commit/parents
                                                         (mapv #(vector :git/sha %) parent-shas))
-                        (seq file-tids)          (assoc :commit/changed-files file-tids))]
+                        (seq file-tids)          (assoc :commit/changed-files file-tids)
+                        (extract-issue-refs message) (assoc :commit/issue-refs
+                                                            (extract-issue-refs message)))]
     (-> (person-tx-data author-tid author-email author-name
                         committer-tid committer-email committer-name)
         (into [commit

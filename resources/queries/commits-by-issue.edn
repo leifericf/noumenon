@@ -1,0 +1,12 @@
+{:name "commits-by-issue"
+ :description "Commits that reference a given issue (by key or URL substring)"
+ :query [:find ?sha ?msg ?name ?date
+         :in $ ?ref
+         :where
+         [?commit :commit/issue-refs ?ref]
+         [?commit :git/sha ?sha]
+         [?commit :commit/message ?msg]
+         [?commit :commit/author ?person]
+         [?person :person/name ?name]
+         [?commit :commit/authored-at ?date]]
+ :params {"ref" "Issue reference to search for, e.g. #123 or PROJ-456"}}

@@ -186,6 +186,49 @@
     (is (nil? (:commit/parents entity)))
     (is (nil? (:commit/changed-files entity)))))
 
+;; --- Issue reference extraction ---
+
+(deftest extract-issue-refs-github-style
+  (is (= #{"#123" "#456"}
+         (git/extract-issue-refs "fix(auth): resolve login bug (#123) and (#456)"))))
+
+(deftest extract-issue-refs-jira-style
+  (is (= #{"PROJ-42" "PROJ-999"}
+         (git/extract-issue-refs "PROJ-42 implement feature, see also PROJ-999"))))
+
+(deftest extract-issue-refs-urls
+  (is (= #{"https://github.com/foo/bar/issues/123"}
+         (git/extract-issue-refs "Closes https://github.com/foo/bar/issues/123"))))
+
+(deftest extract-issue-refs-mixed
+  (let [refs (git/extract-issue-refs "Fix #55 (JIRA-100) see https://jira.example.com/browse/JIRA-100")]
+    (is (contains? refs "#55"))
+    (is (contains? refs "JIRA-100"))
+    (is (some #(str/starts-with? % "https://") refs))))
+
+(deftest extract-issue-refs-none
+  (is (nil? (git/extract-issue-refs "chore: bump deps")))
+  (is (nil? (git/extract-issue-refs nil)))
+  (is (nil? (git/extract-issue-refs ""))))
+
+(deftest tx-data-includes-issue-refs
+  (let [commit  {:sha "abc" :parent-shas [] :message "fix(api): handle timeout (#42, PROJ-7)"
+                 :author-name "A" :author-email "a@x.com" :authored-at #inst "2024-01-01"
+                 :committer-name "A" :committer-email "a@x.com" :committed-at #inst "2024-01-01"
+                 :changed-files []}
+        tx-data (git/commit->tx-data "test://repo" commit)
+        entity  (first (filter :git/sha tx-data))]
+    (is (= #{"#42" "PROJ-7"} (:commit/issue-refs entity)))))
+
+(deftest tx-data-omits-issue-refs-when-none
+  (let [commit  {:sha "abc" :parent-shas [] :message "chore: update deps"
+                 :author-name "A" :author-email "a@x.com" :authored-at #inst "2024-01-01"
+                 :committer-name "A" :committer-email "a@x.com" :committed-at #inst "2024-01-01"
+                 :changed-files []}
+        tx-data (git/commit->tx-data "test://repo" commit)
+        entity  (first (filter :git/sha tx-data))]
+    (is (nil? (:commit/issue-refs entity)))))
+
 ;; --- Rename path resolution (regression: Flask import crash) ---
 
 (deftest resolve-rename-path-directory

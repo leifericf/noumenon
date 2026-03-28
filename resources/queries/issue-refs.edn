@@ -1,0 +1,5 @@
+{:name "issue-refs"
+ :description "All unique issue references with commit count"
+ :query [:find ?ref (count ?commit)
+         :where
+         [?commit :commit/issue-refs ?ref]]}

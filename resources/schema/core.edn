@@ -83,6 +83,11 @@
   :db/cardinality :db.cardinality/one
   :db/doc         "Total lines deleted across all files in this commit"}
 
+ {:db/ident       :commit/issue-refs
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Issue references extracted from commit message — keys (#123, PROJ-456) and URLs"}
+
  ;; --- Persons ---
  {:db/ident       :person/email
   :db/valueType   :db.type/string
