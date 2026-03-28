@@ -364,7 +364,7 @@
 
 (defn run-iteration!
   "Run a single introspect iteration.
-   Returns {:outcome :improved/:reverted/:skipped :record map}."
+   Returns {:outcome :improved/:reverted/:skipped/:error :record map}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
            baseline history history-path git-commit?]}]
   (let [;; Load current artifacts
@@ -378,10 +378,14 @@
                       :rules            orig-rules
                       :history          history
                       :baseline-results (:results baseline)})
-        ;; Ask optimizer for proposal
-        _           (log! "introspect: requesting proposal from optimizer...")
-        response    (optimizer-invoke-fn
-                     [{:role "user" :content meta-prompt}])
+        ;; Ask optimizer for proposal — catch LLM errors
+        response    (try
+                      (log! "introspect: requesting proposal from optimizer...")
+                      (optimizer-invoke-fn
+                       [{:role "user" :content meta-prompt}])
+                      (catch Exception e
+                        (log! (str "introspect: optimizer error: " (.getMessage e)))
+                        nil))
         proposal    (parse-proposal (:text response))]
     (if-not proposal
       (do (log! "introspect: failed to parse proposal, skipping")
@@ -399,85 +403,98 @@
               _ (log! (str "introspect: target=" (name target)
                            " goal=" (pr-str goal)
                            "\n  " rationale))
-              ;; Apply modification
-              original (apply-modification! proposal)
-              ;; For code changes, run lint + tests as gate
-              code-gate-ok?
-              (if (= :code target)
-                (let [lint-r (run-lint!)
-                      test-r (when (:pass? lint-r) (run-tests!))]
-                  (cond
-                    (not (:pass? lint-r))
-                    (do (log! "introspect: lint FAILED, reverting")
-                        (log! (str "  " (subs (:output lint-r) 0
-                                              (min 200 (count (:output lint-r))))))
-                        false)
-                    (not (:pass? test-r))
-                    (do (log! "introspect: tests FAILED, reverting")
-                        false)
-                    :else true))
-                true)]
-          (if-not code-gate-ok?
-            (do (revert-modification! proposal original)
-                (let [record {:timestamp (str (java.util.Date.))
-                              :target    target :goal goal
-                              :rationale rationale
-                              :outcome   :gate-failed}]
-                  (append-history! history-path record)
-                  {:outcome :gate-failed :record record}))
-            (do
-              ;; For :train target, build dataset and train the model
-              (when (= :train target)
-                (let [config  (model/load-config)
-                      dataset (td/build-dataset db config)
-                      mdl     (model/init-model config)
-                      _       (model/train! mdl dataset config)
-                      eval-r  (model/evaluate mdl dataset)]
-                  (log! (str "introspect: model accuracy="
-                             (format "%.3f" (:accuracy eval-r))
-                             " top3=" (format "%.3f" (:top3-accuracy eval-r))))
-                  (model/save-model! mdl "data/models/latest.edn")))
-              ;; Reset agent's cached prompts (for prompt/example/rule changes)
+              ;; Apply modification — wrapped in try/catch for safe revert
+              original (apply-modification! proposal)]
+          (try
+            (let [;; For code changes, run lint + tests as gate
+                  code-gate-ok?
+                  (if (= :code target)
+                    (let [lint-r (run-lint!)
+                          test-r (when (:pass? lint-r) (run-tests!))]
+                      (cond
+                        (not (:pass? lint-r))
+                        (do (log! "introspect: lint FAILED, reverting")
+                            (log! (str "  " (subs (:output lint-r) 0
+                                                  (min 200 (count (:output lint-r))))))
+                            false)
+                        (not (:pass? test-r))
+                        (do (log! "introspect: tests FAILED, reverting")
+                            false)
+                        :else true))
+                    true)]
+              (if-not code-gate-ok?
+                (do (revert-modification! proposal original)
+                    (let [record {:timestamp (str (java.util.Date.))
+                                  :target    target :goal goal
+                                  :rationale rationale
+                                  :outcome   :gate-failed}]
+                      (append-history! history-path record)
+                      {:outcome :gate-failed :record record}))
+                (do
+                  ;; For :train target, build dataset and train the model
+                  (when (= :train target)
+                    (let [config  (model/load-config)
+                          dataset (td/build-dataset db config)
+                          mdl     (model/init-model config)
+                          _       (model/train! mdl dataset config)
+                          eval-r  (model/evaluate mdl dataset)]
+                      (log! (str "introspect: model accuracy="
+                                 (format "%.3f" (:accuracy eval-r))
+                                 " top3=" (format "%.3f" (:top3-accuracy eval-r))))
+                      (model/save-model! mdl "data/models/latest.edn")))
+                  ;; Reset agent's cached prompts (for prompt/example/rule changes)
+                  (when (#{:examples :system-prompt :rules} target)
+                    (agent/reset-prompt-cache!))
+                  ;; Evaluate
+                  (log! "introspect: evaluating...")
+                  (let [eval-result (evaluate-agent! db repo-name invoke-fn-factory)
+                        new-mean    (:mean eval-result)
+                        base-mean   (:mean baseline)
+                        delta       (- new-mean base-mean)
+                        improved?   (> delta 0.001)]
+                    (if improved?
+                      (do (log! (str "introspect: IMPROVED " (format "%+.3f" delta)
+                                     " (" (format "%.3f" base-mean)
+                                     " -> " (format "%.3f" new-mean) ")"))
+                          (let [record {:timestamp    (str (java.util.Date.))
+                                        :target       target :goal goal
+                                        :rationale    rationale
+                                        :baseline     base-mean
+                                        :result       new-mean
+                                        :delta        delta
+                                        :outcome      :improved
+                                        :modification modification}]
+                            (append-history! history-path record)
+                            (when git-commit?
+                              (git-commit-improvement! repo-path record))
+                            {:outcome     :improved
+                             :record      record
+                             :eval-result eval-result}))
+                      (do (log! (str "introspect: reverted (delta=" (format "%+.3f" delta) ")"))
+                          (revert-modification! proposal original)
+                          (when (#{:examples :system-prompt :rules} target)
+                            (agent/reset-prompt-cache!))
+                          (let [record {:timestamp (str (java.util.Date.))
+                                        :target    target :goal goal
+                                        :rationale rationale
+                                        :baseline  base-mean
+                                        :result    new-mean
+                                        :delta     delta
+                                        :outcome   :reverted}]
+                            (append-history! history-path record)
+                            {:outcome :reverted :record record})))))))
+            (catch Exception e
+              (log! (str "introspect: ERROR during evaluation, reverting: " (.getMessage e)))
+              (revert-modification! proposal original)
               (when (#{:examples :system-prompt :rules} target)
                 (agent/reset-prompt-cache!))
-              ;; Evaluate
-              (log! "introspect: evaluating...")
-              (let [eval-result (evaluate-agent! db repo-name invoke-fn-factory)
-                    new-mean    (:mean eval-result)
-                    base-mean   (:mean baseline)
-                    delta       (- new-mean base-mean)
-                    improved?   (> delta 0.001)]
-                (if improved?
-                  (do (log! (str "introspect: IMPROVED " (format "%+.3f" delta)
-                                 " (" (format "%.3f" base-mean)
-                                 " -> " (format "%.3f" new-mean) ")"))
-                      (let [record {:timestamp    (str (java.util.Date.))
-                                    :target       target :goal goal
-                                    :rationale    rationale
-                                    :baseline     base-mean
-                                    :result       new-mean
-                                    :delta        delta
-                                    :outcome      :improved
-                                    :modification modification}]
-                        (append-history! history-path record)
-                        (when git-commit?
-                          (git-commit-improvement! repo-path record))
-                        {:outcome     :improved
-                         :record      record
-                         :eval-result eval-result}))
-                  (do (log! (str "introspect: reverted (delta=" (format "%+.3f" delta) ")"))
-                      (revert-modification! proposal original)
-                      (when (#{:examples :system-prompt :rules} target)
-                        (agent/reset-prompt-cache!))
-                      (let [record {:timestamp (str (java.util.Date.))
-                                    :target    target :goal goal
-                                    :rationale rationale
-                                    :baseline  base-mean
-                                    :result    new-mean
-                                    :delta     delta
-                                    :outcome   :reverted}]
-                        (append-history! history-path record)
-                        {:outcome :reverted :record record})))))))))))
+              (let [record {:timestamp (str (java.util.Date.))
+                            :target    target :goal goal
+                            :rationale rationale
+                            :outcome   :error
+                            :error     (.getMessage e)}]
+                (append-history! history-path record)
+                {:outcome :error :record record}))))))))
 
 ;; --- Main loop ---
 
