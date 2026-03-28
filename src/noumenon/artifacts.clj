@@ -157,13 +157,27 @@
 ;; --- Writing ---
 
 (defn save-prompt!
-  "Write a prompt template to Datomic. Handles chunking transparently."
+  "Write a prompt template to Datomic. Handles chunking transparently.
+   Retracts the opposite storage format to prevent stale data."
   [conn prompt-name template source]
-  (let [tx-data (merge {:artifact.prompt/name prompt-name}
-                       (chunk-template template))]
-    (d/transact conn {:tx-data [tx-data
-                                {:db/id "datomic.tx"
-                                 :tx/artifact-source source}]})))
+  (let [db       (d/db conn)
+        entity   (d/pull db '[:db/id :artifact.prompt/template
+                              {:artifact.prompt/chunks [:db/id]}]
+                         [:artifact.prompt/name prompt-name])
+        eid      (:db/id entity)
+        chunked? (> (count template) chunk-size)
+        ;; Retract stale data: old template string and/or old chunks
+        retracts (when eid
+                   (into (when (and chunked? (:artifact.prompt/template entity))
+                           [[:db/retract eid :artifact.prompt/template
+                             (:artifact.prompt/template entity)]])
+                         (map (fn [chunk] [:db/retractEntity (:db/id chunk)]))
+                         (:artifact.prompt/chunks entity)))
+        tx-data  (merge {:artifact.prompt/name prompt-name}
+                        (chunk-template template))]
+    (d/transact conn {:tx-data (into [tx-data {:db/id "datomic.tx"
+                                               :tx/artifact-source source}]
+                                     retracts)})))
 
 (defn save-rules!
   "Write rules to Datomic."

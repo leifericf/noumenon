@@ -247,14 +247,15 @@
 (defn do-query
   "Run the query subcommand. Returns {:exit n :result map-or-nil}."
   [{:keys [query-name list-queries params] :as opts}]
-  (with-valid-repo
-    opts
-    (fn [ctx]
-      (with-existing-db
-        ctx
-        (fn [{:keys [db meta-db]}]
-          (if list-queries
-            (do-query-list meta-db)
+  (if list-queries
+    (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir opts))]
+      (do-query-list (d/db meta-conn)))
+    (with-valid-repo
+      opts
+      (fn [ctx]
+        (with-existing-db
+          ctx
+          (fn [{:keys [db meta-db]}]
             (let [kw-params (into {} (map (fn [[k v]] [(keyword k) v])) params)
                   {:keys [ok error]} (query/run-named-query meta-db db query-name kw-params)]
               (if error
