@@ -294,14 +294,23 @@
       (let [f (io/file path)]
         (when (.exists f) (.delete f))))))
 
+(def ^:private model-weights-path "data/models/latest.edn")
+
 (defmethod apply-modification! :train [{:keys [modification]}]
-  (let [orig (save-raw "model/config.edn")]
+  (let [config-orig  (save-raw "model/config.edn")
+        weights-file (io/file model-weights-path)
+        weights-orig (when (.exists weights-file) (slurp weights-file))]
     (spit (resource-path "model/config.edn")
           (pr-str (merge (model/load-config) (:config modification))))
-    orig))
+    {:config-original  config-orig
+     :weights-original weights-orig}))
 
-(defmethod revert-modification! :train [_ original]
-  (spit (resource-path "model/config.edn") original))
+(defmethod revert-modification! :train [_ {:keys [config-original weights-original]}]
+  (spit (resource-path "model/config.edn") config-original)
+  (let [wf (io/file model-weights-path)]
+    (if weights-original
+      (spit wf weights-original)
+      (when (.exists wf) (.delete wf)))))
 
 ;; --- with-modification macro ---
 
