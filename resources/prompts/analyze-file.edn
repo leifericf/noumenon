@@ -70,16 +70,16 @@ File-level field guidelines:
   :very-complex — deeply nested logic, complex state machines, hard to follow.
   Declarative data files (EDN, JSON, YAML, TOML, XML, SQL) are always :trivial — they have no cognitive complexity.
 
-:patterns — design patterns used in this file. Only include if clearly present:
-  :state-machine — explicit state transitions based on events/input.
-  :producer-consumer — one component generates work, another processes it.
-  :builder — step-by-step construction of complex objects.
-  :factory — creates instances based on parameters without exposing creation logic.
-  :decorator — wraps functionality to add behavior transparently.
-  :adapter — converts one interface to another.
-  :pipeline — data flows through a chain of transformation stages.
+:patterns — design patterns used in this file. Be VERY selective — most files use zero patterns. Only include if the file's ARCHITECTURE is built around the pattern, not if it incidentally uses a related technique:
+  :state-machine — explicit state transitions with named states and event-driven transitions. NOT just a cond/case on a status field.
+  :producer-consumer — one component generates work items, another component processes them asynchronously via a queue or channel.
+  :builder — step-by-step construction of a complex object with a dedicated builder type/protocol. NOT just chaining assoc calls or using threading macros.
+  :factory — a function or method whose sole purpose is creating instances of different types based on parameters. NOT just a constructor or init function.
+  :decorator — wraps an existing function/object to add behavior while preserving the original interface. NOT just a wrapper function.
+  :adapter — explicitly converts one interface to another to make incompatible systems work together.
+  :pipeline — data flows through a NAMED chain of distinct, composable transformation stages. Idiomatic language features (Clojure ->/->>, Unix pipes, method chaining) are NOT the pipeline pattern.
   :ring-handler — Clojure Ring-style request->response handler.
-  :middleware-chain — composable wrappers around a core handler.
+  :middleware-chain — composable wrappers around a core handler (actual middleware stack, not just function composition).
 
 :layer — architectural layer this file belongs to:
   :core — fundamental domain logic, algorithms, data structures.
