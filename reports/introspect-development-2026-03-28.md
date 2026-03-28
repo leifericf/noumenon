@@ -182,6 +182,34 @@ Two entity types following the benchmark pattern:
 
 **Reproducibility:** Each run captures SHA-256 hashes of the agent system prompt, example selection, and Datalog rules at the start of the run, plus the Datomic `basis-t` of the target repo's database. This means any run can be exactly reproduced by restoring these artifacts to the hashed state and replaying against the same database version.
 
+**Testing with in-memory databases:**
+
+Datomic Local supports two storage modes through the same API: directory-backed (persistent, used in production) and in-memory (ephemeral, used in tests). The distinction is a single argument — a path string or the keyword `:mem`:
+
+```clojure
+;; Production: directory-backed, persistent
+(db/connect-and-ensure-schema "/path/to/data/datomic" "noumenon")
+
+;; Tests: in-memory, disposable
+(db/connect-and-ensure-schema :mem "introspect-test-abc123")
+```
+
+The test helper `th/make-test-conn` creates a fresh in-memory database with a random UUID name for each test. This gives every test complete isolation — no shared state, no disk I/O, no lock files, no cleanup. The database is garbage collected when the test ends.
+
+The introspect Datomic tests use this pattern to verify round-trip persistence without touching the real database. For example, the `run-tx-data-round-trip` test creates an in-memory meta database, transacts a complete run with two iteration entities, then queries it back with `d/pull` to verify all attributes survived the trip:
+
+```clojure
+(deftest run-tx-data-round-trip
+  (let [conn    (th/make-test-conn "introspect-txdata")
+        tx-data (intro/run->tx-data {:run-id "test-run-42" ...})]
+    (d/transact conn {:tx-data tx-data})
+    (let [run (d/pull (d/db conn) '[*] [:introspect.run/id "test-run-42"])]
+      (is (= 0.5 (:introspect.run/baseline-mean run)))
+      (is (= 2 (count (:introspect.run/iterations run)))))))
+```
+
+This is the same Datomic API, same schema, same queries — just no persistence. It's why 461 tests run in seconds, and why the only test errors in the suite are the 2 pre-existing DB lock conflicts from the few tests that hit the on-disk database.
+
 ### 3.7 New files
 
 | File | Lines | Purpose |
