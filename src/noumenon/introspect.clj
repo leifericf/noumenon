@@ -253,17 +253,27 @@
 (defmethod revert-modification! :rules [_ original]
   (spit (resource-path "queries/rules.edn") original))
 
+(defn- validate-code-path!
+  "Resolve canonical path and ensure it stays within src/noumenon/."
+  [file]
+  (let [canonical (.getCanonicalPath (io/file file))
+        src-dir   (.getCanonicalPath (io/file "src/noumenon/"))]
+    (when-not (str/starts-with? canonical (str src-dir "/"))
+      (throw (ex-info "Code path escapes src/noumenon/" {:file file :canonical canonical})))
+    canonical))
+
 (defmethod apply-modification! :code [{:keys [modification]}]
   (let [{:keys [file content]} modification
-        f (io/file file)
-        orig (when (.exists f) (slurp f))]
-    (spit file content)
-    orig))
+        canonical (validate-code-path! file)
+        orig      (when (.exists (io/file canonical)) (slurp canonical))]
+    (spit canonical content)
+    {:original orig :canonical canonical}))
 
-(defmethod revert-modification! :code [{:keys [modification]} original]
-  (if original
-    (spit (:file modification) original)
-    (.delete (io/file (:file modification)))))
+(defmethod revert-modification! :code [{:keys [modification]} {:keys [original canonical]}]
+  (let [path (or canonical (validate-code-path! (:file modification)))]
+    (if original
+      (spit path original)
+      (.delete (io/file path)))))
 
 (defmethod apply-modification! :train [{:keys [modification]}]
   (let [orig (save-raw "model/config.edn")]
