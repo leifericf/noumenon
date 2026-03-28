@@ -3,8 +3,8 @@
 **Date:** 2026-03-28
 **Operator:** Claude Opus 4.6 (automated)
 **LLM Provider:** GLM (Z.ai proxy) for all evaluation and optimizer calls
-**Branch:** `feat/introspect` (22 commits, ~1,600 lines added)
-**Test suite:** 461 tests, 1,545 assertions, 0 failures
+**Branch:** `feat/introspect` (32 commits, ~2,550 lines added across 21 files)
+**Test suite:** 465 tests, 1,550 assertions, 0 failures
 
 ---
 
@@ -608,14 +608,14 @@ Each question creates a fresh `agent/ask` session. The system prompt is re-sent 
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/noumenon/introspect.clj` | 610 | Core loop, gap analysis, proposal validation, artifact I/O, Datomic persistence |
+| `src/noumenon/introspect.clj` | 606 | Core loop, `with-modification` macro, multimethods, gap analysis, Datomic persistence |
 | `src/noumenon/model.clj` | 227 | Neural network: init, forward pass, training, persistence |
 | `src/noumenon/training_data.clj` | 100 | Tokenization, vocabulary, dataset generation from benchmark |
 | `resources/prompts/introspect.edn` | 80 | Meta-prompt template for the optimizer LLM |
 | `resources/schema/introspect.edn` | 167 | Datomic schema for introspect runs and iterations |
 | `resources/model/config.edn` | 17 | Model hyperparameter configuration |
 | `resources/queries/introspect-*.edn` | 63 | 5 named Datalog queries for introspect data |
-| `test/noumenon/introspect_test.clj` | 278 | 33 tests: parsing, validation, Datomic round-trips, gap analysis, security |
+| `test/noumenon/introspect_test.clj` | 332 | 37 tests: parsing, validation, Datomic round-trips, gap analysis, security, code verification, multimethod round-trips |
 | `test/noumenon/model_test.clj` | 138 | 20 tests for model, training, tokenization, round-trips |
 
 ### Modified files
@@ -652,15 +652,17 @@ Each question creates a fresh `agent/ask` session. The system prompt is re-sent 
 | `7b8eac2` | feat | Datomic schema for introspect runs and iterations |
 | `099a4df` | feat | Persist results to internal Datomic meta database |
 | `1571803` | feat | Named Datalog queries for introspect data |
+| `ec803df` | refactor | Clojure metaprogramming: `with-modification` macro, multimethods, in-process eval |
+| `c6a93a9` | test | Code verification and multimethod round-trip tests |
 
 ## Appendix C: Test Suite
 
 | Test File | Tests | Coverage Areas |
 |-----------|-------|----------------|
-| `introspect_test.clj` | 33 | Parsing (valid, fenced, invalid, nil, empty, non-map), validation (all 5 targets, nil fields, path traversal x3, empty examples), gap analysis (empty, with results, all correct, nil reasoning), history (empty DB, Datomic round-trip, tx-data round-trip), meta-prompt (no unfilled placeholders, content passthrough), score conversion |
+| `introspect_test.clj` | 37 | Parsing (valid, fenced, invalid, nil, empty, non-map), validation (all 5 targets, nil fields, path traversal x3, empty examples), gap analysis (empty, with results, all correct, nil reasoning), history (empty DB, Datomic round-trip, tx-data round-trip), meta-prompt (no unfilled placeholders, content passthrough), code syntax verification (valid, invalid, empty), multimethod apply/revert round-trip, score conversion |
 | `model_test.clj` | 20 | Model init, forward pass probabilities, predict top-k, training time budget, tokenization (basic, empty, punctuation-only), vocabulary (special tokens, empty corpus), encoding (UNK mapping), empty dataset (evaluate, train), empty tokens, OOB labels, save/load round-trip, training loss reduction |
 
-Total: 53 new tests, 461 total in suite, 1,545 assertions.
+Total: 57 new tests, 465 total in suite, 1,550 assertions.
 
 ---
 
