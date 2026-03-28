@@ -1,0 +1,13 @@
+{:name "introspect-improvements"
+ :description "Iterations that improved the score, with target and delta"
+ :query [:find ?target ?delta ?goal ?rationale ?date
+         :where
+         [?r :introspect.run/iterations ?i]
+         [?i :introspect.iter/outcome :improved]
+         [?i :introspect.iter/target ?target]
+         [?i :introspect.iter/delta ?delta]
+         [?i :introspect.iter/timestamp ?date]
+         [(get-else $ ?i :introspect.iter/goal "") ?goal]
+         [(get-else $ ?i :introspect.iter/rationale "") ?rationale]]
+ :sort-by 4
+ :sort-order :desc}

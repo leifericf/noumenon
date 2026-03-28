@@ -1,0 +1,8 @@
+{:name "introspect-by-target"
+ :description "Introspect iteration outcomes grouped by target type"
+ :query [:find ?target ?outcome (count ?i)
+         :where
+         [?r :introspect.run/iterations ?i]
+         [?i :introspect.iter/target ?target]
+         [?i :introspect.iter/outcome ?outcome]]
+ :sort-by 0}

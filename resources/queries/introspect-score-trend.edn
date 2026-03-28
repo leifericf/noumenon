@@ -1,0 +1,10 @@
+{:name "introspect-score-trend"
+ :description "Introspect score progression over time"
+ :query [:find ?date ?baseline ?final ?improvements ?repo
+         :where
+         [?r :introspect.run/started-at ?date]
+         [?r :introspect.run/repo-path ?repo]
+         [?r :introspect.run/baseline-mean ?baseline]
+         [?r :introspect.run/final-mean ?final]
+         [?r :introspect.run/improvement-count ?improvements]]
+ :sort-by 0}

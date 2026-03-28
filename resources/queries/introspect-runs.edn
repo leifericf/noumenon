@@ -1,0 +1,13 @@
+{:name "introspect-runs"
+ :description "List introspect runs with scores and improvement counts, newest first"
+ :query [:find ?id ?repo ?baseline ?final ?improvements ?iterations ?date
+         :where
+         [?r :introspect.run/id ?id]
+         [?r :introspect.run/repo-path ?repo]
+         [?r :introspect.run/started-at ?date]
+         [?r :introspect.run/iteration-count ?iterations]
+         [?r :introspect.run/improvement-count ?improvements]
+         [(get-else $ ?r :introspect.run/baseline-mean -1.0) ?baseline]
+         [(get-else $ ?r :introspect.run/final-mean -1.0) ?final]]
+ :sort-by 6
+ :sort-order :desc}

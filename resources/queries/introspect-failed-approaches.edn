@@ -1,0 +1,14 @@
+{:name "introspect-failed-approaches"
+ :description "Reverted and failed introspect iterations — approaches that didn't work"
+ :query [:find ?target ?outcome ?delta ?rationale ?date
+         :where
+         [?r :introspect.run/iterations ?i]
+         [?i :introspect.iter/outcome ?outcome]
+         (not [?i :introspect.iter/outcome :improved])
+         (not [?i :introspect.iter/outcome :skipped])
+         [?i :introspect.iter/timestamp ?date]
+         [(get-else $ ?i :introspect.iter/target :unknown) ?target]
+         [(get-else $ ?i :introspect.iter/delta 0.0) ?delta]
+         [(get-else $ ?i :introspect.iter/rationale "") ?rationale]]
+ :sort-by 4
+ :sort-order :desc}
