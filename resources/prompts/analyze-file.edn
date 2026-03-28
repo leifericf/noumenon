@@ -148,18 +148,19 @@ Segment field guidelines:
 
 :purpose — one-line plain-English description of what this segment does (under 200 chars).
 
-:safety-concerns — only include if you see a concrete issue in the code:
+:safety-concerns — only include if the segment INTRODUCES a concrete vulnerability:
   :sql-injection — unsanitized input in SQL queries.
   :xss — unescaped user content in HTML output.
   :race-condition — shared mutable state without synchronization.
   :unsafe-cast — unchecked type cast that could fail at runtime.
   :path-traversal — unsanitized file path from user input.
   :command-injection — unsanitized input in shell commands.
-  :buffer-overflow — out-of-bounds memory access (C/C++).
+  :buffer-overflow — out-of-bounds memory access (C/C++ only — memory-safe languages like Java, Clojure, Go, Python, Rust cannot have buffer overflows).
   :deserialization — deserializing untrusted data (pickle, Java serialization).
   :hardcoded-secret — credentials, API keys, or tokens in source.
   :insecure-random — using non-cryptographic random for security purposes.
   :unvalidated-redirect — redirect URL from user input without validation.
+  IMPORTANT: Do NOT flag a segment for a vulnerability it is DEFENDING AGAINST. If the code validates, escapes, or sanitizes input, it is mitigating the concern, not introducing it. Do NOT flag test functions that test security validation — the test is verifying the defense, not introducing the vulnerability. Only flag if the segment itself is the source of the risk. Internal shell commands with hardcoded or validated arguments are not command injection. Test randomness is not insecure-random.
 
 :error-handling — how well errors/exceptions are handled:
   :none — no error handling; exceptions propagate uncaught.
@@ -178,4 +179,4 @@ Segment field guidelines:
   :unknown — cannot determine (e.g., generated code, very short, or ambiguous).
   Omit if :likely-human (the default assumption)."
 
- :version "0.4.0"}
+ :version "0.5.0"}
