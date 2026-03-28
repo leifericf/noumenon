@@ -238,7 +238,7 @@
   (testing "messages sent to LLM always alternate user/assistant (no consecutive user messages)"
     (let [db         (make-test-db)
           seen-msgs  (atom nil)
-          mock-llm   (fn [messages]
+          mock-llm   (fn [messages _opts]
                        (reset! seen-msgs messages)
                        {:text  "{:tool :answer :args {:text \"done\"}}"
                         :usage {:input-tokens 100 :output-tokens 50}
@@ -255,7 +255,7 @@
 (deftest ask-respects-max-iterations
   (let [db       (make-test-db)
         call-count (atom 0)
-        mock-llm (fn [_messages]
+        mock-llm (fn [_messages _opts]
                    (swap! call-count inc)
                    {:text  "{:tool :query :args {:query [:find ?p :where [?e :file/path ?p]]}}"
                     :usage {:input-tokens 100 :output-tokens 50}
@@ -274,7 +274,7 @@
     (let [db            (make-test-db)
           last-messages (atom nil)
           call-count    (atom 0)
-          mock-llm      (fn [messages]
+          mock-llm      (fn [messages _opts]
                           (reset! last-messages messages)
                           (swap! call-count inc)
                           (if (>= @call-count 3)
@@ -294,7 +294,7 @@
   (testing "budget-exhausted session can be resumed with continue-from"
     (let [db         (make-test-db)
           call-count (atom 0)
-          mock-llm   (fn [_messages]
+          mock-llm   (fn [_messages _opts]
                        (swap! call-count inc)
                        (if (>= @call-count 4)
                          {:text  "{:tool :answer :args {:text \"full answer\"}}"
@@ -328,7 +328,7 @@
                            {:text  "{:tool :answer :args {:text \"The most complex file is src/core.clj (:complex)\"}}"
                             :usage {:input-tokens 300 :output-tokens 60}
                             :model "mock"}])
-          mock-llm  (fn [_messages]
+          mock-llm  (fn [_messages _opts]
                       (let [r (first @responses)]
                         (swap! responses rest)
                         r))
@@ -348,7 +348,7 @@
                            {:text  "{:tool :answer :args {:text \"recovered\"}}"
                             :usage {:input-tokens 150 :output-tokens 40}
                             :model "mock"}])
-          mock-llm  (fn [_messages]
+          mock-llm  (fn [_messages _opts]
                       (let [r (first @responses)]
                         (swap! responses rest)
                         r))
@@ -368,7 +368,7 @@
                             :usage {:input-tokens 150 :output-tokens 40
                                     :cost-usd 0.02 :duration-ms 300}
                             :model "mock"}])
-          mock-llm  (fn [_messages]
+          mock-llm  (fn [_messages _opts]
                       (let [r (first @responses)]
                         (swap! responses rest)
                         r))

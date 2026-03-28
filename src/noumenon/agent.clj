@@ -283,7 +283,7 @@
       :else            messages)))
 
 (defn- next-state
-  [{:keys [db invoke-fn]}
+  [{:keys [db invoke-fn system-prompt]}
    {:keys [messages steps iterations total-usage max-iterations]}]
   (if (>= iterations max-iterations)
     (let [state {:messages messages :steps steps
@@ -297,7 +297,7 @@
               :status     :budget-exhausted
               :session-id session-id}})
     (let [msgs          (maybe-append-nudge messages iterations max-iterations)
-          response      (invoke-fn (vec msgs))
+          response      (invoke-fn (vec msgs) {:system system-prompt})
           usage         (merge-with + total-usage
                                     (select-keys (:usage response)
                                                  [:input-tokens :output-tokens :cost-usd :duration-ms]))
@@ -332,15 +332,15 @@
    Pass :continue-from session-id to resume a budget-exhausted session."
   [db question {:keys [invoke-fn repo-name max-iterations continue-from]
                 :or   {max-iterations default-max-iterations}}]
-  (let [context {:db db :invoke-fn invoke-fn}
-        initial (if-let [prev (when continue-from (load-session! continue-from))]
-                  (assoc prev :max-iterations (+ (:iterations prev) max-iterations))
-                  {:messages [{:role "user" :content (str (build-system-prompt db repo-name)
-                                                          "\n\n" question)}]
-                   :steps []
-                   :iterations 0
-                   :total-usage llm/zero-usage
-                   :max-iterations max-iterations})]
+  (let [sys-prompt (build-system-prompt db repo-name)
+        context    {:db db :invoke-fn invoke-fn :system-prompt sys-prompt}
+        initial    (if-let [prev (when continue-from (load-session! continue-from))]
+                     (assoc prev :max-iterations (+ (:iterations prev) max-iterations))
+                     {:messages [{:role "user" :content question}]
+                      :steps []
+                      :iterations 0
+                      :total-usage llm/zero-usage
+                      :max-iterations max-iterations})]
     (loop [state initial]
       (let [nxt (next-state context state)]
         (if-let [done (:done nxt)]

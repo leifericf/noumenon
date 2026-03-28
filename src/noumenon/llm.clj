@@ -74,16 +74,21 @@
 (defn invoke-api
   "Invoke Anthropic Messages API directly via http-kit.
    `messages` is [{:role \"user\"/\"assistant\" :content string} ...].
+   Optional :system in opts is a string placed in the top-level system field
+   with cache_control for prompt caching.
    Returns {:text string :usage {:input-tokens n :output-tokens m} :model string}.
    Makes up to 3 attempts (2 retries) on transient errors (429, 5xx, connection failures).
    Throws ex-info on persistent HTTP errors."
-  [messages {:keys [model temperature max-tokens base-url auth-token]}]
+  [messages {:keys [model temperature max-tokens base-url auth-token system]}]
   (let [url      (str base-url "/v1/messages")
         req-body (json/write-str
                   (cond-> {:model      model
                            :max_tokens (or max-tokens 4096)
                            :messages   messages}
-                    temperature (assoc :temperature temperature)))
+                    temperature (assoc :temperature temperature)
+                    system      (assoc :system [{:type "text"
+                                                 :text system
+                                                 :cache_control {:type "ephemeral"}}])))
         start-ms (System/currentTimeMillis)]
     (loop [attempt 1]
       (let [{:keys [status body error]}
@@ -123,16 +128,20 @@
                               (:content parsed))
                 usage   (:usage parsed)
                 in      (:input_tokens usage 0)
-                out     (:output_tokens usage 0)]
+                out     (:output_tokens usage 0)
+                cached  (:cache_read_input_tokens usage 0)
+                created (:cache_creation_input_tokens usage 0)]
             (when-not text
               (log! (str "WARNING: API returned HTTP 200 but no text content"
                          " (stop_reason=" (:stop_reason parsed)
                          " content=" (truncate (pr-str (:content parsed)) 200) ")")))
             {:text           text
-             :usage          {:input-tokens  in
-                              :output-tokens out
-                              :cost-usd      (estimate-cost (:model parsed) in out)
-                              :duration-ms   dur-ms}
+             :usage          (cond-> {:input-tokens  in
+                                      :output-tokens out
+                                      :cost-usd      (estimate-cost (:model parsed) in out)
+                                      :duration-ms   dur-ms}
+                               (pos? cached)  (assoc :cache-read-tokens cached)
+                               (pos? created) (assoc :cache-creation-tokens created))
              :model          (:model parsed)
              :resolved-model (:model parsed)}))))))
 
@@ -197,28 +206,34 @@
 (defn flatten-messages
   "Flatten a messages vector into a single prompt string for CLI invocation.
    Prefixes each message with its role, separated by blank lines.
+   When system-prefix is provided, it is prepended as a System: block.
    Truncates oldest messages if the result would exceed max-prompt-chars."
-  [messages]
-  (let [format-msg (fn [{:keys [role content]}]
-                     (str (case role "user" "User" "assistant" "Assistant" (str role)) ":\n" content))
-        formatted  (mapv format-msg messages)
-        full       (str/join "\n\n" formatted)]
-    (if (<= (count full) max-prompt-chars)
-      full
-      ;; Drop oldest messages (keeping first + last few) until under limit
-      (loop [msgs (vec messages)]
-        (if (<= (count msgs) 2)
-          (truncate (str/join "\n\n" (mapv format-msg msgs)) max-prompt-chars)
-          (let [trimmed (into [(first msgs)] (subvec msgs 2))
-                result  (str/join "\n\n" (mapv format-msg trimmed))]
-            (if (<= (count result) max-prompt-chars)
-              result
-              (recur trimmed))))))))
+  ([messages] (flatten-messages messages nil))
+  ([messages system-prefix]
+   (let [format-msg (fn [{:keys [role content]}]
+                      (str (case role "user" "User" "assistant" "Assistant" (str role)) ":\n" content))
+         formatted  (cond-> (mapv format-msg messages)
+                      system-prefix (->> (into [(str "System:\n" system-prefix)])))
+         full       (str/join "\n\n" formatted)]
+     (if (<= (count full) max-prompt-chars)
+       full
+       ;; Drop oldest messages (keeping first + last few) until under limit
+       (loop [msgs (vec messages)]
+         (if (<= (count msgs) 2)
+           (truncate (str/join "\n\n" (cond-> (mapv format-msg msgs)
+                                        system-prefix (->> (into [(str "System:\n" system-prefix)]))))
+                     max-prompt-chars)
+           (let [trimmed (into [(first msgs)] (subvec msgs 2))
+                 result  (str/join "\n\n" (cond-> (mapv format-msg trimmed)
+                                            system-prefix (->> (into [(str "System:\n" system-prefix)]))))]
+             (if (<= (count result) max-prompt-chars)
+               result
+               (recur trimmed)))))))))
 
 (defn invoke-cli
   "Invoke Claude via CLI. Flattens messages to a single prompt string."
   [messages opts]
-  (invoke-claude-cli (flatten-messages messages) opts))
+  (invoke-claude-cli (flatten-messages messages (:system-prefix opts)) opts))
 
 ;; --- Model aliases ---
 
@@ -285,9 +300,9 @@
 
 (defn make-messages-fn
   "Create an invoke function for the given provider.
-   Returns (fn [messages] -> {:text :usage :model}) where messages is
+   Returns (fn [messages & [opts]]) where messages is
    [{:role \"user\"/\"assistant\" :content string} ...].
-   Opts (model, temperature, etc.) are baked in at factory time.
+   Optional opts map supports :system (string) for prompt caching.
    Provider :glm — direct API via Z.ai proxy, reads NOUMENON_ZAI_TOKEN.
    Provider :claude-api — direct API to Anthropic, reads ANTHROPIC_API_KEY.
    Provider :claude-cli — flattens messages to single prompt string."
@@ -298,14 +313,21 @@
         (when-not token
           (throw (ex-info (str env-var " environment variable is not set. Set " env-var " in your environment or in ~/.env.")
                           {:provider kw})))
-        (fn [messages]
-          (invoke-api messages {:model       model
-                                :temperature temperature
-                                :max-tokens  max-tokens
-                                :base-url    base-url
-                                :auth-token  token})))
-      (fn [messages]
-        (invoke-cli messages (when model {:model model}))))))
+        (fn invoke
+          ([messages] (invoke messages nil))
+          ([messages opts]
+           (invoke-api messages (cond-> {:model       model
+                                         :temperature temperature
+                                         :max-tokens  max-tokens
+                                         :base-url    base-url
+                                         :auth-token  token}
+                                  (:system opts) (assoc :system (:system opts)))))))
+      (fn invoke
+        ([messages] (invoke messages nil))
+        ([messages opts]
+         (invoke-cli messages (cond-> (when model {:model model})
+                                (:system opts)
+                                (assoc :system-prefix (:system opts)))))))))
 
 (defn wrap-as-prompt-fn
   "Wrap a messages-based invoke fn into a string-prompt fn.
