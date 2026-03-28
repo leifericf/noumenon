@@ -246,6 +246,10 @@
                  {:flag "--target" :key :target :parse :string
                   :desc "Artifact to optimize: examples, system-prompt, or both (default: examples)"
                   :error-missing :missing-target-value}
+                 {:flag "--eval-runs" :key :eval-runs :parse :pos-int
+                  :desc "Evaluation passes per iteration for median (default: 1)"
+                  :error-invalid :invalid-eval-runs
+                  :error-missing :missing-eval-runs-value}
                  {:flag "--git-commit" :key :git-commit :parse :bool
                   :desc "Git commit after each improvement"}]
                 verbose-flags))

@@ -370,28 +370,54 @@
 (defn- score-kw->num [kw]
   (case kw :correct 1.0 :partial 0.5 :wrong 0.0 0.0))
 
+(defn- evaluate-once!
+  "Run one evaluation pass. Returns {:mean double :results [...]}"
+  [db repo-name invoke-fn-factory questions]
+  (let [results (mapv (fn [q]
+                        (log! (str "  eval: " (name (:id q))))
+                        (let [{:keys [answer]}
+                              (agent/ask db (:question q)
+                                         {:invoke-fn      (invoke-fn-factory)
+                                          :repo-name      repo-name
+                                          :max-iterations 6})
+                              {:keys [score reasoning]}
+                              (bench/deterministic-score q db (or answer ""))]
+                          {:id (:id q) :score score :reasoning reasoning}))
+                      questions)
+        scores  (mapv (comp score-kw->num :score) results)]
+    {:mean    (if (seq scores) (/ (reduce + scores) (count scores)) 0.0)
+     :results results}))
+
+(defn- median [nums]
+  (let [sorted (sort nums)
+        n      (count sorted)]
+    (if (odd? n)
+      (nth sorted (quot n 2))
+      (/ (+ (nth sorted (dec (quot n 2)))
+            (nth sorted (quot n 2)))
+         2.0))))
+
 (defn evaluate-agent!
   "Evaluate agent performance on deterministic benchmark questions.
+   Runs eval-runs times (default 1) and takes the median score to
+   reduce variance from LLM non-determinism.
    Returns {:mean double :results [{:id kw :score kw :reasoning str}...]}."
-  [db repo-name invoke-fn-factory]
+  [db repo-name invoke-fn-factory & {:keys [eval-runs] :or {eval-runs 1}}]
   (let [targets   (bench/pick-benchmark-targets db)
         questions (filterv #(= :deterministic (:scoring %))
                            (bench/resolve-question-params
-                            (bench/load-questions) targets))
-        results   (mapv (fn [q]
-                          (log! (str "  eval: " (name (:id q))))
-                          (let [{:keys [answer]}
-                                (agent/ask db (:question q)
-                                           {:invoke-fn      (invoke-fn-factory)
-                                            :repo-name      repo-name
-                                            :max-iterations 6})
-                                {:keys [score reasoning]}
-                                (bench/deterministic-score q db (or answer ""))]
-                            {:id (:id q) :score score :reasoning reasoning}))
-                        questions)
-        scores    (mapv (comp score-kw->num :score) results)]
-    {:mean    (if (seq scores) (/ (reduce + scores) (count scores)) 0.0)
-     :results results}))
+                            (bench/load-questions) targets))]
+    (if (<= eval-runs 1)
+      (evaluate-once! db repo-name invoke-fn-factory questions)
+      (let [runs   (mapv (fn [i]
+                           (log! (str "  eval pass " (inc i) "/" eval-runs))
+                           (evaluate-once! db repo-name invoke-fn-factory questions))
+                         (range eval-runs))
+            med    (median (mapv :mean runs))
+            ;; Return results from the run closest to the median
+            best   (apply min-key #(Math/abs (- (:mean %) med)) runs)]
+        (log! (str "  median of " eval-runs " runs: " (format "%.3f" med)))
+        best))))
 
 ;; --- Datomic transaction builders (pure) ---
 
@@ -456,7 +482,7 @@
   "Run a single introspect iteration.
    Returns {:outcome kw :record map :eval-result map?}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
-           baseline history git-commit? allowed-targets]}]
+           baseline history git-commit? allowed-targets eval-runs]}]
   (let [meta-prompt (build-meta-prompt
                      {:system-prompt    (load-current-system-prompt)
                       :examples         (load-current-examples)
@@ -527,7 +553,8 @@
 
               ;; Evaluate
               (log! "introspect: evaluating...")
-              (let [eval-result (evaluate-agent! db repo-name invoke-fn-factory)
+              (let [eval-result (evaluate-agent! db repo-name invoke-fn-factory
+                                                 :eval-runs (or eval-runs 1))
                     new-mean    (:mean eval-result)
                     base-mean   (:mean baseline)
                     delta       (- new-mean base-mean)
@@ -559,8 +586,8 @@
    Returns {:run-id str :iterations n :improvements n :final-score double}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
            meta-conn max-iterations max-hours max-cost git-commit?
-           model-config allowed-targets]
-    :or   {max-iterations 10}}]
+           model-config allowed-targets eval-runs]
+    :or   {max-iterations 10 eval-runs 1}}]
   (let [run-id        (generate-run-id)
         start-ms      (System/currentTimeMillis)
         started-at    (java.util.Date.)
@@ -572,7 +599,8 @@
         commit-sha    (git/head-sha repo-path)
         db-basis-t    (try (:t (d/db-stats db)) (catch Exception _ nil))
         _             (log! "introspect: running baseline evaluation...")
-        baseline      (evaluate-agent! db repo-name invoke-fn-factory)
+        baseline      (evaluate-agent! db repo-name invoke-fn-factory
+                                       :eval-runs eval-runs)
         _             (log! (str "introspect: baseline mean="
                                  (format "%.3f" (:mean baseline))))
         budget-done?  (fn [i cost]
@@ -600,7 +628,8 @@
                         :optimizer-invoke-fn optimizer-invoke-fn
                         :baseline baseline :history history
                         :git-commit? git-commit?
-                        :allowed-targets allowed-targets})
+                        :allowed-targets allowed-targets
+                        :eval-runs eval-runs})
                       new-baseline (if (= :improved outcome) eval-result baseline)]
                   (recur (inc i) new-baseline (conj history record)
                          (if (= :improved outcome) (inc improvements) improvements)
