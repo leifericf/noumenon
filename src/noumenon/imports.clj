@@ -145,7 +145,11 @@ for n in ast.walk(tree):
     if isinstance(n,ast.Import):
         imports.extend(a.name for a in n.names)
     elif isinstance(n,ast.ImportFrom):
-        if n.module and n.level==0: imports.append(n.module)
+        if n.level==0:
+            if n.module: imports.append(n.module)
+        else:
+            prefix='.'*n.level+(n.module or '')
+            imports.append(prefix)
 print(json.dumps(imports))")
 
 (defmethod extract-imports :python [_ text]
@@ -156,19 +160,34 @@ print(json.dumps(imports))")
         (json/read-str (str/trim out))))
     (catch Exception _ [])))
 
-(defn- resolve-python-import [import-name all-paths]
-  (let [base     (str/replace import-name "." "/")
-        suffixes [(str base ".py") (str base "/__init__.py")]
-        direct   (first (filter all-paths suffixes))]
-    (or direct
-        ;; Handle src-layout projects (src/pkg/...) and other prefixed layouts
-        (first (for [suffix (map #(str "/" %) suffixes)
-                     p      all-paths
-                     :when  (str/ends-with? p suffix)]
-                 p)))))
+(defn- resolve-python-import [import-name source-path all-paths]
+  (if (str/starts-with? import-name ".")
+    ;; Relative import: resolve relative to source file's package directory
+    (let [dots   (count (take-while #(= \. %) import-name))
+          module (subs import-name dots)
+          parts  (str/split source-path #"/")
+          ;; Go up `dots` levels from the source file's directory
+          base   (str/join "/" (drop-last dots parts))
+          rel    (when (seq module)
+                   (str/replace module "." "/"))
+          path   (if (seq rel)
+                   (str base "/" rel)
+                   base)
+          suffixes [(str path ".py") (str path "/__init__.py")]]
+      (first (filter all-paths suffixes)))
+    ;; Absolute import
+    (let [base     (str/replace import-name "." "/")
+          suffixes [(str base ".py") (str base "/__init__.py")]
+          direct   (first (filter all-paths suffixes))]
+      (or direct
+          ;; Handle src-layout projects (src/pkg/...) and other prefixed layouts
+          (first (for [suffix (map #(str "/" %) suffixes)
+                       p      all-paths
+                       :when  (str/ends-with? p suffix)]
+                   p))))))
 
-(defmethod resolve-import :python [_ import-name _source-path all-paths]
-  (resolve-python-import import-name all-paths))
+(defmethod resolve-import :python [_ import-name source-path all-paths]
+  (resolve-python-import import-name source-path all-paths))
 
 ;; ---------------------------------------------------------------------------
 ;; JavaScript / TypeScript — node built-in parser via subprocess

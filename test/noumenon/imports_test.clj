@@ -78,7 +78,13 @@
           result (imports/extract-imports :python src)]
       (when (seq result)  ; skip if python3 not available
         (is (some #{"os"} result))
-        (is (some #{"myapp.db"} result))))))
+        (is (some #{"myapp.db"} result)))))
+  (testing "extracts relative imports"
+    (let [src "from .ctx import AppContext\nfrom .globals import request\nfrom . import cli"
+          result (imports/extract-imports :python src)]
+      (when (seq result)
+        (is (some #{".ctx"} result) "single-dot relative with module")
+        (is (some #{"."} result) "bare single-dot relative")))))
 
 ;; --- Python resolution ---
 
@@ -88,7 +94,18 @@
       (is (= "myapp/db.py"
              (imports/resolve-import :python "myapp.db" "main.py" paths))))
     (testing "returns nil for external module"
-      (is (nil? (imports/resolve-import :python "os" "main.py" paths))))))
+      (is (nil? (imports/resolve-import :python "os" "main.py" paths)))))
+  (let [paths #{"src/flask/app.py" "src/flask/ctx.py" "src/flask/globals.py"
+                "src/flask/__init__.py" "src/flask/helpers.py"}]
+    (testing "resolves relative import .ctx from within package"
+      (is (= "src/flask/ctx.py"
+             (imports/resolve-import :python ".ctx" "src/flask/app.py" paths))))
+    (testing "resolves relative import .globals"
+      (is (= "src/flask/globals.py"
+             (imports/resolve-import :python ".globals" "src/flask/app.py" paths))))
+    (testing "resolves bare dot to package __init__"
+      (is (= "src/flask/__init__.py"
+             (imports/resolve-import :python "." "src/flask/app.py" paths))))))
 
 ;; --- JS/TS extraction ---
 
