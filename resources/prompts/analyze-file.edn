@@ -175,11 +175,11 @@ Segment field guidelines:
 :pure — true if the segment is side-effect-free: no I/O (file, network, database), no mutation of external state, no global state access. Pure functions depend only on their arguments and return a value. Omit if not pure or if unsure.
   NOT pure: test functions with assertions (assertions throw on failure = side effect), database queries (I/O), logging, printing, atom/ref mutations, HTTP calls, file reads. When in doubt, omit — false negatives are better than false positives.
 
-:ai-likelihood — assess whether this segment was likely written by an AI coding assistant:
+:ai-likelihood — assess whether this segment was likely written by an AI coding assistant. ALWAYS include this field:
   :likely-ai — strong AI signals: overly uniform formatting, boilerplate comments (\\\"Here is a function that...\\\"), excessive documentation relative to complexity, lack of idiomatic shortcuts, templated structure.
   :possibly-ai — some AI signals but inconclusive.
   :likely-human — idiomatic, terse, uses language-specific conventions, has organic variable naming and structure.
   :unknown — cannot determine (e.g., generated code, very short, or ambiguous).
-  Omit if :likely-human (the default assumption)."
+  Do not omit — always provide your best assessment."
 
  :version "0.5.0"}
