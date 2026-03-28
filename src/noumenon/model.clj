@@ -116,14 +116,15 @@
 
 (defn suggest-queries
   "Given a question string, return the top-k most relevant named query suggestions.
-   Uses the vocab stored with the model for consistent tokenization.
+   Uses the vocab and label-index stored with the model for consistent tokenization
+   and index mapping. Falls back to live query names only when label-index is absent.
    Returns a seq of {:query-name str :probability double}, or nil if no model is available."
   [model question k]
   (when (and model (:vocab model))
-    (let [tokens  (->> (str/lower-case question) (re-seq #"[a-z0-9_\-]+") vec)
-          encoded (mapv #(get (:vocab model) % 1) tokens) ;; 1 = <UNK>
-          preds   (predict model encoded k)
-          idx->name (index->query-name)]
+    (let [tokens    (->> (str/lower-case question) (re-seq #"[a-z0-9_\-]+") vec)
+          encoded   (mapv #(get (:vocab model) % 1) tokens)
+          preds     (predict model encoded k)
+          idx->name (or (:label-index model) (index->query-name))]
       (->> preds
            (keep (fn [{:keys [index probability]}]
                    (when-let [qname (idx->name index)]
@@ -263,12 +264,13 @@
   "Save model weights and vocab to EDN file."
   [model path]
   (.mkdirs (.getParentFile (io/file path)))
-  (spit path (pr-str {:w1     (vec (:w1 model))
-                      :b1     (vec (:b1 model))
-                      :w2     (vec (:w2 model))
-                      :b2     (vec (:b2 model))
-                      :config (:config model)
-                      :vocab  (:vocab model)}))
+  (spit path (pr-str {:w1          (vec (:w1 model))
+                      :b1          (vec (:b1 model))
+                      :w2          (vec (:w2 model))
+                      :b2          (vec (:b2 model))
+                      :config      (:config model)
+                      :vocab       (:vocab model)
+                      :label-index (:label-index model)}))
   (log! (str "model: saved to " path)))
 
 (defn load-model

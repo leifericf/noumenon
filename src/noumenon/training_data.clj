@@ -69,7 +69,7 @@
 (defn build-dataset
   "Build a complete training dataset.
    Returns {:examples [{:text str :tokens [int] :label int}...]
-            :vocab {str int} :label-index {str int}}."
+            :vocab {str int} :label-index {int str}}."
   [db {:keys [vocab-size] :or {vocab-size 2048}}]
   (let [examples   (benchmark-examples db)
         token-seqs (mapv (comp tokenize :text) examples)
@@ -81,7 +81,7 @@
                           :label  (get labels (:query-name ex) 0)})
                        examples token-seqs)
      :vocab      vocab
-     :label-index labels
+     :label-index (into {} (map (fn [[k v]] [v k]) labels))
      :n-classes  (count labels)}))
 
 (defn save-dataset!

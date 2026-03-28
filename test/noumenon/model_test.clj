@@ -98,6 +98,17 @@
       (finally
         (.delete (java.io.File. path))))))
 
+(deftest save-load-preserves-label-index
+  (let [path  (str "/tmp/model-label-idx-" (System/currentTimeMillis) ".edn")
+        m1    (assoc (model/init-model test-config)
+                     :label-index {0 "query-a" 1 "query-b" 2 "query-c" 3 "query-d"})
+        _     (model/save-model! m1 path)
+        m2    (model/load-model path)]
+    (try
+      (is (= (:label-index m1) (:label-index m2)))
+      (finally
+        (.delete (java.io.File. path))))))
+
 (deftest load-model-missing
   (is (nil? (model/load-model "/tmp/nonexistent-model.edn"))))
 
