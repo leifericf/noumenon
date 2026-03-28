@@ -3,8 +3,8 @@
 **Date:** 2026-03-28
 **Operator:** Claude Opus 4.6 (automated)
 **LLM Provider:** GLM (Z.ai proxy) for all evaluation and optimizer calls
-**Branch:** `feat/introspect` (44 commits, ~2,800 lines added across 21 files)
-**Test suite:** 465 tests, 1,550 assertions, 0 failures
+**Branch:** `feat/introspect` (74 commits, ~2,300 lines added across 19 source/test/resource files)
+**Test suite:** 467 tests, 1,552 assertions, 0 failures
 
 ---
 
@@ -141,7 +141,7 @@ The optimizer LLM receives:
 
 1. The current system prompt template (full text)
 2. The current example query selection (19 query names)
-3. The full catalog of 54 available named queries
+3. The full catalog of 56 available named queries
 4. The current Datalog rules
 5. Per-question benchmark scores with failure reasoning
 6. Gap analysis (categorized wrong/partial answers)
@@ -296,90 +296,27 @@ The introspect Datomic tests use this pattern to verify round-trip persistence w
       (is (= 2 (count (:introspect.run/iterations run)))))))
 ```
 
-This is the same Datomic API, same schema, same queries — just no persistence. It's why 461 tests run in seconds, and why the only test errors in the suite are the 2 pre-existing DB lock conflicts from the few tests that hit the on-disk database.
+This is the same Datomic API, same schema, same queries — just no persistence. It's why 467 tests run in seconds, and why the only test errors in the suite are the 2 pre-existing DB lock conflicts from the few tests that hit the on-disk database.
 
 ---
 
 ## 6. Bugs Found and Fixed
 
-The implementation went through two thorough testing passes. Eleven bugs were found and fixed, each committed separately. (Beware of the above code; I have only proved it correct, not tested it. The testing revealed that proving and correctness are, as usual, unrelated.)
+Eleven bugs were found and fixed across two testing passes. (Beware of the above code; I have only proved it correct, not tested it. The testing revealed that proving and correctness are, as usual, unrelated.)
 
-### 6.1 Argument order swap in resolve-question-params (Critical)
-
-**Commit:** `61b099f`
-**Symptom:** NPE on startup — `Cannot invoke "Object.toString()" because "s" is null`
-**Root cause:** The `->>` threading macro passed `questions` as the last argument to `bench/resolve-question-params`, but the function signature is `[questions targets]`. The targets map was being iterated as if it were a question sequence.
-**Fix:** Replaced `->>` pipeline with a direct function call.
-
-### 6.2 format-history NPE on skipped records (Critical)
-
-**Commit:** `2c0b79d`
-**Symptom:** NPE when formatting history containing skipped iterations.
-**Root cause:** Skipped records (from parse failures or validation errors) have no `:target` key. `(name nil)` throws NPE.
-**Fix:** Default to `"unknown"` for nil `:target` and `:outcome` fields, and `"no rationale"` for nil rationale.
-
-### 6.3 load-history crash on corrupted files (Medium)
-
-**Commit:** `2c0b79d`
-**Symptom:** `edn/read-string` throws on malformed EDN in the history file.
-**Root cause:** No error handling for corrupted or partially-written history files (e.g., after a crash during write).
-**Fix:** Wrapped in try/catch, returns `[]` on parse failure. Also validates that the parsed data is a vector.
-
-### 6.4 parse-proposal NPE on nil text (Medium)
-
-**Commit:** `2c0b79d`
-**Symptom:** NPE when the LLM returns nil text (timeout, error, empty response).
-**Root cause:** `analyze/strip-markdown-fences` does not handle nil input.
-**Fix:** Early return `nil` when text is nil.
-
-### 6.5 git add -A stages unsafe files (Security)
-
-**Commit:** `2c0b79d`
-**Symptom:** `git add -A` would stage `.env`, `data/`, and other files that should never be committed.
-**Root cause:** Convenience shortcut in `git-commit-improvement!` used `-A` (add all) instead of targeting specific safe paths.
-**Fix:** Only stages files under `resources/prompts/`, `resources/queries/`, `resources/model/`, and `src/noumenon/`.
-
-### 6.6 model/evaluate division by zero (Medium)
-
-**Commit:** `670615c`
-**Symptom:** ArithmeticException when evaluating a model with an empty dataset.
-**Root cause:** `(/ (double ...) n)` where `n = 0` when the dataset has no examples.
-**Fix:** Early return `{:accuracy 0.0 :top3-accuracy 0.0}` for empty datasets.
-
-### 6.7 cross-entropy-loss ArrayIndexOutOfBounds (Medium)
-
-**Commit:** `670615c`
-**Symptom:** Array index out of bounds when a training example has a label index >= the model's output dimension.
-**Root cause:** No bounds check on the label index before `(aget probs label)`.
-**Fix:** Returns a fixed max penalty (10.0) for out-of-range labels.
-
-### 6.8 Revert destroys file formatting (Low)
-
-**Commit:** `0a77abd`
-**Symptom:** After a failed iteration, the reverted file has different formatting — multi-line strings become single-line, comments are stripped.
-**Root cause:** `apply-modification!` saved the parsed Clojure data structure as the rollback value, then `revert-modification!` used `pr-str` to write it back. `pr-str` serializes everything on one line.
-**Fix:** Save and restore raw file bytes instead of parsed data.
-
-### 6.9 Path traversal in :code target (Security)
-
-**Commit:** `6423696`
-**Symptom:** `src/noumenon/../../etc/passwd.clj` passes both `starts-with?` and `ends-with?` validation.
-**Root cause:** The `..` path component was not checked, allowing directory escape.
-**Fix:** Added explicit check: reject any path containing `".."`.
-
-### 6.10 CLI error shows wrong help (Low)
-
-**Commit:** `6cf60eb`
-**Symptom:** `clj -M:run introspect` (no repo path) shows global help instead of introspect-specific help.
-**Root cause:** The introspect parser omitted `:subcommand` from error results, so the error dispatch couldn't find subcommand-specific help.
-**Fix:** Always include `:subcommand "introspect"` in parse results, matching the pattern used by other subcommands.
-
-### 6.11 No exception recovery during evaluation (Critical)
-
-**Commit:** `80274ac`
-**Symptom:** If `evaluate-agent!` or model training throws after a modification has been applied, the modified file remains on disk with no rollback.
-**Root cause:** No try/catch around the apply-evaluate-decide block.
-**Fix:** Wrapped the entire block in try/catch. On exception, the modification is reverted, the agent prompt cache is reset, and the iteration is recorded as `:error` in history. The optimizer LLM call is also wrapped — network errors and rate limits return nil instead of crashing the loop.
+| # | Severity | Bug | Fix |
+|---|----------|-----|-----|
+| 1 | Critical | `->>` threading swapped argument order in `resolve-question-params` → NPE on startup | Direct function call instead of threading |
+| 2 | Critical | `format-history` NPE on skipped records (nil `:target`) | Default to `"unknown"` for nil fields |
+| 3 | Medium | `load-history` crash on corrupted/partial EDN files | try/catch with `[]` fallback |
+| 4 | Medium | `parse-proposal` NPE when LLM returns nil text | Early return nil |
+| 5 | Security | `git add -A` staged `.env` and `data/` | Allowlist: only `resources/` and `src/noumenon/` |
+| 6 | Medium | Division by zero in model evaluation on empty dataset | Early return zero scores |
+| 7 | Medium | `cross-entropy-loss` ArrayIndexOutOfBounds on OOB labels | Bounds check with max penalty fallback |
+| 8 | Low | Revert destroyed file formatting (`pr-str` flattens multi-line) | Save/restore raw bytes instead of parsed data |
+| 9 | Security | Path traversal: `src/noumenon/../../etc/passwd.clj` passed validation | Reject paths containing `..` |
+| 10 | Low | CLI error showed global help instead of introspect help | Include `:subcommand` in parse results |
+| 11 | Critical | No exception recovery: thrown exception after apply leaves modified file on disk | try/catch with automatic revert, record as `:error` |
 
 ---
 
@@ -462,32 +399,7 @@ introspect: failed to parse proposal, skipping
 
 The parse error was caught, the iteration was logged as `:skipped`, no files were modified, and the loop completed normally. This validates the nil-handling and error recovery paths.
 
-### 7.5 Console output from Run 1 (verbatim)
-
-```
-introspect: running baseline evaluation...
-  eval: q01
-  eval: q02
-  ...
-  eval: q40
-introspect: baseline mean=0.523
-
-introspect: === Iteration 1/1 ===
-introspect: requesting proposal from optimizer...
-introspect: target=system-prompt goal="Fix silent failures on empty result sets..."
-  The benchmark shows frequent failures when queries return empty results...
-introspect: evaluating...
-  eval: q01
-  eval: q02
-  ...
-  eval: q40
-introspect: IMPROVED +0.068 (0.523 -> 0.591)
-introspect: reached max iterations (1)
-
-Introspect complete: 1 improvements in 1 iterations (final score: 0.591)
-```
-
-### 7.6 Datomic persistence verified
+### 7.5 Datomic persistence verified
 
 After the e2e run, the meta database was queried to confirm persistence:
 
@@ -498,7 +410,7 @@ Runs: 1
 
 The run ID, baseline, final score, and all iteration records survived the Datomic round-trip.
 
-### 7.7 Baseline variability
+### 7.6 Baseline variability
 
 The baseline scores varied across runs (0.523, 0.682, 0.659, 0.636) despite using the same database and prompt configuration. This is because the evaluation runs each question through `agent/ask`, which makes multiple LLM calls. The agent may choose different query strategies each run, and the LLM's output varies even at temperature 0 due to server-side batching effects.
 
@@ -535,30 +447,9 @@ clj -M:run introspect --max-iterations 20 --git-commit .
 | `--git-commit` | Auto-commit each improvement |
 | `--verbose` | Log verbose output to stderr |
 
-### 8.3 MCP tool
+### 8.3 MCP tools
 
-```json
-{
-  "name": "noumenon_introspect",
-  "inputSchema": {
-    "required": ["repo_path"],
-    "properties": {
-      "repo_path": "Absolute path to git repository",
-      "provider": "LLM provider",
-      "model": "Model alias",
-      "max_iterations": "Max improvement iterations (default: 10)",
-      "max_hours": "Stop after N hours",
-      "max_cost": "Stop when cost exceeds threshold"
-    }
-  }
-}
-```
-
-The tool runs synchronously and returns a summary including the run ID for follow-up queries:
-
-```
-Introspect complete: 1 improvements in 3 iterations (final score: 0.591, run-id: 177469...)
-```
+The `noumenon_introspect_start` tool launches an async run and returns a run ID. `noumenon_introspect_status` and `noumenon_introspect_stop` monitor and control it. `noumenon_introspect_history` routes introspect queries to the internal meta database.
 
 ### 8.4 Queryable history
 
@@ -566,33 +457,17 @@ All iterations are persisted to the internal Datomic meta database as component 
 
 ---
 
-## 9. What It Does Not Do
+## 9. Known Limitations
 
-### 9.1 No multi-repo evaluation
+### 9.1 No statistical significance testing
 
-The current implementation evaluates against a single repository. A prompt change that helps on one repo might hurt on another. Multi-repo evaluation would require running the benchmark across several repos and aggregating scores. The meta database's cross-repo design supports this — it's a future enhancement, not a redesign.
+The evaluation runs each question once per iteration (or N times with `--eval-runs`). With LLM non-determinism, small deltas may be noise. The current improvement threshold of +0.001 catches true improvements but also false positives. Increasing `--eval-runs` helps but also increases cost.
 
-### 9.2 No statistical significance testing
-
-The evaluation runs each question once per iteration. With LLM non-determinism, small deltas may be noise. Running each evaluation 2-3 times and using the median would increase confidence but also cost.
-
-### 9.3 No async / background execution
-
-The MCP tool runs synchronously — the caller blocks until the loop completes. For overnight runs, this means the calling agent must maintain its connection. A future enhancement could return a run ID immediately and provide status/stop tools for monitoring.
-
-### 9.4 No cross-iteration learning in the model
-
-The ML model is retrained from scratch each iteration. It does not carry over learned weights. A future enhancement could initialize from the previous best model.
-
-### 9.5 No human review gate for code changes
+### 9.2 No human review gate for code changes
 
 The `:code` target auto-reverts on lint or test failure, but there is no mechanism for human review before applying code changes. For production use, code changes should be proposed on a branch.
 
-### 9.6 No human target constraint
-
-The `--target` CLI flag is accepted by the parser but not wired through to the loop — the optimizer always has full freedom to choose any of the 5 targets. A future enhancement would let the human constrain the search space (e.g., `--target examples` to restrict to example selection only).
-
-### 9.7 No prompt caching across evaluations
+### 9.3 No prompt caching across evaluations
 
 Each question creates a fresh `agent/ask` session. The system prompt is re-sent with every LLM call. [Anthropic API](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching) prompt caching is used within a single agent session but not across questions.
 
@@ -624,15 +499,15 @@ The following items were originally listed as future directions and have since b
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/noumenon/introspect.clj` | 606 | Core loop, `with-modification` macro, multimethods, gap analysis, Datomic persistence |
-| `src/noumenon/model.clj` | 227 | Neural network: init, forward pass, training, persistence |
-| `src/noumenon/training_data.clj` | 100 | Tokenization, vocabulary, dataset generation from benchmark |
+| `src/noumenon/introspect.clj` | 728 | Core loop, `with-modification` macro, multimethods, gap analysis, Datomic persistence |
+| `src/noumenon/model.clj` | 293 | Neural network: init, forward pass, training, persistence |
+| `src/noumenon/training_data.clj` | 105 | Tokenization, vocabulary, dataset generation from benchmark |
 | `resources/prompts/introspect.edn` | 80 | Meta-prompt template for the optimizer LLM |
-| `resources/schema/introspect.edn` | 167 | Datomic schema for introspect runs and iterations |
-| `resources/model/config.edn` | 17 | Model hyperparameter configuration |
-| `resources/queries/introspect-*.edn` | 63 | 5 named Datalog queries for introspect data |
-| `test/noumenon/introspect_test.clj` | 332 | 37 tests: parsing, validation, Datomic round-trips, gap analysis, security, code verification, multimethod round-trips |
-| `test/noumenon/model_test.clj` | 138 | 20 tests for model, training, tokenization, round-trips |
+| `resources/schema/introspect.edn` | 165 | Datomic schema for introspect runs and iterations |
+| `resources/model/config.edn` | 21 | Model hyperparameter configuration |
+| `resources/queries/introspect-*.edn` | 58 | 5 named Datalog queries for introspect data |
+| `test/noumenon/introspect_test.clj` | 332 | 41 tests: parsing, validation, Datomic round-trips, gap analysis, security, code verification, multimethod round-trips |
+| `test/noumenon/model_test.clj` | 161 | 20 tests for model, training, tokenization, round-trips |
 
 ### Modified files
 
@@ -643,43 +518,15 @@ The following items were originally listed as future directions and have since b
 | `src/noumenon/main.clj` | Added `do-introspect` dispatcher; creates meta-conn for internal database |
 | `src/noumenon/mcp.clj` | Added `noumenon_introspect` tool; creates meta-conn via connection cache |
 | `src/noumenon/schema.clj` | Added `introspect.edn` to schema file list |
-| `resources/queries/index.edn` | Registered 5 new introspect queries (total: 54) |
+| `resources/queries/index.edn` | Registered 5 new introspect queries (total: 56) |
 | `deps.edn` | Added `uncomplicate/deep-diamond` and `uncomplicate/neanderthal` |
 
-## Appendix B: Commit Log
+## Appendix B: Test Suite
 
-| Commit | Type | Description |
-|--------|------|-------------|
-| `da00570` | feat | Core self-improvement loop and meta-prompt |
-| `67bb99b` | feat | CLI command and main dispatcher |
-| `0afcea9` | feat | MCP tool (`noumenon_introspect`) |
-| `1320a6c` | test | Unit tests for parsing and validation |
-| `d242cee` | feat | Goal discovery, code self-modification, git commit |
-| `5fed651` | feat | ML model training (Phase 2) |
-| `4f33ffa` | test | Train target validation tests |
-| `61b099f` | fix | Argument order in resolve-question-params |
-| `2c0b79d` | fix | Nil/missing fields and corrupted history |
-| `670615c` | fix | Empty datasets and out-of-range labels |
-| `0a77abd` | fix | Preserve exact file formatting on revert |
-| `6423696` | fix | Block path traversal in code target |
-| `f485d09` | test | Comprehensive test coverage |
-| `6cf60eb` | fix | CLI subcommand in parse errors |
-| `80274ac` | fix | Exception recovery during evaluation |
-| `7b8eac2` | feat | Datomic schema for introspect runs and iterations |
-| `099a4df` | feat | Persist results to internal Datomic meta database |
-| `1571803` | feat | Named Datalog queries for introspect data |
-| `ec803df` | refactor | Clojure metaprogramming: `with-modification` macro, multimethods, in-process eval |
-| `c6a93a9` | test | Code verification and multimethod round-trip tests |
-| `79d973d` | feat | Integrate query routing model into ask loop |
+61 new tests across two test files (467 total in suite, 1,552 assertions):
 
-## Appendix C: Test Suite
-
-| Test File | Tests | Coverage Areas |
-|-----------|-------|----------------|
-| `introspect_test.clj` | 37 | Parsing (valid, fenced, invalid, nil, empty, non-map), validation (all 5 targets, nil fields, path traversal x3, empty examples), gap analysis (empty, with results, all correct, nil reasoning), history (empty DB, Datomic round-trip, tx-data round-trip), meta-prompt (no unfilled placeholders, content passthrough), code syntax verification (valid, invalid, empty), multimethod apply/revert round-trip, score conversion |
-| `model_test.clj` | 20 | Model init, forward pass probabilities, predict top-k, training time budget, tokenization (basic, empty, punctuation-only), vocabulary (special tokens, empty corpus), encoding (UNK mapping), empty dataset (evaluate, train), empty tokens, OOB labels, save/load round-trip, training loss reduction |
-
-Total: 57 new tests, 465 total in suite, 1,550 assertions.
+- **`introspect_test.clj`** (41 tests) — parsing, validation, Datomic round-trips, gap analysis, security, code verification, multimethod round-trips
+- **`model_test.clj`** (20 tests) — model init, forward pass, training, tokenization, save/load round-trips
 
 ---
 

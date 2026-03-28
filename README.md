@@ -36,14 +36,14 @@ clj -M:run --help
 Download the latest JAR from [GitHub Releases](https://github.com/leifericf/noumenon/releases):
 
 ```bash
-java -jar noumenon-0.1.0.jar --help
+java -jar noumenon-0.2.0.jar --help
 ```
 
 Build from source if needed:
 
 ```bash
 clj -T:build uber
-java -jar target/noumenon-0.1.0.jar --version
+java -jar target/noumenon-0.2.0.jar --version
 ```
 
 ### Option 3: Use as a Clojure dependency
@@ -51,7 +51,7 @@ java -jar target/noumenon-0.1.0.jar --version
 ```clojure
 {:aliases
  {:noumenon
-  {:extra-deps {io.github.leifericf/noumenon {:git/tag "v0.1.0" :git/sha "284ee79"}}
+  {:extra-deps {io.github.leifericf/noumenon {:git/tag "v0.2.0" :git/sha "TBD"}}
    :main-opts ["-m" "noumenon.main"]}}}
 ```
 
@@ -130,9 +130,11 @@ flowchart LR
   F --> G
 
   C --> H[Benchmark\nEvaluation workflows]
+  H --> I[Introspect\nAutonomous self-improvement]
+  I -.->|optimizes| E
 ```
 
-`enrich` is optional but recommended for deterministic dependency and test-impact analysis. `update` replaces the manual `import` + `enrich` workflow.
+`enrich` is optional but recommended for deterministic dependency and test-impact analysis. `update` replaces the manual `import` + `enrich` workflow. `introspect` uses benchmark results to autonomously improve the ask agent's prompts, examples, rules, and code.
 
 ## Command Reference
 
@@ -141,7 +143,7 @@ clj -M:run <command> [options]
 clj -M:run <command> --help
 ```
 
-The CLI and [MCP](https://modelcontextprotocol.io) server expose the same capabilities.
+The CLI and [MCP](https://modelcontextprotocol.io) server expose the same capabilities. Use `--help` on any subcommand for details.
 
 | Command | CLI | MCP tool | Description |
 |---|---|---|---|
@@ -159,12 +161,15 @@ The CLI and [MCP](https://modelcontextprotocol.io) server expose the same capabi
 | Benchmark | `benchmark <path>` | `noumenon_benchmark_run` | Evaluate knowledge graph efficacy |
 | Benchmark results | -- | `noumenon_benchmark_results` | Get benchmark results (latest or by ID) |
 | Benchmark compare | -- | `noumenon_benchmark_compare` | Compare two benchmark runs by score differences |
+| Introspect | `introspect <path>` | `noumenon_introspect_start` | Autonomous self-improvement loop |
+| Introspect status | -- | `noumenon_introspect_status` | Check running introspect session |
+| Introspect history | -- | `noumenon_introspect_history` | Query introspect runs and iterations |
 | Watch | `watch <path>` | -- | Auto-sync on new commits (CLI-only) |
 | Serve | `serve` | -- | Start MCP server (CLI-only) |
 
 ## Named Queries
 
-48 named Datalog queries live in `resources/queries/` (EDN), covering hotspots, ownership, dependencies, complexity, churn, impact analysis, issue tracking, LLM cost tracking, and benchmarks. Run `clj -M:run query list` to see them all.
+56 named Datalog queries live in `resources/queries/` (EDN), covering hotspots, ownership, dependencies, complexity, churn, impact analysis, issue tracking, LLM cost tracking, benchmarks, and introspect history. Run `clj -M:run query list` to see them all.
 
 ## Data Model
 
@@ -253,7 +258,7 @@ Run Noumenon as an [MCP](https://modelcontextprotocol.io) server so agents can c
 
 ```bash
 clj -M:run serve
-# or java -jar noumenon-0.1.0.jar serve
+# or java -jar noumenon-0.2.0.jar serve
 ```
 
 ### [Claude Desktop](https://claude.ai/download) config
@@ -265,7 +270,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "noumenon": {
       "command": "java",
-      "args": ["-jar", "/path/to/noumenon-0.1.0.jar", "serve"]
+      "args": ["-jar", "/path/to/noumenon-0.2.0.jar", "serve"]
     }
   }
 }
