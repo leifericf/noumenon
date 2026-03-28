@@ -1,8 +1,11 @@
 {:name "orphan-files"
- :description "Source files that neither import nor are imported by any other file"
+ :description "Source code files that neither import nor are imported by any other file — excludes config, data, CI, and doc files"
  :query [:find ?path
          :where
          [?file :file/path ?path]
          [?file :file/lang _]
          (not [?file :file/imports _])
-         (not [_ :file/imports ?file])]}
+         (not [_ :file/imports ?file])
+         ;; Exclude non-source directories and data file extensions
+         (not [(re-matches #"resources/.*|\.github/.*|docs/.*|dev/.*" ?path)])
+         (not [(re-matches #".*\.(edn|json|ya?ml|toml|xml|html|css|md|txt)" ?path)])]}
