@@ -12,7 +12,7 @@
 
 ### 1.1 Manual optimization is slow and ad hoc
 
-Noumenon's ask agent answers questions about codebases by iteratively querying a Datomic knowledge graph via Datalog. The quality of its answers depends on several artifacts: the system prompt (which instructs the agent's behavior), the example query selection (which teaches it Datalog patterns), and the Datalog rules (which provide reusable query building blocks). Today, improving these artifacts is a manual process — run the benchmark, examine failures, guess what to change, change it, re-benchmark, evaluate. This is slow, doesn't scale, and doesn't accumulate learnings across sessions.
+Noumenon's ask agent answers questions about codebases by iteratively querying a [Datomic](https://www.datomic.com) knowledge graph via [Datalog](https://en.wikipedia.org/wiki/Datalog). The quality of its answers depends on several artifacts: the system prompt (which instructs the agent's behavior), the example query selection (which teaches it Datalog patterns), and the Datalog rules (which provide reusable query building blocks). Today, improving these artifacts is a manual process — run the benchmark, examine failures, guess what to change, change it, re-benchmark, evaluate. This is slow, doesn't scale, and doesn't accumulate learnings across sessions.
 
 ### 1.2 The autoresearch insight
 
@@ -27,7 +27,7 @@ This pattern maps directly onto what Noumenon already has:
 - **Editable artifacts** — the agent system prompt, example query selection, Datalog rules, and source code
 - **A deterministic evaluation function** — the benchmark suite scores the ask agent's answers against ground truth
 - **An LLM-powered optimizer** — the same LLM that powers the ask agent can analyze benchmark gaps and propose improvements
-- **MCP exposure** — an external agent can trigger and monitor the loop
+- **[MCP](https://modelcontextprotocol.io) exposure** — an external agent can trigger and monitor the loop
 
 ### 1.4 Goals
 
@@ -52,7 +52,7 @@ The existing benchmark tests a direct LLM prompt (question + context), not the a
 
 ### 2.2 Modifications must be safely reversible
 
-The optimizer LLM can propose bad changes — broken EDN, invalid Datalog, code that doesn't compile. These must never corrupt the system. Every modification must be reversible, and the original state must be restored exactly (not approximately — file formatting, comments, and whitespace matter).
+The optimizer LLM can propose bad changes — broken [EDN](https://edn-format.org), invalid Datalog, code that doesn't compile. These must never corrupt the system. Every modification must be reversible, and the original state must be restored exactly (not approximately — file formatting, comments, and whitespace matter).
 
 ### 2.3 LLM output is unreliable
 
@@ -164,7 +164,7 @@ A pure-Clojure feedforward network for query routing (predicting which Datalog p
 - **Training**: numerical gradient descent with a fixed time budget (like autoresearch's 5-minute limit)
 - **Config**: `resources/model/config.edn` is the "train.py equivalent" — the optimizer proposes hyperparameter changes
 
-Deep Diamond and Neanderthal are included as dependencies for future GPU-accelerated training. The current implementation is pure Clojure with `double-array` operations.
+[Deep Diamond](https://github.com/uncomplicate/deep-diamond) and [Neanderthal](https://github.com/uncomplicate/neanderthal) are included as dependencies for future GPU-accelerated training. The current implementation is pure [Clojure](https://clojure.org) with `double-array` operations.
 
 ---
 
@@ -219,11 +219,11 @@ Five new Datalog queries for the meta database:
 
 Each run captures SHA-256 hashes of the agent system prompt, example selection, and Datalog rules at the start of the run, plus the Datomic `basis-t` of the target repo's database. Any run can be exactly reproduced by restoring these artifacts to the hashed state and replaying against the same database version.
 
-### 5.6 Why this was easy — Clojure and Datomic's design decisions
+### 5.6 Why this was easy — [Clojure](https://clojure.org) and [Datomic](https://www.datomic.com)'s design decisions
 
-Adding a separate internal database alongside the per-repo databases required changing exactly two lines of production code: one call to `db/connect-and-ensure-schema` in `main.clj` and one in `mcp.clj`. No new infrastructure, no configuration files, no connection pool setup, no migration tooling. This is worth pausing on, because it reflects several deliberate design decisions by Rich Hickey and the Datomic/Clojure teams that compound in exactly this kind of scenario:
+Adding a separate internal database alongside the per-repo databases required changing exactly two lines of production code: one call to `db/connect-and-ensure-schema` in `main.clj` and one in `mcp.clj`. No new infrastructure, no configuration files, no connection pool setup, no migration tooling. This is worth pausing on, because it reflects several deliberate design decisions by [Rich Hickey](https://github.com/richhickey) and the Datomic/Clojure teams that compound in exactly this kind of scenario:
 
-*Databases are values, not servers.* Datomic Local runs in-process — there is no separate database server to configure, no ports to manage, no Docker containers. Creating a new database is a function call: `(d/create-database client {:db-name "noumenon-internal"})`. It returns immediately. The database is just another directory on disk, co-located with the existing repo databases under the same storage root. This is why Noumenon can create one database per repository without any operational overhead — each `import` just creates a new database by name.
+*Databases are values, not servers.* [Datomic Local](https://docs.datomic.com/datomic-local.html) runs in-process — there is no separate database server to configure, no ports to manage, no Docker containers. Creating a new database is a function call: `(d/create-database client {:db-name "noumenon-internal"})`. It returns immediately. The database is just another directory on disk, co-located with the existing repo databases under the same storage root. This is why Noumenon can create one database per repository without any operational overhead — each `import` just creates a new database by name.
 
 *Schema is data, not DDL.* The introspect schema is a 167-line EDN file — the same data format used for everything else in Clojure. There is no SQL, no migration framework, no schema versioning tool. `ensure-schema` transacts the schema attributes idempotently: new attributes are added, existing ones are skipped. Adding the introspect schema to the system was one line in `schema.clj`: appending `"schema/introspect.edn"` to the `schema-files` vector. The schema is transacted into every database on connect, so the internal database and repo databases share the same schema without any additional plumbing.
 
@@ -555,7 +555,7 @@ The `:code` target auto-reverts on lint or test failure, but there is no mechani
 
 ### 9.6 No prompt caching across evaluations
 
-Each question creates a fresh `agent/ask` session. The system prompt is re-sent with every LLM call. Anthropic API prompt caching is used within a single agent session but not across questions.
+Each question creates a fresh `agent/ask` session. The system prompt is re-sent with every LLM call. [Anthropic API](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching) prompt caching is used within a single agent session but not across questions.
 
 ---
 
@@ -564,7 +564,7 @@ Each question creates a fresh `agent/ask` session. The system prompt is re-sent 
 1. **Reduce evaluation variance** — run each question 2-3 times, use median score
 2. **Multi-repo evaluation** — aggregate scores across a corpus of repos to avoid overfitting to one codebase
 3. **Async MCP tools** — `noumenon_introspect` returns a run ID, `noumenon_introspect_status` checks progress, `noumenon_introspect_stop` halts the loop
-4. **Deep Diamond GPU training** — swap the pure-Clojure model for GPU-accelerated training when the model grows beyond toy size
+4. **[Deep Diamond](https://github.com/uncomplicate/deep-diamond) GPU training** — swap the pure-Clojure model for GPU-accelerated training when the model grows beyond toy size
 5. **Cross-iteration model warm-start** — initialize from previous best weights instead of random
 6. **Prompts and queries in Datomic** — store prompt templates and named queries in the meta database instead of classpath resources, enabling transactional modification with automatic rollback via Datomic's immutable history
 7. **Multi-objective optimization** — optimize for both accuracy AND cost (fewer agent iterations per question)
