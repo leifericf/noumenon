@@ -41,6 +41,7 @@ General rules:
 - Include only tags, patterns, smells, and safety-concerns that actually apply. Omit keys with empty collections.
 - :segments should list the major definitions, not every helper. Cap at 20 segments.
 - Keep :summary and :purpose each under 500 characters.
+- For data/config files without executable code (EDN, JSON, YAML, TOML, XML), emit a single segment with the filename (without extension) as :name, :kind :module, :complexity :trivial. Do NOT emit separate segments for individual keys, sections, or import statements in data files.
 
 File-level field guidelines:
 
