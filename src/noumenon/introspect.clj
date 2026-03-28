@@ -456,9 +456,10 @@
       (let [agg-mean (/ (reduce + (map :mean all)) (count all))]
         (log! (str "  aggregate mean across " (count all) " repos: "
                    (format "%.3f" agg-mean)))
-        {:mean    agg-mean
-         :results (:results primary) ;; per-question detail from primary repo
-         :repo-means (mapv :mean all)}))))
+        {:mean             agg-mean
+         :results          (:results primary) ;; per-question detail from primary repo
+         :repo-means       (mapv :mean all)
+         :total-iterations (reduce + (map #(or (:total-iterations %) 0) all))}))))
 
 ;; --- Datomic transaction builders (pure) ---
 
