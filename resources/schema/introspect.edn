@@ -1,0 +1,165 @@
+[;; ============================================================
+ ;; Introspect Run — one per self-improvement session
+ ;; ============================================================
+
+ ;; --- Identity & context ---
+ {:db/ident       :introspect.run/id
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Introspect run identifier (timestamp-uuid)"}
+
+ {:db/ident       :introspect.run/repo-path
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Repository path used for evaluation"}
+
+ {:db/ident       :introspect.run/commit-sha
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Git HEAD SHA at time of run"}
+
+ {:db/ident       :introspect.run/started-at
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "When the introspect run started"}
+
+ {:db/ident       :introspect.run/completed-at
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "When the introspect run completed"}
+
+ {:db/ident       :introspect.run/duration-ms
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Wall-clock duration in milliseconds"}
+
+ ;; --- Configuration ---
+ {:db/ident       :introspect.run/model-config
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Model configuration as EDN string {:provider :model}"}
+
+ {:db/ident       :introspect.run/max-iterations
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Maximum iterations configured for this run"}
+
+ {:db/ident       :introspect.run/noumenon-version
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Noumenon version at run time"}
+
+ ;; --- Reproducibility ---
+ {:db/ident       :introspect.run/prompt-hash
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "SHA-256 of agent system prompt at run start"}
+
+ {:db/ident       :introspect.run/examples-hash
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "SHA-256 of agent examples at run start"}
+
+ {:db/ident       :introspect.run/rules-hash
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "SHA-256 of Datalog rules at run start"}
+
+ {:db/ident       :introspect.run/db-basis-t
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Datomic basis-t of the target repo database at evaluation time"}
+
+ ;; --- Scores ---
+ {:db/ident       :introspect.run/baseline-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Baseline mean score at run start (0.0-1.0)"}
+
+ {:db/ident       :introspect.run/final-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Final mean score at run end (0.0-1.0)"}
+
+ {:db/ident       :introspect.run/improvement-count
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Number of iterations that improved the score"}
+
+ {:db/ident       :introspect.run/iteration-count
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Total iterations completed"}
+
+ ;; --- Usage ---
+ {:db/ident       :introspect.run/cost-usd
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Total estimated cost in USD"}
+
+ ;; --- References ---
+ {:db/ident       :introspect.run/iterations
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/isComponent true
+  :db/doc         "Per-iteration result entities (component — retracted with run)"}
+
+ ;; ============================================================
+ ;; Introspect Iteration — one per iteration per run (component)
+ ;; ============================================================
+
+ {:db/ident       :introspect.iter/index
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "1-indexed iteration number within the run"}
+
+ {:db/ident       :introspect.iter/target
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Optimization target — :examples, :system-prompt, :rules, :code, :train"}
+
+ {:db/ident       :introspect.iter/goal
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Self-described improvement goal"}
+
+ {:db/ident       :introspect.iter/rationale
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Optimizer's reasoning for the proposed change"}
+
+ {:db/ident       :introspect.iter/outcome
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Iteration outcome — :improved, :reverted, :skipped, :gate-failed, :error"}
+
+ {:db/ident       :introspect.iter/baseline-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Score before this iteration"}
+
+ {:db/ident       :introspect.iter/result-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Score after this iteration (before keep/revert decision)"}
+
+ {:db/ident       :introspect.iter/delta
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Score change (result-mean - baseline-mean)"}
+
+ {:db/ident       :introspect.iter/timestamp
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "When this iteration completed"}
+
+ {:db/ident       :introspect.iter/modification
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "EDN string of the modification applied (only for :improved outcomes)"}
+
+ {:db/ident       :introspect.iter/error
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Error message when outcome is :error"}]
