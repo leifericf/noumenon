@@ -539,7 +539,8 @@
                       (catch Exception e
                         (log! (str "introspect: optimizer error: " (.getMessage e)))
                         nil))
-        proposal    (parse-proposal (:text response))]
+        proposal    (parse-proposal (:text response))
+        validation  (when proposal (validate-proposal proposal))]
     (cond
       ;; No proposal — skip
       (nil? proposal)
@@ -547,10 +548,9 @@
           {:outcome :skipped :record {:outcome :skipped :rationale "Parse failure"}})
 
       ;; Invalid proposal — skip
-      (validate-proposal proposal)
-      (let [err (validate-proposal proposal)]
-        (log! (str "introspect: invalid proposal: " err))
-        {:outcome :skipped :record {:outcome :skipped :rationale (str "Validation: " err)}})
+      validation
+      (do (log! (str "introspect: invalid proposal: " validation))
+          {:outcome :skipped :record {:outcome :skipped :rationale (str "Validation: " validation)}})
 
       ;; Target not in allowed set — skip
       (and allowed-targets (not (allowed-targets (:target proposal))))
