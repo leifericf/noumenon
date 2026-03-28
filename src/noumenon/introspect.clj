@@ -393,14 +393,23 @@
       (str/replace #"[\n\r]" " ")
       (subs 0 (min max-len (count (str s))))))
 
+(defn- sh-checked!
+  "Run shell/sh; throw on non-zero exit with stderr context."
+  [& args]
+  (let [{:keys [exit err] :as result} (apply shell/sh args)]
+    (when-not (zero? exit)
+      (throw (ex-info (str "Shell command failed (exit " exit "): " (first args))
+                      {:args args :exit exit :err err})))
+    result))
+
 (defn- git-commit-improvement! [repo-path {:keys [target rationale delta]}]
   (let [safe-rationale (sanitize-commit-text rationale 200)
         msg (str "introspect(" (name target) "): " safe-rationale
                  (when delta (str " [" (format "%+.3f" (double delta)) "]")))]
     (log! (str "introspect: committing: " msg))
     (doseq [p committable-paths]
-      (shell/sh "git" "-C" (str repo-path) "add" p))
-    (shell/sh "git" "-C" (str repo-path) "commit" "-m" msg)))
+      (sh-checked! "git" "-C" (str repo-path) "add" p))
+    (sh-checked! "git" "-C" (str repo-path) "commit" "-m" msg)))
 
 ;; --- Agent-mode evaluation ---
 
