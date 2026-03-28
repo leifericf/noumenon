@@ -196,8 +196,11 @@
     (update opts :repo-path resolve-repo-path)
     (fn [{:keys [repo-path db-dir db-name]}]
       (let [conn      (db/connect-and-ensure-schema db-dir db-name)
+            meta-conn (db/ensure-meta-db db-dir)
             repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
-            result    (sync/update-repo! conn repo-path repo-uri (build-sync-opts opts))]
+            sync-opts (cond-> (build-sync-opts opts)
+                        analyze (assoc :meta-db (d/db meta-conn)))
+            result    (sync/update-repo! conn repo-path repo-uri sync-opts)]
         (when-not analyze
           (log! (str "Next: run '" cli/program-name " analyze " repo-path
                      "' to enrich with semantic metadata.")))
@@ -205,14 +208,16 @@
 
 (defn do-watch
   "Run the watch subcommand. Polls git HEAD and syncs on changes."
-  [{:keys [interval] :as opts}]
+  [{:keys [interval analyze] :as opts}]
   (with-valid-repo
     opts
     (fn [{:keys [repo-path db-dir db-name]}]
       (let [conn       (db/connect-and-ensure-schema db-dir db-name)
+            meta-conn  (db/ensure-meta-db db-dir)
             repo-uri   (.getCanonicalPath (java.io.File. (str repo-path)))
             interval-s (or interval 30)
-            sync-opts  (build-sync-opts opts)]
+            sync-opts  (cond-> (build-sync-opts opts)
+                         analyze (assoc :meta-db (d/db meta-conn)))]
         (log! (str "Watching " repo-path " (polling every " interval-s "s)"))
         (loop [failures 0
                last-had-changes? true]

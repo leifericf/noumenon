@@ -207,23 +207,54 @@
 
 ;; --- History ---
 
+(defn- template-history-rows
+  "History rows for prompts stored as a single template string."
+  [hdb prompt-name]
+  (d/q '[:find ?template ?inst ?source
+         :in $ ?name
+         :where
+         [?e :artifact.prompt/name ?name]
+         [?e :artifact.prompt/template ?template ?tx true]
+         [?tx :db/txInstant ?inst]
+         [(get-else $ ?tx :tx/artifact-source :unknown) ?source]]
+       hdb prompt-name))
+
+(defn- chunk-history-txs
+  "Distinct transaction instants where chunks were asserted for a prompt."
+  [hdb prompt-name]
+  (d/q '[:find ?tx ?inst ?source
+         :in $ ?name
+         :where
+         [?e :artifact.prompt/name ?name]
+         [?e :artifact.prompt/chunks ?chunk ?tx true]
+         [?chunk :artifact.chunk/content _ ?tx true]
+         [?tx :db/txInstant ?inst]
+         [(get-else $ ?tx :tx/artifact-source :unknown) ?source]]
+       hdb prompt-name))
+
+(defn- reassemble-chunks-as-of
+  "Reassemble chunked template content as of a specific transaction time."
+  [meta-conn prompt-name ^java.util.Date as-of]
+  (let [db (d/as-of (d/db meta-conn) as-of)]
+    (load-prompt db prompt-name)))
+
 (defn prompt-history
   "Return the history of a prompt template as a vector of
    {:template str :tx-time inst :source kw}, newest first.
-   For chunked prompts, returns the raw chunk EDN rather than reassembling."
+   For chunked prompts, reassembles chunks as they existed at each transaction."
   [meta-conn prompt-name]
-  (let [hdb (d/history (d/db meta-conn))]
-    (->> (d/q '[:find ?template ?inst ?source
-                :in $ ?name
-                :where
-                [?e :artifact.prompt/name ?name]
-                [?e :artifact.prompt/template ?template ?tx true]
-                [?tx :db/txInstant ?inst]
-                [(get-else $ ?tx :tx/artifact-source :unknown) ?source]]
-              hdb prompt-name)
-         (sort-by second #(compare %2 %1))
-         (mapv (fn [[template inst source]]
-                 {:template template :tx-time inst :source source})))))
+  (let [hdb       (d/history (d/db meta-conn))
+        templates (->> (template-history-rows hdb prompt-name)
+                       (mapv (fn [[template inst source]]
+                               {:template template :tx-time inst :source source})))
+        chunks    (->> (chunk-history-txs hdb prompt-name)
+                       (mapv (fn [[_tx inst source]]
+                               {:template (reassemble-chunks-as-of meta-conn prompt-name inst)
+                                :tx-time  inst
+                                :source   source})))]
+    (->> (into templates chunks)
+         (sort-by :tx-time #(compare %2 %1))
+         vec)))
 
 (defn rules-history
   "Return the history of rules changes, newest first."
