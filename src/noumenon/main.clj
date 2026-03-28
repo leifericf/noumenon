@@ -12,6 +12,7 @@
             [noumenon.agent :as agent]
             [noumenon.llm :as llm]
             [noumenon.imports :as imports]
+            [noumenon.introspect :as introspect]
             [noumenon.mcp :as mcp]
             [noumenon.query :as query]
             [noumenon.sync :as sync]
@@ -578,6 +579,49 @@
           (print-error! (.getMessage e))
           {:exit 1})))))
 
+;; --- Introspect ---
+
+(defn do-introspect
+  "Run the introspect self-improvement loop. Returns {:exit n :result map-or-nil}."
+  [{:keys [model provider max-iterations max-hours max-cost] :as opts}]
+  (with-valid-repo
+    opts
+    (fn [ctx]
+      (try
+        (with-existing-db
+          ctx
+          (fn [{:keys [db db-name]}]
+            (let [;; Optimizer LLM — proposes improvements (higher temperature for creativity)
+                  {:keys [invoke-fn]}
+                  (llm/make-messages-fn-from-opts {:provider    provider
+                                                   :model       model
+                                                   :temperature 0.7
+                                                   :max-tokens  8192})
+                  ;; Agent invoke factory — creates fresh invoke-fns for evaluation
+                  invoke-fn-factory
+                  (fn []
+                    (:invoke-fn
+                     (llm/make-messages-fn-from-opts {:provider    provider
+                                                      :model       model
+                                                      :temperature 0.0
+                                                      :max-tokens  4096})))
+                  result (introspect/run-loop!
+                          {:db                  db
+                           :repo-name           db-name
+                           :invoke-fn-factory   invoke-fn-factory
+                           :optimizer-invoke-fn invoke-fn
+                           :max-iterations      (or max-iterations 10)
+                           :max-hours           max-hours
+                           :max-cost            max-cost})]
+              (log! (str "\nIntrospect complete: " (:improvements result)
+                         " improvements in " (:iterations result)
+                         " iterations (final score: "
+                         (format "%.3f" (:final-score result)) ")"))
+              {:exit 0 :result result})))
+        (catch clojure.lang.ExceptionInfo e
+          (print-error! (.getMessage e))
+          {:exit 1})))))
+
 ;; --- Error dispatch ---
 
 (def ^:private error-messages
@@ -614,7 +658,10 @@
    :missing-max-files-value      "Missing value for --max-files."
    :invalid-interval             #(str "Invalid --interval value: " (:value %) ". Must be a positive integer.")
    :missing-interval-value       "Missing value for --interval."
-   :missing-layers-value         "Missing value for --layers. Example: --layers raw,full"})
+   :missing-layers-value         "Missing value for --layers. Example: --layers raw,full"
+   :invalid-max-hours            #(str "Invalid --max-hours value: " (:value %))
+   :missing-max-hours-value      "Missing value for --max-hours."
+   :missing-target-value         "Missing value for --target."})
 
 (def ^:private errors-with-global-usage
   #{:no-args :unknown-subcommand})
@@ -676,11 +723,12 @@
                      "list-databases" (do-list-databases parsed)
                      "benchmark"      (do-benchmark parsed)
                      "digest"         (do-digest parsed)
+                     "introspect"     (do-introspect parsed)
                      "serve"          (do (mcp/serve! parsed) {:exit 0}))]
         (when (and (:result result)
                    (zero? (:exit result))
                    (not (#{"benchmark" "serve" "status" "list-databases"
-                           "show-schema" "watch"} (:subcommand parsed))))
+                           "show-schema" "watch" "introspect"} (:subcommand parsed))))
           (prn (:result result)))
         result))))
 

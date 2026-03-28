@@ -229,6 +229,29 @@
    :initial {:subcommand "ask"}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
+(def ^:private introspect-command-spec
+  {:flags (vec (concat
+                [model-flag
+                 (assoc provider-flag :valid all-valid-providers)
+                 max-cost-flag
+                 db-dir-flag
+                 {:flag "--max-iterations" :key :max-iterations :parse :pos-int
+                  :desc "Max improvement iterations (default: 10)"
+                  :error-invalid :invalid-max-iterations
+                  :error-missing :missing-max-iterations-value}
+                 {:flag "--max-hours" :key :max-hours :parse :pos-double
+                  :desc "Stop after N hours of wall-clock time"
+                  :error-invalid :invalid-max-hours
+                  :error-missing :missing-max-hours-value}
+                 {:flag "--target" :key :target :parse :string
+                  :desc "Artifact to optimize: examples, system-prompt, or both (default: examples)"
+                  :error-missing :missing-target-value}
+                 {:flag "--git-commit" :key :git-commit :parse :bool
+                  :desc "Git commit after each improvement"}]
+                verbose-flags))
+   :initial {:subcommand "introspect"}
+   :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
+
 ;; --- Command registry (drives help generation) ---
 
 (def command-registry
@@ -295,6 +318,10 @@
                 :summary "Run full pipeline: import, enrich, analyze, benchmark"
                 :usage "digest [options] <repo-path>"
                 :epilog "Runs the entire Noumenon pipeline in one go. Each step is idempotent.\nUse --skip-* flags to omit individual steps.\nRe-running digest picks up where a previous run left off."}
+   "introspect" {:spec introspect-command-spec
+                 :summary "Autonomous self-improvement loop (optimize prompts via benchmark)"
+                 :usage "introspect [options] <repo-path>"
+                 :epilog "Runs an autonomous loop: propose prompt change, evaluate via benchmark,\nkeep if improved, revert if not. Uses an LLM to propose improvements and\nthe agent benchmark to evaluate them.\n\nTargets: examples (default), system-prompt, or both.\nUse --max-hours or --max-cost for overnight runs."}
    "serve"     {:spec {:flags [{:flag "--db-dir" :key :db-dir :parse :string
                                 :desc "Override storage directory (default: data/datomic/)"
                                 :error-missing :missing-db-dir-value}
@@ -315,7 +342,7 @@
                 :epilog "Communicates via JSON-RPC over stdio (stdin/stdout).\nConfigure your MCP client to launch: noumenon serve [options]\nThe server auto-updates the knowledge graph on each query by default;\npass --no-auto-update to disable."}})
 
 (def ^:private command-order
-  ["digest" "import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark"])
+  ["digest" "import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark" "introspect"])
 
 ;; --- Help text generation ---
 
@@ -543,6 +570,11 @@
                              (let [result (parse-command list-databases-command-spec rest-args)]
                                (if (:error result) result
                                    (assoc result :subcommand "list-databases"))))
+          "introspect"     (if (contains-help? rest-args)
+                             {:help "introspect"}
+                             (let [result (parse-command introspect-command-spec rest-args)]
+                               (if (:error result) result
+                                   (assoc result :subcommand "introspect"))))
           (if (#{"import" "status" "show-schema" "analyze" "enrich" "query" "update" "watch"} sub)
             (parse-simple-args sub rest-args)
             {:error :unknown-subcommand :subcommand sub}))))))
