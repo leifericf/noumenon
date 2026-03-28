@@ -2,6 +2,48 @@
 
 All notable changes to Noumenon are documented in this file.
 
+## 0.2.1
+
+### Features
+
+- **Artifact storage** — Prompts, named queries, and Datalog rules are now stored
+  in Datomic with full edit history. `reseed` command reloads from classpath.
+  `artifact-history` command shows change history per artifact.
+
+### Fixes
+
+- **Security** — Cap introspect `max_iterations` (100) and `eval_runs` (10) to
+  prevent unbounded LLM calls. Validate `target` parameter length. Anchor
+  `validate-code-path!` to project root instead of JVM CWD.
+- **NPE on update --analyze** — `sync/update-repo!` now passes `meta-db` through
+  to `analyze-repo!`, fixing a NullPointerException introduced in 0.2.0.
+- **Chunked prompt history** — `prompt-history` now tracks both template and chunk
+  transactions, fixing empty results for prompts over 4000 chars.
+- **Introspect git commits** — `git-commit-improvement!` checks exit codes from
+  `git add` and `git commit` instead of silently discarding failures.
+- **Agent query rules** — `dispatch-query` errors clearly when a query requires
+  rules (`%`) but rules are not loaded, instead of silently running without them.
+- **MCP artifact-history** — Validates that `name` is required for prompt history.
+- **Introspect persistence** — Iterations saved incrementally; large modifications
+  truncated before Datomic storage.
+- **Artifact staleness** — Fixed stale data on prompt chunking transitions and
+  query list regression.
+
+### CLI / MCP UX
+
+- Registered `reseed` and `artifact-history` as CLI subcommands (previously
+  unreachable).
+- Corrected `--target` default documentation (all targets, not just examples).
+- Added `noumenon_introspect`, `noumenon_reseed`, and `noumenon_artifact_history`
+  to README command reference.
+- Improved MCP feedback: empty query list hints at reseeding, `introspect_stop`
+  reports actual session status, `ask` no longer exposes internal status keywords.
+- Batch CLI help improvements: `--reanalyze` default hint, `--continue-from`
+  placement guidance, benchmark mode in pre-run log, `[COST WARNING]` and
+  `[CANARY WARNING]` prefixes standardized.
+
+---
+
 ## 0.2.0
 
 ### Features

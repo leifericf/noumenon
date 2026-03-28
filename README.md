@@ -36,14 +36,14 @@ clj -M:run --help
 Download the latest JAR from [GitHub Releases](https://github.com/leifericf/noumenon/releases):
 
 ```bash
-java -jar noumenon-0.2.0.jar --help
+java -jar noumenon-0.2.1.jar --help
 ```
 
 Build from source if needed:
 
 ```bash
 clj -T:build uber
-java -jar target/noumenon-0.2.0.jar --version
+java -jar target/noumenon-0.2.1.jar --version
 ```
 
 ### Option 3: Use as a Clojure dependency
@@ -51,7 +51,7 @@ java -jar target/noumenon-0.2.0.jar --version
 ```clojure
 {:aliases
  {:noumenon
-  {:extra-deps {io.github.leifericf/noumenon {:git/tag "v0.2.0" :git/sha "81fc309"}}
+  {:extra-deps {io.github.leifericf/noumenon {:git/tag "v0.2.1" :git/sha "2782dd1"}}
    :main-opts ["-m" "noumenon.main"]}}}
 ```
 
@@ -260,7 +260,7 @@ Run Noumenon as an [MCP](https://modelcontextprotocol.io) server so agents can c
 
 ```bash
 clj -M:run serve
-# or java -jar noumenon-0.2.0.jar serve
+# or java -jar noumenon-0.2.1.jar serve
 ```
 
 ### [Claude Desktop](https://claude.ai/download) config
@@ -272,7 +272,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "noumenon": {
       "command": "java",
-      "args": ["-jar", "/path/to/noumenon-0.2.0.jar", "serve"]
+      "args": ["-jar", "/path/to/noumenon-0.2.1.jar", "serve"]
     }
   }
 }
