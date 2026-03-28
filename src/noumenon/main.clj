@@ -605,6 +605,9 @@
                                                       :model       model
                                                       :temperature 0.0
                                                       :max-tokens  4096})))
+                  _ (log! (str "\n[COST WARNING] introspect runs up to "
+                               (or max-iterations 10)
+                               " benchmark evaluations. Use --max-cost to set a budget."))
                   result (introspect/run-loop!
                           {:db                  db
                            :repo-name           db-name
