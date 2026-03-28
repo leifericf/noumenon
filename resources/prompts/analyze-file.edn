@@ -100,7 +100,12 @@ File-level field guidelines:
   :tooling — build scripts, linters, code generators, dev utilities.
   :shared — cross-cutting libraries used across multiple layers or domains.
 
-:confidence — your self-assessed confidence that this analysis is accurate (0.0-1.0). Lower if the file is obfuscated, generated, or in an unfamiliar domain.
+:confidence — your self-assessed confidence that this analysis is accurate (0.0-1.0). Use the full range — do not default to 0.9+. Guidance:
+  1.0 — trivial file, absolutely certain (constants, re-exports, < 20 lines).
+  0.85-0.95 — straightforward code in a familiar language, high certainty.
+  0.7-0.85 — moderate file with some ambiguity in purpose or layer classification.
+  0.5-0.7 — complex file, unfamiliar domain, or multi-purpose file where classification is uncertain.
+  < 0.5 — obfuscated, generated, minified, or deeply unfamiliar domain.
 
 :dependencies — list of namespace/module/package names this file imports, requires, or uses. Include only direct dependencies. Use the canonical import name (e.g. \"clojure.string\", \"react\", \"os\", \"datomic.client.api\"). Omit if none.
 
