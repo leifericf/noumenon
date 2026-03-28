@@ -55,6 +55,14 @@
   #{:backend :frontend :infrastructure :configuration
     :data :testing :documentation :tooling :shared})
 
+(def ^:private valid-tags
+  #{:io :parsing :concurrency :configuration :testing :networking
+    :validation :logging :security :routing :middleware :state-management})
+
+(def ^:private valid-patterns
+  #{:state-machine :producer-consumer :builder :factory :decorator
+    :adapter :pipeline :ring-handler :middleware-chain})
+
 ;; --- Prompt ---
 
 (defn load-prompt-template
@@ -160,9 +168,9 @@
 (def ^:private analysis-sanitizers
   {:summary      #(when (string? %) (clamp %))
    :purpose      #(when (string? %) (clamp %))
-   :tags         #(when (and (coll? %) (seq %)) (vec (filter keyword? %)))
+   :tags         #(when (and (coll? %) (seq %)) (vec (filter valid-tags %)))
    :complexity   #(when (valid-complexity %) %)
-   :patterns     #(when (and (coll? %) (seq %)) (vec (filter keyword? %)))
+   :patterns     #(when (and (coll? %) (seq %)) (vec (filter valid-patterns %)))
    :layer        #(when (valid-layer %) %)
    :confidence   #(when (and (number? %) (<= 0.0 % 1.0)) (double %))
    :category     #(when (valid-category %) %)
