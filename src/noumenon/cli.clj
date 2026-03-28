@@ -244,7 +244,7 @@
                   :error-invalid :invalid-max-hours
                   :error-missing :missing-max-hours-value}
                  {:flag "--target" :key :target :parse :string
-                  :desc "Comma-separated targets: examples, system-prompt, rules, code, train (default: examples)"
+                  :desc "Comma-separated targets: examples, system-prompt, rules, code, train (default: all — LLM chooses)"
                   :error-missing :missing-target-value}
                  {:flag "--eval-runs" :key :eval-runs :parse :pos-int
                   :desc "Evaluation passes per iteration for median (default: 1)"
