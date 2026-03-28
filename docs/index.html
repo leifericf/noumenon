@@ -228,15 +228,18 @@
       </div>
       <pre><span class="prompt">$</span> clj -M:run introspect --max-iterations 5 --provider glm ./my-repo
 
-<span class="comment"># baseline mean=0.523 (22 deterministic questions)</span>
-<span class="comment"># iteration 1: target=system-prompt — "Fix empty result handling"</span>
-<span class="comment"># IMPROVED +0.068 (0.523 -> 0.591)</span>
-<span class="comment"># iteration 2: target=examples — "Add dependency query patterns"</span>
-<span class="comment"># reverted (delta=-0.045)</span>
-<span class="comment"># iteration 3: target=examples — "Replace low-impact examples"</span>
-<span class="comment"># IMPROVED +0.114 (0.568 -> 0.682)</span>
+<span class="comment"># baseline mean=52.3% (22 deterministic questions)</span>
+<span class="comment"># === Iteration 1/5 ===</span>
+<span class="comment"># target=system-prompt — "Fix empty result handling"</span>
+<span class="comment"># IMPROVED +6.8% (52.3% -> 59.1%)</span>
+<span class="comment"># === Iteration 2/5 ===</span>
+<span class="comment"># target=examples — "Add dependency query patterns"</span>
+<span class="comment"># reverted (delta=-4.5%)</span>
+<span class="comment"># === Iteration 3/5 ===</span>
+<span class="comment"># target=examples — "Replace low-impact examples"</span>
+<span class="comment"># IMPROVED +11.4% (56.8% -> 68.2%)</span>
 
-Introspect complete: 2 improvements in 3 iterations (final score: 0.682)</pre>
+Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
     </div>
     <div class="principles">
       <div class="principle">
