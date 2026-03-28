@@ -225,6 +225,40 @@
 
 ;; --- Persistence ---
 
+(def ^:private max-param-size
+  "Safety limit: no single parameter array may exceed 100M elements."
+  (* 10000 10000))
+
+(defn- validate-param-sizes!
+  "Reject deserialized weights that exceed a safety limit."
+  [{:keys [w1 b1 w2 b2]}]
+  (let [sizes {:w1 (count w1) :b1 (count b1) :w2 (count w2) :b2 (count b2)}]
+    (when (some #(> % max-param-size) (vals sizes))
+      (throw (ex-info "Model parameters exceed safety limit"
+                      (assoc sizes :limit max-param-size))))))
+
+(defn- validate-dimensions!
+  "Validate that weight dimensions match the config, if config is present."
+  [{:keys [w1 b1 w2 b2 config]}]
+  (when config
+    (let [{:keys [embedding-dim hidden-dim output-dim]} config
+          expected {:w1 (* embedding-dim hidden-dim) :b1 hidden-dim
+                    :w2 (* hidden-dim output-dim)    :b2 output-dim}
+          actual   {:w1 (count w1) :b1 (count b1)
+                    :w2 (count w2) :b2 (count b2)}]
+      (when (not= expected actual)
+        (throw (ex-info "Model dimensions do not match config"
+                        {:expected expected :actual actual}))))))
+
+(defn- ->model
+  "Validate and convert deserialized EDN into a model map with double-arrays."
+  [{:keys [w1 b1 w2 b2 config vocab label-index] :as raw}]
+  (validate-param-sizes! raw)
+  (validate-dimensions! raw)
+  {:w1 (double-array w1) :b1 (double-array b1)
+   :w2 (double-array w2) :b2 (double-array b2)
+   :config config :vocab vocab :label-index label-index})
+
 (defn save-model!
   "Save model weights and vocab to EDN file."
   [model path]
@@ -242,22 +276,13 @@
   [path]
   (let [f (io/file path)]
     (when (.exists f)
-      (let [{:keys [w1 b1 w2 b2 config vocab]} (edn/read-string (slurp f))]
-        {:w1     (double-array w1)
-         :b1     (double-array b1)
-         :w2     (double-array w2)
-         :b2     (double-array b2)
-         :config config
-         :vocab  vocab}))))
+      (->model (edn/read-string (slurp f))))))
 
 (defn load-pretrained
   "Load pre-trained model from classpath resource. Returns nil if not bundled."
   []
   (when-let [url (io/resource "model/weights.edn")]
-    (let [{:keys [w1 b1 w2 b2 config vocab]} (edn/read-string (slurp url))]
-      {:w1 (double-array w1) :b1 (double-array b1)
-       :w2 (double-array w2) :b2 (double-array b2)
-       :config config :vocab vocab})))
+    (->model (edn/read-string (slurp url)))))
 
 (defn load-best-model
   "Load the best available model: local trained > bundled pretrained > nil."

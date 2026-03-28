@@ -101,6 +101,18 @@
 (deftest load-model-missing
   (is (nil? (model/load-model "/tmp/nonexistent-model.edn"))))
 
+(deftest load-model-rejects-mismatched-dimensions
+  (let [path (str "/tmp/model-bad-dims-" (System/currentTimeMillis) ".edn")
+        bad  {:w1 [1.0 2.0] :b1 [1.0] :w2 [1.0] :b2 [1.0]
+              :config {:embedding-dim 8 :hidden-dim 16 :output-dim 4}}]
+    (spit path (pr-str bad))
+    (try
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"dimensions do not match"
+                            (model/load-model path)))
+      (finally
+        (.delete (java.io.File. path))))))
+
 ;; --- Training actually reduces loss ---
 
 (deftest training-reduces-loss
