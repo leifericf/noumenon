@@ -844,6 +844,9 @@
         aname (args "name")]
     (when-not (#{"prompt" "rules"} atype)
       (throw (ex-info "Invalid type" {:user-message "type must be 'prompt' or 'rules'"})))
+    (when (and (= atype "prompt") (nil? aname))
+      (throw (ex-info "Missing name"
+                      {:user-message "name is required when type is 'prompt'. Provide the prompt name to look up."})))
     (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir defaults))
           history   (case atype
                       "prompt" (do (validate-string-length! "name" aname 256)
