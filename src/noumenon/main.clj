@@ -627,7 +627,7 @@
               (log! (str "\nIntrospect complete: " (:improvements result)
                          " improvements in " (:iterations result)
                          " iterations (final score: "
-                         (format "%.3f" (:final-score result))
+                         (format "%.1f%%" (* 100.0 (double (:final-score result))))
                          ", run-id: " (:run-id result) ")"))
               {:exit 0 :result result})))
         (catch clojure.lang.ExceptionInfo e
