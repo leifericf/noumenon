@@ -29,6 +29,7 @@
     <ul class="nav-links">
       <li><a href="#layers">Layers</a></li>
       <li><a href="#how-it-works">How It Works</a></li>
+      <li><a href="#introspect">Introspect</a></li>
       <li><a href="#benchmarks">Benchmarks</a></li>
       <li><a href="#features">Features</a></li>
       <li><a href="#get-started">Get Started</a></li>
@@ -191,6 +192,72 @@
 
 <hr class="divider">
 
+<!-- Introspect -->
+<section id="introspect">
+  <div class="container section-center">
+    <h2 class="section-title">Self-improving introspection</h2>
+    <p class="section-sub">
+      Noumenon can improve itself. The <code>introspect</code> command runs an autonomous optimization loop &mdash; inspired by <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a> &mdash; that proposes changes to its own prompts, rules, example queries, and source code, evaluates them against the benchmark, and keeps what works.
+    </p>
+    <div class="problem-grid">
+      <div class="card">
+        <h3>Closed-loop optimization</h3>
+        <p>An LLM optimizer analyzes benchmark gaps, proposes a targeted change, applies it, re-evaluates, and keeps or reverts &mdash; no human in the loop. Run overnight and wake up to a better system.</p>
+      </div>
+      <div class="card">
+        <h3>Five optimization targets</h3>
+        <p>System prompt, example query selection, Datalog rules, source code (with lint + test gates), and ML model hyperparameters. The optimizer chooses which target has the highest impact.</p>
+      </div>
+      <div class="card">
+        <h3>On-device ML model</h3>
+        <p>A pure-Clojure neural network learns which Datalog queries to try for a given question. Trains locally with zero token cost. The ask agent uses its predictions as a head start.</p>
+      </div>
+    </div>
+    <div class="terminal" style="margin-top: 2.5rem;">
+      <div class="terminal-header">
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-title">Terminal</span>
+      </div>
+      <pre><span class="prompt">$</span> clj -M:run introspect --max-iterations 5 --provider glm ./my-repo
+
+<span class="comment"># baseline mean=0.523 (22 deterministic questions)</span>
+<span class="comment"># iteration 1: target=system-prompt — "Fix empty result handling"</span>
+<span class="comment"># IMPROVED +0.068 (0.523 -> 0.591)</span>
+<span class="comment"># iteration 2: target=examples — "Add dependency query patterns"</span>
+<span class="comment"># reverted (delta=-0.045)</span>
+<span class="comment"># iteration 3: target=examples — "Replace low-impact examples"</span>
+<span class="comment"># IMPROVED +0.114 (0.568 -> 0.682)</span>
+
+Introspect complete: 2 improvements in 3 iterations (final score: 0.682)</pre>
+    </div>
+    <div class="principles">
+      <div class="principle">
+        <span class="principle-label text-green">Safe</span>
+        <p>Every modification is reverted automatically if the benchmark doesn't improve. Code changes require passing lint and the full test suite.</p>
+      </div>
+      <div class="principle">
+        <span class="principle-label text-blue">Budget-controlled</span>
+        <p>Cap by iterations, wall-clock hours, or dollar cost. Run <code>--max-hours 8</code> for an overnight session.</p>
+      </div>
+      <div class="principle">
+        <span class="principle-label text-purple">Persistent</span>
+        <p>Results are stored in a dedicated Datomic database with reproducibility hashes. Query improvement history with named Datalog queries.</p>
+      </div>
+      <div class="principle">
+        <span class="principle-label text-muted">MCP-first</span>
+        <p>Available as CLI and MCP tools. External agents can start, monitor, and stop introspect runs programmatically.</p>
+      </div>
+    </div>
+    <p class="section-sub" style="margin-top: 1.5rem;">
+      <a href="https://github.com/leifericf/noumenon/blob/main/reports/introspect-development-2026-03-28.md">Read the full development report &rarr;</a>
+    </p>
+  </div>
+</section>
+
+<hr class="divider">
+
 <!-- Benchmark results -->
 <section id="benchmarks" class="section-alt">
   <div class="container section-center">
@@ -302,7 +369,7 @@
       <div class="showcase-text">
         <h2 class="section-title">Named queries</h2>
         <p>
-          50 pre-built Datalog queries in EDN. Deterministic, reproducible, composable. Run from the CLI or MCP server.
+          54 pre-built Datalog queries in EDN. Deterministic, reproducible, composable. Run from the CLI or MCP server.
         </p>
         <ul>
           <li>Complexity and change hotspots</li>
