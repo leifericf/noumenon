@@ -51,7 +51,7 @@ java -jar target/noumenon-0.2.0.jar --version
 ```clojure
 {:aliases
  {:noumenon
-  {:extra-deps {io.github.leifericf/noumenon {:git/tag "v0.2.0" :git/sha "TBD"}}
+  {:extra-deps {io.github.leifericf/noumenon {:git/tag "v0.2.0" :git/sha "81fc309"}}
    :main-opts ["-m" "noumenon.main"]}}}
 ```
 
