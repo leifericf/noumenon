@@ -499,7 +499,11 @@
               (when (= :train target)
                 (let [config  (model/load-config)
                       dataset (td/build-dataset db config)
-                      mdl     (model/init-model config)
+                      prev    (model/load-best-model)
+                      mdl     (if (and prev (= (:config prev) config))
+                                (do (log! "introspect: warm-starting from previous model")
+                                    prev)
+                                (model/init-model config))
                       _       (model/train! mdl dataset config)
                       eval-r  (model/evaluate mdl dataset)]
                   (log! (str "introspect: model accuracy="
