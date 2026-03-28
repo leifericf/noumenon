@@ -456,7 +456,7 @@
   "Run a single introspect iteration.
    Returns {:outcome kw :record map :eval-result map?}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
-           baseline history git-commit?]}]
+           baseline history git-commit? allowed-targets]}]
   (let [meta-prompt (build-meta-prompt
                      {:system-prompt    (load-current-system-prompt)
                       :examples         (load-current-examples)
@@ -481,6 +481,15 @@
       (let [err (validate-proposal proposal)]
         (log! (str "introspect: invalid proposal: " err))
         {:outcome :skipped :record {:outcome :skipped :rationale (str "Validation: " err)}})
+
+      ;; Target not in allowed set — skip
+      (and allowed-targets (not (allowed-targets (:target proposal))))
+      (let [t (:target proposal)]
+        (log! (str "introspect: target " (name t) " not in allowed set "
+                   (pr-str allowed-targets) ", skipping"))
+        {:outcome :skipped
+         :record  {:outcome :skipped
+                   :rationale (str "Target " (name t) " not allowed")}})
 
       ;; Valid proposal — apply, gate, evaluate, decide
       :else
@@ -550,7 +559,7 @@
    Returns {:run-id str :iterations n :improvements n :final-score double}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
            meta-conn max-iterations max-hours max-cost git-commit?
-           model-config]
+           model-config allowed-targets]
     :or   {max-iterations 10}}]
   (let [run-id        (generate-run-id)
         start-ms      (System/currentTimeMillis)
@@ -590,7 +599,8 @@
                         :invoke-fn-factory invoke-fn-factory
                         :optimizer-invoke-fn optimizer-invoke-fn
                         :baseline baseline :history history
-                        :git-commit? git-commit?})
+                        :git-commit? git-commit?
+                        :allowed-targets allowed-targets})
                       new-baseline (if (= :improved outcome) eval-result baseline)]
                   (recur (inc i) new-baseline (conj history record)
                          (if (= :improved outcome) (inc improvements) improvements)

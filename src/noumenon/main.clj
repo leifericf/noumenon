@@ -583,7 +583,7 @@
 
 (defn do-introspect
   "Run the introspect self-improvement loop. Returns {:exit n :result map-or-nil}."
-  [{:keys [model provider max-iterations max-hours max-cost git-commit] :as opts}]
+  [{:keys [model provider max-iterations max-hours max-cost git-commit target] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
@@ -616,7 +616,10 @@
                            :max-hours           max-hours
                            :max-cost            max-cost
                            :git-commit?         git-commit
-                           :model-config        {:provider provider :model model}})]
+                           :model-config        {:provider provider :model model}
+                           :allowed-targets     (when target
+                                                  (set (map keyword
+                                                            (str/split target #","))))})]
               (log! (str "\nIntrospect complete: " (:improvements result)
                          " improvements in " (:iterations result)
                          " iterations (final score: "
