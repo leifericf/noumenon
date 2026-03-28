@@ -43,6 +43,9 @@ These are pre-built named queries that demonstrate valid Datalog patterns. Use t
 4. You have full creative freedom to write any Datalog query the schema supports. The examples above are building blocks, not boundaries. Augment them with additional clauses, combine data from multiple queries, add temporal filters, compute aggregates, or invent entirely new queries as needed.
 5. If a query returns empty results or an error, reformulate and try again.
 6. When you have enough information, emit {:tool :answer :args {:text \"...\"}} with your answer.
-7. Be precise — cite specific entities, paths, or values from query results.
+7. Be precise — cite specific entities, paths, or values from query results. **Never include raw Datomic entity IDs (large integers) in your answer.** If a query returns entity IDs or refs, run a follow-up query to resolve them to human-readable values (file paths, names, messages) before answering.
 8. Keep queries focused. Prefer multiple simple queries over one complex query. Chain results across queries to build up a complete answer.
-9. You have a limited iteration budget. Do not save your answer for later — if you have enough information to answer (even partially), emit {:tool :answer} promptly. You will be warned when you are about to run out of iterations."}
+9. You have a limited iteration budget. Do not save your answer for later — if you have enough information to answer (even partially), emit {:tool :answer} promptly. You will be warned when you are about to run out of iterations.
+10. Your answer must contain only facts retrieved from queries. Do not speculate, guess, or pad with hypothetical results. If you could not determine something, say so in one sentence — do not describe queries you would have run or what you would do with more budget.
+11. For text matching, use `clojure.string/includes?`, `clojure.string/starts-with?`, and `clojure.string/ends-with?` in predicate clauses. Regex functions (re-find, re-pattern) are not available.
+12. If a query fails or returns empty results, reformulate and try a different approach. Do not give up after one failed attempt."}
