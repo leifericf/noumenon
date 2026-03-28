@@ -673,7 +673,9 @@
    :missing-layers-value         "Missing value for --layers. Example: --layers raw,full"
    :invalid-max-hours            #(str "Invalid --max-hours value: " (:value %))
    :missing-max-hours-value      "Missing value for --max-hours."
-   :missing-target-value         "Missing value for --target."})
+   :missing-target-value         "Missing value for --target."
+   :invalid-eval-runs            #(str "Invalid --eval-runs value: " (:value %) ". Must be a positive integer.")
+   :missing-eval-runs-value      "Missing value for --eval-runs."})
 
 (def ^:private errors-with-global-usage
   #{:no-args :unknown-subcommand})
@@ -686,7 +688,8 @@
     :invalid-min-delay :missing-min-delay-value
     :invalid-max-iterations :missing-max-iterations-value
     :invalid-interval :missing-interval-value
-    :missing-layers-value})
+    :missing-layers-value
+    :invalid-eval-runs :missing-eval-runs-value})
 
 ;; --- Entry point ---
 
