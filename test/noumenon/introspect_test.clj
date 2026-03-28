@@ -18,6 +18,9 @@
 (deftest parse-proposal-invalid-edn
   (is (nil? (intro/parse-proposal "not valid edn {{"))))
 
+(deftest parse-proposal-nil-text
+  (is (nil? (intro/parse-proposal nil))))
+
 ;; --- Proposal validation ---
 
 (deftest validate-proposal-invalid-target
@@ -110,6 +113,29 @@
                             :delta 0.05 :goal "improve accuracy"}]
                  :baseline-results []})]
     (is (.contains prompt "goal=\"improve accuracy\""))))
+
+(deftest format-history-with-skipped-records
+  ;; Skipped records have no :target — must not NPE
+  (let [prompt (intro/build-meta-prompt
+                {:system-prompt "test" :examples ["a"] :rules []
+                 :history [{:outcome :skipped :rationale "Parse failure"}]
+                 :baseline-results []})]
+    (is (string? prompt))
+    (is (.contains prompt "skipped"))))
+
+;; --- Load history ---
+
+(deftest load-history-missing-file
+  (is (= [] (intro/load-history "/tmp/nonexistent-introspect-history.edn"))))
+
+(deftest load-history-corrupted-file
+  (let [path (str "/tmp/introspect-test-corrupted-" (System/currentTimeMillis) ".edn")]
+    (spit path "not valid edn {{")
+    (try
+      ;; Should not crash the process
+      (is (= [] (intro/load-history path)))
+      (finally
+        (.delete (java.io.File. path))))))
 
 ;; --- Score calculation ---
 

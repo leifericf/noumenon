@@ -29,11 +29,15 @@
   (str (.getFile (io/resource resource-name))))
 
 (defn load-history
-  "Load improvement history from file. Returns [] if missing."
+  "Load improvement history from file. Returns [] if missing or corrupted."
   [path]
   (let [f (io/file path)]
     (if (.exists f)
-      (edn/read-string (slurp f))
+      (try (let [data (edn/read-string (slurp f))]
+             (if (vector? data) data []))
+           (catch Exception e
+             (log! (str "introspect: failed to read history: " (.getMessage e)))
+             []))
       [])))
 
 ;; --- Gap analysis ---
@@ -80,11 +84,12 @@
     (->> history
          (map-indexed
           (fn [i {:keys [target rationale outcome delta goal]}]
-            (str "Iteration " (inc i) ": target=" (name target)
-                 " outcome=" (name outcome)
-                 (when delta (str " delta=" (format "%+.3f" delta)))
+            (str "Iteration " (inc i)
+                 ": target=" (if target (name target) "unknown")
+                 " outcome=" (if outcome (name outcome) "unknown")
+                 (when delta (str " delta=" (format "%+.3f" (double delta))))
                  (when goal (str " goal=\"" goal "\""))
-                 "\n  " rationale)))
+                 "\n  " (or rationale "no rationale"))))
          (str/join "\n\n"))))
 
 (defn- format-query-catalog []
@@ -123,14 +128,15 @@
 (defn parse-proposal
   "Parse the optimizer LLM's response into a proposal map."
   [text]
-  (try
-    (let [cleaned (analyze/strip-markdown-fences text)
-          parsed  (edn/read-string cleaned)]
-      (when (map? parsed)
-        parsed))
-    (catch Exception e
-      (log! (str "introspect: parse error: " (.getMessage e)))
-      nil)))
+  (when text
+    (try
+      (let [cleaned (analyze/strip-markdown-fences text)
+            parsed  (edn/read-string cleaned)]
+        (when (map? parsed)
+          parsed))
+      (catch Exception e
+        (log! (str "introspect: parse error: " (.getMessage e)))
+        nil))))
 
 (defn- valid-query-names []
   (set (query/list-query-names)))
@@ -291,13 +297,19 @@
 
 ;; --- Git commit ---
 
+(def ^:private committable-paths
+  "Paths safe to git-add during introspect commits."
+  ["resources/prompts/" "resources/queries/" "resources/model/" "src/noumenon/"])
+
 (defn- git-commit-improvement!
-  "Commit an improvement to git with a descriptive message."
+  "Commit an improvement to git with a descriptive message.
+   Only stages files under known safe paths — never stages .env, data/, etc."
   [repo-path {:keys [target rationale delta]}]
   (let [msg (str "introspect(" (name target) "): " rationale
-                 (when delta (str " [" (format "%+.3f" delta) "]")))]
+                 (when delta (str " [" (format "%+.3f" (double delta)) "]")))]
     (log! (str "introspect: committing: " msg))
-    (shell/sh "git" "-C" (str repo-path) "add" "-A")
+    (doseq [p committable-paths]
+      (shell/sh "git" "-C" (str repo-path) "add" p))
     (shell/sh "git" "-C" (str repo-path) "commit" "-m" msg)))
 
 ;; --- Agent-mode evaluation ---
