@@ -158,6 +158,13 @@
   (when-let [vars (seq (extract-find-vars query-form))]
     (str ";; Columns: " (str/join ", " vars) "\n")))
 
+(defn- query-uses-rules?
+  "Returns true if the Datalog query form references the rules variable `%`."
+  [query-form]
+  (->> (flatten (seq query-form))
+       (some #{(symbol "%")})
+       boolean))
+
 (defn- dispatch-query
   "Execute a Datalog query against db. Returns result text with optional truncation note."
   [meta-db db parsed-args]
@@ -165,16 +172,18 @@
     (if-let [err (validate-query q)]
       (str "Query rejected: " err)
       (try
-        (let [limit  (min (or (:limit parsed-args) default-row-limit) max-row-limit)
-              rules  (artifacts/load-rules meta-db)
-              f      (future (try
-                               (d/q q db rules)
-                               (catch Exception e
-                                 (if (str/includes? (str (.getMessage e)) "arity")
-                                   (d/q q db)
-                                   (throw e)))
-                               (catch OutOfMemoryError _
-                                 ::oom)))
+        (let [limit      (min (or (:limit parsed-args) default-row-limit) max-row-limit)
+              rules      (artifacts/load-rules meta-db)
+              uses-rules (query-uses-rules? q)
+              _          (when (and uses-rules (nil? rules))
+                           (throw (ex-info "Query references rules (%) but no rules are loaded. Seed rules first via noumenon_artifact_seed."
+                                           {:query q})))
+              f          (future (try
+                                   (if rules
+                                     (d/q q db rules)
+                                     (d/q q db))
+                                   (catch OutOfMemoryError _
+                                     ::oom)))
               result (deref f query-timeout-ms ::timeout)]
           (condp = result
             ::timeout (do (future-cancel f)

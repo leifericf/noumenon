@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [datomic.client.api :as d]
             [noumenon.agent :as agent]
+            [noumenon.artifacts :as artifacts]
             [noumenon.db :as db]
             [noumenon.query :as query]
             [noumenon.test-helpers :as th]))
@@ -237,6 +238,27 @@
                                                           :args {:query '[:find ?p :where [?e :file/path ?p]]}}))]
     (is (:result result))
     (is (re-find #"exhausted available memory" (:result result)))))
+
+(deftest dispatch-query-errors-when-rules-needed-but-nil
+  (testing "query using % with no rules loaded returns an error, not wrong results"
+    (let [db     (make-test-db)
+          result (with-redefs [artifacts/load-rules (constantly nil)]
+                   (agent/dispatch-tool (make-meta-db) db
+                                        {:tool :query
+                                         :args {:query '[:find ?p
+                                                         :in $ %
+                                                         :where [?e :file/path ?p]
+                                                         (transitive-dep ?e ?dep)]}}))]
+      (is (:result result))
+      (is (re-find #"no rules are loaded" (:result result)))))
+  (testing "query not using % works fine without nil rules"
+    (let [db     (make-test-db)
+          result (with-redefs [artifacts/load-rules (constantly nil)]
+                   (agent/dispatch-tool (make-meta-db) db
+                                        {:tool :query
+                                         :args {:query '[:find ?p :where [?e :file/path ?p]]}}))]
+      (is (:result result))
+      (is (re-find #"core\.clj" (:result result))))))
 
 (deftest dispatch-query-clamps-limit-to-max
   (let [db     (make-test-db)
