@@ -311,9 +311,9 @@
    Returns {:mean double :results [{:id kw :score kw :reasoning str}...]}."
   [db repo-name invoke-fn-factory]
   (let [targets   (bench/pick-benchmark-targets db)
-        questions (->> (bench/load-questions)
-                       (bench/resolve-question-params targets)
-                       (filterv #(= :deterministic (:scoring %))))
+        questions (filterv #(= :deterministic (:scoring %))
+                           (bench/resolve-question-params
+                            (bench/load-questions) targets))
         results   (mapv (fn [q]
                           (log! (str "  eval: " (name (:id q))))
                           (let [{:keys [answer]}
