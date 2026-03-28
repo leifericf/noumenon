@@ -192,4 +192,4 @@ Segment field guidelines:
   :unknown — cannot determine (e.g., generated code, very short, or ambiguous).
   Do not omit — always provide your best assessment."
 
- :version "0.5.0"}
+ :version "0.6.0"}
