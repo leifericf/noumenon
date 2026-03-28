@@ -120,7 +120,9 @@
                                                     :description "Named query — call noumenon_list_queries first to see available names"}
                                       "params" {:type "object"
                                                 :description "Optional parameters for parameterized queries (string keys and values)"
-                                                :additionalProperties {:type "string"}}})
+                                                :additionalProperties {:type "string"}}
+                                      "limit" {:type "integer"
+                                               :description "Maximum number of result rows to return (default 500, max 10000)"}})
                   :required ["query_name" "repo_path"]}}
    {:name "noumenon_list_queries"
     :description "List available named Datalog queries"
@@ -268,14 +270,23 @@
             params     (into {} (map (fn [[k v]] [(keyword k) v])) raw-params)
             result (query/run-named-query db (args "query_name") params)]
         (if (:ok result)
-          (let [rows       (:ok result)
+          (let [all-rows   (:ok result)
+                total      (count all-rows)
+                limit      (min (or (some-> (args "limit") long) 500) 10000)
+                rows       (take limit all-rows)
+                truncated? (> total limit)
                 query-name (args "query_name")
                 query-def  (query/load-named-query query-name)
                 header     (when-let [cols (:columns query-def)]
                              (str "Columns: " (str/join ", " cols) "\n"))
-                summary    (str "Query '" query-name "': " (count rows) " results\n")]
+                summary    (str "Query '" query-name "': " (count rows)
+                                (when truncated? (str " of " total))
+                                " results\n")]
             (tool-result (str summary header
-                              (str/join "\n" (map pr-str rows)))))
+                              (str/join "\n" (map pr-str rows))
+                              (when truncated?
+                                (str "\n... truncated (" (- total limit) " more rows). "
+                                     "Pass a higher `limit` to see more.")))))
           (tool-error (:error result)))))))
 
 (defn- handle-list-queries [_args _defaults]
