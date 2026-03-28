@@ -3,7 +3,7 @@
 
 ## Available Tools
 
-Emit exactly one EDN map per response. Do not wrap in markdown fences.
+Emit one EDN map per response, or a vector of maps to run multiple queries in parallel (max 5). Do not wrap in markdown fences.
 
 ### Query the database
 {:tool :query :args {:query [:find ... :where ...]}}

@@ -115,17 +115,24 @@
 
 ;; --- Response parsing ---
 
+(def ^:private max-parallel-tools 5)
+
 (defn parse-response
-  "Parse an LLM response string into an EDN tool call.
-   Strips markdown fences if present. Returns the parsed map or
+  "Parse an LLM response string into a vector of EDN tool calls.
+   Accepts a single map or a vector of maps (for parallel execution).
+   Strips markdown fences if present. Returns a vector of maps or
    {:parse-error string} if unparseable."
   [text]
   (let [cleaned (analyze/strip-markdown-fences text)]
     (try
       (let [parsed (edn/read-string cleaned)]
-        (if (map? parsed)
-          parsed
-          {:parse-error (str "Expected EDN map, got: " (type parsed))}))
+        (cond
+          (map? parsed)
+          [parsed]
+          (and (vector? parsed) (seq parsed) (every? map? parsed))
+          (vec (take max-parallel-tools parsed))
+          :else
+          {:parse-error (str "Expected EDN map or vector of maps, got: " (type parsed))}))
       (catch Exception e
         {:parse-error (str "EDN parse error: " (.getMessage e) "\nRaw text: " text)}))))
 
@@ -312,15 +319,27 @@
          :iterations (inc iterations)
          :total-usage usage
          :max-iterations max-iterations}
-        (let [{:keys [result answer]} (dispatch-tool db parsed)]
-          (if answer
+        ;; parsed is a vector of tool calls — check for :answer first
+        (if-let [answer-call (some #(when (= :answer (:tool %)) %) parsed)]
+          (let [{:keys [answer]} (dispatch-tool db answer-call)]
             {:done {:answer answer
                     :steps  (conj steps (assoc step :answer answer))
                     :usage  (assoc usage :iterations (inc iterations))
-                    :status :answered}}
-            {:messages (tool-result-transition messages (:text response) result
+                    :status :answered}})
+          ;; Execute all tool calls (in parallel if >1)
+          (let [results (if (= 1 (count parsed))
+                          [(dispatch-tool db (first parsed))]
+                          (pmap #(dispatch-tool db %) parsed))
+                combined (if (= 1 (count results))
+                           (:result (first results))
+                           (->> results
+                                (map-indexed (fn [i r]
+                                               (str "Tool result (" (inc i) "/" (count results) "):\n"
+                                                    (:result r))))
+                                (str/join "\n\n")))]
+            {:messages (tool-result-transition messages (:text response) combined
                                                iterations max-iterations)
-             :steps (conj steps (assoc step :tool-result result))
+             :steps (conj steps (assoc step :tool-result combined))
              :iterations (inc iterations)
              :total-usage usage
              :max-iterations max-iterations}))))))

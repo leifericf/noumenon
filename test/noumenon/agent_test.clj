@@ -25,15 +25,15 @@
 ;; --- Tier 0: parse-response ---
 
 (deftest parse-response-valid-edn
-  (is (= {:tool :query :args {:query [:find '?e :where ['?e :file/path]]}}
+  (is (= [{:tool :query :args {:query [:find '?e :where ['?e :file/path]]}}]
          (agent/parse-response "{:tool :query :args {:query [:find ?e :where [?e :file/path]]}}"))))
 
 (deftest parse-response-strips-markdown-fences
-  (is (= {:tool :answer :args {:text "hello"}}
+  (is (= [{:tool :answer :args {:text "hello"}}]
          (agent/parse-response "```edn\n{:tool :answer :args {:text \"hello\"}}\n```"))))
 
 (deftest parse-response-strips-clojure-fences
-  (is (= {:tool :schema}
+  (is (= [{:tool :schema}]
          (agent/parse-response "```clojure\n{:tool :schema}\n```"))))
 
 (deftest parse-response-returns-error-on-invalid-edn
@@ -45,8 +45,12 @@
     (is (:parse-error result))))
 
 (deftest parse-response-returns-error-on-non-map
-  (let [result (agent/parse-response "[:not :a :map]")]
-    (is (:parse-error result))))
+  (testing "vector of non-maps is rejected"
+    (let [result (agent/parse-response "[:not :a :map]")]
+      (is (:parse-error result))))
+  (testing "vector of maps is accepted"
+    (is (= [{:tool :query :args {:query []}} {:tool :schema}]
+           (agent/parse-response "[{:tool :query :args {:query []}} {:tool :schema}]")))))
 
 ;; --- Tier 0: schema introspection ---
 
