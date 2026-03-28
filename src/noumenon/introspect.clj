@@ -273,11 +273,19 @@
 (defmethod revert-modification! :rules [{:keys [meta-conn]} original]
   (artifacts/save-rules! meta-conn original :introspect))
 
+(defn- project-root
+  "Return the project root directory, preferring the noumenon.project.dir
+   system property over user.dir."
+  []
+  (System/getProperty "noumenon.project.dir" (System/getProperty "user.dir")))
+
 (defn- validate-code-path!
-  "Resolve canonical path and ensure it stays within src/noumenon/."
+  "Resolve canonical path and ensure it stays within src/noumenon/.
+   Anchors to noumenon.project.dir (or user.dir) so the confinement
+   boundary is stable regardless of JVM CWD."
   [file]
   (let [canonical (.getCanonicalPath (io/file file))
-        src-dir   (.getCanonicalPath (io/file "src/noumenon/"))]
+        src-dir   (.getCanonicalPath (io/file (project-root) "src/noumenon/"))]
     (when-not (str/starts-with? canonical (str src-dir "/"))
       (throw (ex-info "Code path escapes src/noumenon/" {:file file :canonical canonical})))
     canonical))
@@ -546,8 +554,8 @@
   [{:introspect.run/id              run-id
     :introspect.run/completed-at    (java.util.Date.)
     :introspect.run/duration-ms     (long (- (System/currentTimeMillis)
-                                              (.getTime ^java.util.Date
-                                                        (or started-at (java.util.Date.)))))
+                                             (.getTime ^java.util.Date
+                                              (or started-at (java.util.Date.)))))
     :introspect.run/iteration-count (long iteration-count)
     :introspect.run/improvement-count (long improvement-count)
     :introspect.run/final-mean      (double (or final-mean 0.0))
