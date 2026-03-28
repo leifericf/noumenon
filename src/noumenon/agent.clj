@@ -104,6 +104,20 @@
   [repo-name]
   (str/replace repo-name #"[^a-zA-Z0-9\-_.]" ""))
 
+(defn reset-prompt-cache!
+  "Force re-read of prompt resources from classpath. Call after modifying prompt EDN files."
+  []
+  (alter-var-root #'prompt-template (constantly (delay (-> (query/load-edn-resource "prompts/agent-system.edn") :template))))
+  (alter-var-root #'agent-example-names (constantly (delay (query/load-edn-resource "prompts/agent-examples.edn"))))
+  (alter-var-root #'formatted-examples
+                  (constantly (delay (->> @agent-example-names
+                                          (keep query/load-named-query)
+                                          (map (fn [{:keys [name description query uses-rules]}]
+                                                 (str ";;; " name " — " description "\n"
+                                                      (pr-str query)
+                                                      (when uses-rules "\n;; (uses rules — pass % as second input)"))))
+                                          (str/join "\n\n"))))))
+
 (defn build-system-prompt
   "Render the agent system prompt with live schema, rules, and examples."
   [db repo-name]
