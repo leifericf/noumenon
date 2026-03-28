@@ -171,6 +171,30 @@
     (when sha
       (d/transact conn {:tx-data [{:repo/uri repo-uri :repo/head-sha sha}]}))))
 
+;; --- Commit reclassification ---
+
+(defn reclassify-commits!
+  "Re-run classify-commit on all stored commits and update any stale :commit/kind values.
+   Returns count of commits updated."
+  [conn]
+  (let [db      (d/db conn)
+        commits (d/q '[:find ?e ?msg ?kind
+                       :where
+                       [?e :commit/message ?msg]
+                       [?e :commit/kind ?kind]]
+                     db)
+        stale   (->> commits
+                     (keep (fn [[eid msg old-kind]]
+                             (let [new-kind (git/classify-commit msg)]
+                               (when (not= old-kind new-kind)
+                                 {:db/id eid :commit/kind new-kind}))))
+                     vec)]
+    (when (seq stale)
+      (d/transact conn {:tx-data (conj stale {:db/id "datomic.tx"
+                                              :tx/op :import
+                                              :tx/source :deterministic})}))
+    (count stale)))
+
 ;; --- Sync orchestration ---
 
 (defn update-repo!
@@ -202,6 +226,9 @@
                      (count (:modified changes)) " modified, "
                      (count (:deleted changes)) " deleted")))
         (let [git-r     (git/import-commits! conn repo-path repo-uri)
+              reclass-n (reclassify-commits! conn)
+              _         (when (pos? reclass-n)
+                          (log! (str "Reclassified " reclass-n " commit kinds")))
               files-r   (files/import-files! conn repo-path repo-uri)
               post-r    (when (or fresh?
                                   (seq (:added changes))
@@ -218,13 +245,14 @@
           (update-head-sha! conn repo-path repo-uri)
           (let [elapsed (- (System/currentTimeMillis) start-ms)]
             (log! (str "Update complete (" elapsed " ms)"))
-            (cond-> {:status      (if fresh? :fresh-import :synced)
-                     :head-sha    current
-                     :added       (count (:added changes []))
-                     :modified    (count (:modified changes []))
-                     :deleted     (count (:deleted changes []))
-                     :commits     (:commits-imported git-r 0)
-                     :files       (:files-imported files-r 0)
-                     :imports     (:imports-resolved post-r 0)
+            (cond-> {:status        (if fresh? :fresh-import :synced)
+                     :head-sha      current
+                     :added         (count (:added changes []))
+                     :modified      (count (:modified changes []))
+                     :deleted       (count (:deleted changes []))
+                     :commits       (:commits-imported git-r 0)
+                     :reclassified  reclass-n
+                     :files         (:files-imported files-r 0)
+                     :imports       (:imports-resolved post-r 0)
                      :elapsed-ms  elapsed}
               analyze-r (assoc :analyzed (:files-analyzed analyze-r 0)))))))))
