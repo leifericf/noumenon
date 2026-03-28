@@ -397,27 +397,46 @@
             (nth sorted (quot n 2)))
          2.0))))
 
-(defn evaluate-agent!
-  "Evaluate agent performance on deterministic benchmark questions.
-   Runs eval-runs times (default 1) and takes the median score to
-   reduce variance from LLM non-determinism.
-   Returns {:mean double :results [{:id kw :score kw :reasoning str}...]}."
-  [db repo-name invoke-fn-factory & {:keys [eval-runs] :or {eval-runs 1}}]
+(defn- evaluate-repo!
+  "Evaluate against a single repo. Handles eval-runs for variance reduction."
+  [db repo-name invoke-fn-factory eval-runs]
   (let [targets   (bench/pick-benchmark-targets db)
         questions (filterv #(= :deterministic (:scoring %))
                            (bench/resolve-question-params
                             (bench/load-questions) targets))]
     (if (<= eval-runs 1)
       (evaluate-once! db repo-name invoke-fn-factory questions)
-      (let [runs   (mapv (fn [i]
-                           (log! (str "  eval pass " (inc i) "/" eval-runs))
-                           (evaluate-once! db repo-name invoke-fn-factory questions))
-                         (range eval-runs))
-            med    (median (mapv :mean runs))
-            ;; Return results from the run closest to the median
-            best   (apply min-key #(Math/abs (- (:mean %) med)) runs)]
+      (let [runs (mapv (fn [i]
+                         (log! (str "  eval pass " (inc i) "/" eval-runs))
+                         (evaluate-once! db repo-name invoke-fn-factory questions))
+                       (range eval-runs))
+            med  (median (mapv :mean runs))
+            best (apply min-key #(Math/abs (- (:mean %) med)) runs)]
         (log! (str "  median of " eval-runs " runs: " (format "%.3f" med)))
         best))))
+
+(defn evaluate-agent!
+  "Evaluate agent performance on deterministic benchmark questions.
+   Supports multi-repo: pass :extra-repos [{:db db :repo-name name}...]
+   to evaluate across multiple repos and average the scores.
+   Returns {:mean double :results [...]}."
+  [db repo-name invoke-fn-factory & {:keys [eval-runs extra-repos]
+                                     :or   {eval-runs 1}}]
+  (let [primary (do (log! (str "  evaluating " repo-name))
+                    (evaluate-repo! db repo-name invoke-fn-factory eval-runs))
+        extras  (mapv (fn [{:keys [db repo-name]}]
+                        (log! (str "  evaluating " repo-name))
+                        (evaluate-repo! db repo-name invoke-fn-factory eval-runs))
+                      (or extra-repos []))
+        all     (into [primary] extras)]
+    (if (= 1 (count all))
+      primary
+      (let [agg-mean (/ (reduce + (map :mean all)) (count all))]
+        (log! (str "  aggregate mean across " (count all) " repos: "
+                   (format "%.3f" agg-mean)))
+        {:mean    agg-mean
+         :results (:results primary) ;; per-question detail from primary repo
+         :repo-means (mapv :mean all)}))))
 
 ;; --- Datomic transaction builders (pure) ---
 
