@@ -149,7 +149,7 @@ Segment field guidelines:
   :dead-code — unreachable branches, unused parameters.
   :complex-conditional — long or deeply nested boolean expressions.
 
-:purpose — one-line plain-English description of what this segment does (under 200 chars).
+:purpose — REQUIRED. One-line plain-English description of what this segment does (under 200 chars). Every segment must have a purpose — do not omit.
 
 :safety-concerns — only include if the segment INTRODUCES a concrete vulnerability:
   :sql-injection — unsanitized input in SQL queries.
