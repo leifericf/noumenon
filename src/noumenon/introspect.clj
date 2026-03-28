@@ -479,6 +479,21 @@
 
 ;; --- Datomic transaction builders (pure) ---
 
+(def ^:private max-modification-bytes
+  "Max size for serialized modification stored in Datomic.
+   Datomic dev-local has a ~100KB per-value limit; leave headroom."
+  65536)
+
+(defn- truncate-modification
+  "Serialize a modification map to EDN, truncating to max-modification-bytes.
+   For :code targets the full content lives on disk / in git, so a truncated
+   copy in Datomic is acceptable."
+  [modification]
+  (let [s (pr-str modification)]
+    (if (<= (count s) max-modification-bytes)
+      s
+      (str (subs s 0 max-modification-bytes) "…[truncated]"))))
+
 (defn- iter->tx-data [index {:keys [target goal rationale outcome baseline
                                     result delta modification error]}]
   (let [base {:introspect.iter/index     (inc (long index))
@@ -493,7 +508,7 @@
       delta     (assoc :introspect.iter/delta (double delta))
       error     (assoc :introspect.iter/error error)
       (and (= :improved outcome) modification)
-      (assoc :introspect.iter/modification (pr-str modification)))))
+      (assoc :introspect.iter/modification (truncate-modification modification)))))
 
 (defn run->tx-data
   "Build Datomic tx-data for a completed introspect run. Pure function."
