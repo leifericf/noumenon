@@ -510,37 +510,49 @@
       (and (= :improved outcome) modification)
       (assoc :introspect.iter/modification (truncate-modification modification)))))
 
-(defn run->tx-data
-  "Build Datomic tx-data for a completed introspect run. Pure function."
+(defn- run-start-tx-data
+  "Build tx-data to create the run entity at the start of introspection."
   [{:keys [run-id repo-path commit-sha started-at model-config
            max-iterations prompt-hash examples-hash rules-hash
-           db-basis-t baseline-mean final-mean iteration-count
-           improvement-count cost-usd iter-records]}]
-  (let [iter-entities (vec (map-indexed iter->tx-data iter-records))
-        base {:introspect.run/id                run-id
-              :introspect.run/repo-path         (str repo-path)
-              :introspect.run/started-at        (or started-at (java.util.Date.))
-              :introspect.run/completed-at      (java.util.Date.)
-              :introspect.run/duration-ms       (long (- (System/currentTimeMillis)
-                                                         (.getTime ^java.util.Date
-                                                          (or started-at (java.util.Date.)))))
-              :introspect.run/iteration-count   (long iteration-count)
-              :introspect.run/improvement-count (long improvement-count)
-              :introspect.run/iterations        iter-entities}
-        run-entity
-        (cond-> base
-          commit-sha     (assoc :introspect.run/commit-sha commit-sha)
-          model-config   (assoc :introspect.run/model-config (pr-str model-config))
-          max-iterations (assoc :introspect.run/max-iterations (long max-iterations))
-          prompt-hash    (assoc :introspect.run/prompt-hash prompt-hash)
-          examples-hash  (assoc :introspect.run/examples-hash examples-hash)
-          rules-hash     (assoc :introspect.run/rules-hash rules-hash)
-          db-basis-t     (assoc :introspect.run/db-basis-t (long db-basis-t))
-          baseline-mean  (assoc :introspect.run/baseline-mean (double baseline-mean))
-          final-mean     (assoc :introspect.run/final-mean (double final-mean))
-          cost-usd       (assoc :introspect.run/cost-usd (double cost-usd)))]
-    [run-entity
+           db-basis-t baseline-mean]}]
+  (let [base {:introspect.run/id              run-id
+              :introspect.run/repo-path       (str repo-path)
+              :introspect.run/started-at      (or started-at (java.util.Date.))
+              :introspect.run/iteration-count 0
+              :introspect.run/improvement-count 0}]
+    [(cond-> base
+       commit-sha     (assoc :introspect.run/commit-sha commit-sha)
+       model-config   (assoc :introspect.run/model-config (pr-str model-config))
+       max-iterations (assoc :introspect.run/max-iterations (long max-iterations))
+       prompt-hash    (assoc :introspect.run/prompt-hash prompt-hash)
+       examples-hash  (assoc :introspect.run/examples-hash examples-hash)
+       rules-hash     (assoc :introspect.run/rules-hash rules-hash)
+       db-basis-t     (assoc :introspect.run/db-basis-t (long db-basis-t))
+       baseline-mean  (assoc :introspect.run/baseline-mean (double baseline-mean)))
      {:db/id "datomic.tx" :tx/op :introspect}]))
+
+(defn- iter-tx-data
+  "Build tx-data to persist a single iteration and attach it to the run."
+  [run-id index record]
+  (let [iter-entity (iter->tx-data index record)]
+    [{:introspect.run/id         run-id
+      :introspect.run/iterations [iter-entity]}
+     {:db/id "datomic.tx" :tx/op :introspect}]))
+
+(defn- run-complete-tx-data
+  "Build tx-data to finalize the run entity with completion stats."
+  [{:keys [run-id started-at final-mean iteration-count
+           improvement-count cost-usd]}]
+  [{:introspect.run/id              run-id
+    :introspect.run/completed-at    (java.util.Date.)
+    :introspect.run/duration-ms     (long (- (System/currentTimeMillis)
+                                              (.getTime ^java.util.Date
+                                                        (or started-at (java.util.Date.)))))
+    :introspect.run/iteration-count (long iteration-count)
+    :introspect.run/improvement-count (long improvement-count)
+    :introspect.run/final-mean      (double (or final-mean 0.0))
+    :introspect.run/cost-usd        (double (or cost-usd 0.0))}
+   {:db/id "datomic.tx" :tx/op :introspect}])
 
 ;; --- Iteration ---
 
@@ -693,6 +705,19 @@
                                  (format "%.1f%%" (* 100.0 (:mean baseline)))))
         _             (when max-cost
                         (log! "introspect: WARNING: max-cost budget is not yet tracked (no LLM cost data available)"))
+        ;; Persist the run entity up front so iterations are never orphaned
+        _             (d/transact meta-conn
+                                  {:tx-data (run-start-tx-data
+                                             {:run-id run-id :repo-path repo-path
+                                              :commit-sha commit-sha :started-at started-at
+                                              :model-config model-config
+                                              :max-iterations max-iterations
+                                              :prompt-hash prompt-hash
+                                              :examples-hash examples-hash
+                                              :rules-hash rules-hash
+                                              :db-basis-t db-basis-t
+                                              :baseline-mean (:mean baseline)})})
+        _             (log! (str "introspect: created run " run-id))
         budget-done?  (fn [i]
                         (let [elapsed (- (System/currentTimeMillis) start-ms)]
                           (cond
@@ -703,12 +728,11 @@
                             (and max-ms (> elapsed max-ms))
                             "time budget exhausted")))
         result
-        (loop [i 0, baseline baseline, history history,
-               improvements 0, iter-records []]
+        (loop [i 0, baseline baseline, history history, improvements 0]
           (if-let [reason (budget-done? i)]
             (do (log! (str "introspect: " reason))
                 {:iterations i :improvements improvements
-                 :final-score (:mean baseline) :iter-records iter-records})
+                 :final-score (:mean baseline)})
             (do (log! (str "\nintrospect: === Iteration " (inc i) "/"
                            max-iterations " ==="))
                 (let [{:keys [outcome eval-result record]}
@@ -722,20 +746,18 @@
                         :allowed-targets allowed-targets
                         :eval-runs eval-runs})
                       new-baseline (if (= :improved outcome) eval-result baseline)]
+                  ;; Persist each iteration immediately
+                  (d/transact meta-conn
+                              {:tx-data (iter-tx-data run-id i record)})
                   (recur (inc i) new-baseline (conj history record)
-                         (if (= :improved outcome) (inc improvements) improvements)
-                         (conj iter-records record))))))
-        tx-data
-        (run->tx-data
-         {:run-id run-id :repo-path repo-path :commit-sha commit-sha
-          :started-at started-at :model-config model-config
-          :max-iterations max-iterations :prompt-hash prompt-hash
-          :examples-hash examples-hash :rules-hash rules-hash
-          :db-basis-t db-basis-t :baseline-mean (:mean baseline)
-          :final-mean (:final-score result)
-          :iteration-count (:iterations result)
-          :improvement-count (:improvements result)
-          :cost-usd 0.0 :iter-records (:iter-records result)})]
-    (d/transact meta-conn {:tx-data tx-data})
-    (log! (str "introspect: persisted run " run-id " to meta database"))
+                         (if (= :improved outcome) (inc improvements) improvements))))))]
+    ;; Finalize the run with completion stats
+    (d/transact meta-conn
+                {:tx-data (run-complete-tx-data
+                           {:run-id run-id :started-at started-at
+                            :final-mean (:final-score result)
+                            :iteration-count (:iterations result)
+                            :improvement-count (:improvements result)
+                            :cost-usd 0.0})})
+    (log! (str "introspect: completed run " run-id))
     (assoc result :run-id run-id)))

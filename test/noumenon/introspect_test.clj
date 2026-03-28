@@ -262,35 +262,43 @@
       (is (= :improved (:outcome (first history))))
       (is (= :reverted (:outcome (second history)))))))
 
-;; --- Datomic persistence: run->tx-data ---
+;; --- Datomic persistence: incremental tx-data ---
 
-(deftest run-tx-data-round-trip
-  (let [conn    (th/make-test-conn "introspect-txdata")
-        tx-data (intro/run->tx-data
-                 {:run-id            "test-run-42"
-                  :repo-path         "/test/repo"
-                  :commit-sha        "abc123"
-                  :started-at        (java.util.Date.)
-                  :model-config      {:provider "glm" :model "sonnet"}
-                  :max-iterations    10
-                  :prompt-hash       "hash1"
-                  :examples-hash     "hash2"
-                  :rules-hash        "hash3"
-                  :db-basis-t        100
-                  :baseline-mean     0.5
-                  :final-mean        0.6
-                  :iteration-count   2
-                  :improvement-count 1
-                  :cost-usd          1.23
-                  :iter-records      [{:target :examples :outcome :improved
-                                       :rationale "test" :goal "test goal"
-                                       :baseline 0.5 :result 0.6 :delta 0.1
-                                       :modification {:examples ["a" "b"]}}
-                                      {:target :system-prompt :outcome :reverted
-                                       :rationale "test2" :goal "test goal 2"
-                                       :baseline 0.6 :result 0.55 :delta -0.05}]})]
-    ;; Transact should succeed
-    (d/transact conn {:tx-data tx-data})
+(deftest incremental-tx-data-round-trip
+  (let [conn       (th/make-test-conn "introspect-txdata")
+        started-at (java.util.Date.)
+        run-start  (#'intro/run-start-tx-data
+                    {:run-id         "test-run-42"
+                     :repo-path      "/test/repo"
+                     :commit-sha     "abc123"
+                     :started-at     started-at
+                     :model-config   {:provider "glm" :model "sonnet"}
+                     :max-iterations 10
+                     :prompt-hash    "hash1"
+                     :examples-hash  "hash2"
+                     :rules-hash     "hash3"
+                     :db-basis-t     100
+                     :baseline-mean  0.5})]
+    ;; Create the run entity
+    (d/transact conn {:tx-data run-start})
+    ;; Persist iteration 1 (improved)
+    (d/transact conn {:tx-data (#'intro/iter-tx-data
+                                "test-run-42" 0
+                                {:target :examples :outcome :improved
+                                 :rationale "test" :goal "test goal"
+                                 :baseline 0.5 :result 0.6 :delta 0.1
+                                 :modification {:examples ["a" "b"]}})})
+    ;; Persist iteration 2 (reverted)
+    (d/transact conn {:tx-data (#'intro/iter-tx-data
+                                "test-run-42" 1
+                                {:target :system-prompt :outcome :reverted
+                                 :rationale "test2" :goal "test goal 2"
+                                 :baseline 0.6 :result 0.55 :delta -0.05})})
+    ;; Finalize the run
+    (d/transact conn {:tx-data (#'intro/run-complete-tx-data
+                                {:run-id "test-run-42" :started-at started-at
+                                 :final-mean 0.6 :iteration-count 2
+                                 :improvement-count 1 :cost-usd 1.23})})
     ;; Query back the run
     (let [db  (d/db conn)
           run (d/pull db '[*] [:introspect.run/id "test-run-42"])]
