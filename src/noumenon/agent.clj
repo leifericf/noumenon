@@ -164,7 +164,15 @@
                    (when (> (count taken) limit)
                      (str "\n;; Showing " limit " of " limit "+ results. Refine your query or specify :limit."))))))
         (catch Exception e
-          (str "Query error: " (.getMessage e)))))))
+          (let [msg (.getMessage e)]
+            (str "Query error: " msg
+                 (cond
+                   (str/includes? (str msg) "arity")
+                   "\nHint: check that the number of :in bindings matches the inputs provided."
+                   (str/includes? (str msg) "Could not find")
+                   "\nHint: attribute may be misspelled. Use {:tool :schema} to verify."
+                   :else
+                   "\nHint: simplify the query or use {:tool :schema} to check attribute names."))))))))
 
 (defn- dispatch-schema [db]
   (query/schema-summary db))
@@ -225,27 +233,37 @@
        "If your answer is incomplete, state what is missing in one sentence. "
        "Do not describe hypothetical queries or what you would do with more budget."))
 
+(defn- iteration-prefix [iterations max-iterations]
+  (str "[Iteration " (inc iterations) "/" max-iterations "] "))
+
 (defn- parse-error-transition
-  [messages response-text parse-error]
-  (let [error-msg (str "Your response could not be parsed as EDN. Error: "
-                       parse-error
-                       "\nPlease respond with exactly one EDN map.")]
+  [messages response-text parse-error iterations max-iterations]
+  (let [error-msg (str (iteration-prefix iterations max-iterations)
+                       "Parse error: " parse-error
+                       "\nRespond with exactly one EDN map, e.g.: "
+                       "{:tool :query :args {:query [:find ?e :where [?e :file/path]]}}")]
     (conj messages
           {:role "assistant" :content response-text}
           {:role "user" :content error-msg})))
 
 (defn- tool-result-transition
-  [messages response-text result]
+  [messages response-text result iterations max-iterations]
   (conj messages
         {:role "assistant" :content response-text}
-        {:role "user" :content (str "Tool result:\n" result)}))
+        {:role "user" :content (str (iteration-prefix iterations max-iterations)
+                                    "Tool result:\n" result)}))
+
+(def ^:private early-warning
+  "You have 3 iterations remaining. Start synthesizing your answer soon.")
 
 (defn- maybe-append-nudge
-  "Append the budget nudge if this is the last allowed iteration."
+  "Append early warning or hard budget nudge as iterations wind down."
   [messages iterations max-iterations]
-  (if (>= iterations (dec max-iterations))
-    (conj messages {:role "user" :content budget-nudge})
-    messages))
+  (let [remaining (- max-iterations iterations)]
+    (cond
+      (<= remaining 1) (conj messages {:role "user" :content budget-nudge})
+      (= remaining 3)  (conj messages {:role "user" :content early-warning})
+      :else            messages)))
 
 (defn- next-state
   [{:keys [db invoke-fn]}
@@ -271,7 +289,8 @@
                          :raw-text (:text response)
                          :parsed parsed}]
       (if-let [parse-error (:parse-error parsed)]
-        {:messages (parse-error-transition messages (:text response) parse-error)
+        {:messages (parse-error-transition messages (:text response) parse-error
+                                           iterations max-iterations)
          :steps (conj steps (assoc step :error parse-error))
          :iterations (inc iterations)
          :total-usage usage
@@ -282,7 +301,8 @@
                     :steps  (conj steps (assoc step :answer answer))
                     :usage  (assoc usage :iterations (inc iterations))
                     :status :answered}}
-            {:messages (tool-result-transition messages (:text response) result)
+            {:messages (tool-result-transition messages (:text response) result
+                                               iterations max-iterations)
              :steps (conj steps (assoc step :tool-result result))
              :iterations (inc iterations)
              :total-usage usage
