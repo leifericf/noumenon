@@ -2,9 +2,9 @@
  :description "LLM cost per analyzed file, most expensive first"
  :query [:find ?path (sum ?in) (sum ?out) (sum ?cost)
          :where
+         [?file :sem/summary _ ?tx]
          [?tx :tx/op :analyze]
          [?tx :tx/input-tokens ?in]
          [?tx :tx/output-tokens ?out]
          [?tx :tx/cost-usd ?cost]
-         [?file :prov/analyzed-at _ ?tx]
          [?file :file/path ?path]]}
