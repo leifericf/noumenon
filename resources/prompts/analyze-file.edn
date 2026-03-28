@@ -85,13 +85,14 @@ File-level field guidelines:
   :driver — adapter to external systems (DB, filesystem, network, APIs).
   :api — external-facing interface (HTTP endpoints, CLI, public API surface).
   :util — general-purpose helpers with no domain knowledge.
+  For declarative data files (EDN, JSON, YAML schemas, query definitions, config files, SQL migrations), always use :util — architectural layer is a code concept.
 
 :category — domain role of this file:
   :backend — server-side logic, API handlers, business rules, data processing.
   :frontend — UI components, rendering, DOM manipulation, client-side logic.
   :infrastructure — CI/CD, Docker, deploy scripts, cloud/platform config.
   :configuration — app config files, env setup, feature flags, settings.
-  :data — schemas, migrations, seeds, ORM/DB models, data definitions.
+  :data — schemas, migrations, seeds, ORM/DB models, data definitions, query definitions, EDN/JSON/YAML data.
   :testing — tests, test helpers, fixtures, mocks.
   :documentation — doc generators, examples, API docs.
   :tooling — build scripts, linters, code generators, dev utilities.
