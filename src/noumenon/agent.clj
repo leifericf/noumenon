@@ -136,6 +136,20 @@
   "Maximum time allowed for a single Datalog query (30 seconds)."
   30000)
 
+(defn- extract-find-vars
+  "Extract variable names from a Datalog :find clause for column headers."
+  [query-form]
+  (when (sequential? query-form)
+    (let [find-idx (.indexOf (vec query-form) :find)]
+      (when (>= find-idx 0)
+        (->> (drop (inc find-idx) query-form)
+             (take-while #(not (keyword? %)))
+             (map pr-str))))))
+
+(defn- format-column-header [query-form]
+  (when-let [vars (seq (extract-find-vars query-form))]
+    (str ";; Columns: " (str/join ", " vars) "\n")))
+
 (defn- dispatch-query
   "Execute a Datalog query against db. Returns result text with optional truncation note."
   [db parsed-args]
@@ -160,7 +174,8 @@
             ::oom     "Query exhausted available memory. Simplify the query or add more constraints."
             (let [taken  (vec (take (inc limit) result))
                   capped (take limit taken)]
-              (str (pr-str (vec capped))
+              (str (format-column-header q)
+                   (pr-str (vec capped))
                    (when (> (count taken) limit)
                      (str "\n;; Showing " limit " of " limit "+ results. Refine your query or specify :limit."))))))
         (catch Exception e
