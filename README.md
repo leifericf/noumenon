@@ -164,7 +164,7 @@ The CLI and [MCP](https://modelcontextprotocol.io) server expose the same capabi
 
 ## Named Queries
 
-50 named Datalog queries live in `resources/queries/` (EDN), covering hotspots, ownership, dependencies, complexity, churn, impact analysis, LLM cost tracking, and benchmarks. Run `clj -M:run query list` to see them all.
+48 named Datalog queries live in `resources/queries/` (EDN), covering hotspots, ownership, dependencies, complexity, churn, impact analysis, issue tracking, LLM cost tracking, and benchmarks. Run `clj -M:run query list` to see them all.
 
 ## Data Model
 
@@ -180,7 +180,7 @@ Noumenon combines four sources:
 | Entity | Identity | Key attributes |
 |---|---|---|
 | `repo` | `:repo/uri` | `:repo/commits`, `:repo/head-sha` |
-| `commit` | `:git/sha` (`:git/type :commit`) | `:commit/message`, `:commit/kind`, `:commit/authored-at`, `:commit/committed-at`, `:commit/additions`, `:commit/deletions` |
+| `commit` | `:git/sha` (`:git/type :commit`) | `:commit/message`, `:commit/kind`, `:commit/issue-refs`, `:commit/authored-at`, `:commit/committed-at`, `:commit/additions`, `:commit/deletions` |
 | `person` | `:person/email` | `:person/name` |
 | `file` | `:file/path` | `:file/ext`, `:file/lang`, `:file/lines`, `:file/size`, `:file/imports`, `:sem/*` |
 | `directory` | `:dir/path` | `:dir/parent`, `:dir/repo` |
@@ -198,6 +198,7 @@ flowchart LR
   Commit -->|:commit/committer| Committer[person]
   Commit -->|:commit/parents| Parent[commit]
   Commit -->|:commit/changed-files| File[file]
+  Commit -.->|:commit/issue-refs| IssueRef[("#123 / PROJ-456 / URL")]
 
   File -->|:file/directory| Dir[directory]
   Dir -->|:dir/parent| ParentDir[directory]
