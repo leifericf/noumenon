@@ -118,7 +118,22 @@
     (let [src "mod parser;\npub mod lexer;\nmod tests {\n    // inline\n}"
           result (imports/extract-imports :rust src)]
       (is (some #{"parser"} result))
-      (is (some #{"lexer"} result)))))
+      (is (some #{"lexer"} result))))
+  (testing "extracts use crate:: statements"
+    (let [src "use crate::config;\nuse crate::search::SearchWorker;\nuse self::util;\nuse super::parent;"
+          result (imports/extract-imports :rust src)]
+      (is (some #{"config"} result))
+      (is (some #{"search"} result))
+      (is (some #{"util"} result))
+      (is (some #{"parent"} result))))
+  (testing "extracts pub(crate) mod"
+    (let [src "pub(crate) mod flags;"
+          result (imports/extract-imports :rust src)]
+      (is (some #{"flags"} result))))
+  (testing "deduplicates mod + use of same name"
+    (let [src "mod config;\nuse crate::config::Settings;"
+          result (imports/extract-imports :rust src)]
+      (is (= 1 (count (filter #{"config"} result)))))))
 
 ;; --- Rust resolution ---
 

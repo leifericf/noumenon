@@ -345,8 +345,11 @@ end")
 ;; ---------------------------------------------------------------------------
 
 (defmethod extract-imports :rust [_ text]
-  (->> (re-seq #"(?m)^\s*(?:pub\s+)?mod\s+(\w+)\s*;" text)
-       (mapv second)))
+  (let [mods (->> (re-seq #"(?m)^\s*(?:pub(?:\(crate\))?\s+)?mod\s+(\w+)\s*;" text)
+                  (mapv second))
+        uses (->> (re-seq #"(?m)^\s*use\s+(?:crate|self|super)::(\w+)" text)
+                  (mapv second))]
+    (distinct (into mods uses))))
 
 (defn- resolve-rust-mod [mod-name source-path all-paths]
   (let [dir (str/join "/" (butlast (str/split source-path #"/")))]
