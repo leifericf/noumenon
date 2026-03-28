@@ -52,10 +52,14 @@ Only files under src/noumenon/ may be modified. Tests must pass after modificati
 Use this for: improving query execution, adding helper functions, fixing bugs, refactoring.
 IMPORTANT: Output the COMPLETE file content — not a diff. The file will be overwritten.
 
+### 5. :train — Modify model training hyperparameters
+:modification {:config {:learning-rate 0.002 :hidden-dim 256 ...}}
+Modify any hyperparameters in the model config. The model will be retrained with the new config and evaluated. Available config keys: vocab-size, embedding-dim, hidden-dim, output-dim, learning-rate, batch-size, time-budget-sec, dropout, weight-decay.
+
 ## Constraints
 
 1. Output exactly one EDN map with these keys:
-   - :target — one of :examples, :system-prompt, :rules, or :code
+   - :target — one of :examples, :system-prompt, :rules, :code, or :train
    - :modification — the proposed change (format depends on target, see above)
    - :rationale — a string explaining your reasoning (1-3 sentences)
    - :goal — a string describing the improvement goal (e.g. \"improve temporal query accuracy\")

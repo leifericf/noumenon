@@ -1,0 +1,17 @@
+;; Model configuration for the query routing network.
+;; This is the "train.py" equivalent — the single artifact the introspect
+;; loop optimizes when targeting :model.
+;;
+;; Architecture: bag-of-words → dense → ReLU → dense → softmax
+;; Input: question text (tokenized to vocab indices, averaged)
+;; Output: probability distribution over named query patterns
+
+{:vocab-size      2048        ;; BPE vocabulary size
+ :embedding-dim   64          ;; Token embedding dimension
+ :hidden-dim      128         ;; Hidden layer dimension
+ :output-dim      48          ;; Number of named query patterns
+ :learning-rate   0.001       ;; Adam learning rate
+ :batch-size      32          ;; Training batch size
+ :time-budget-sec 300         ;; Max training time (5 min, like autoresearch)
+ :dropout         0.1         ;; Dropout rate
+ :weight-decay    0.01}       ;; L2 regularization

@@ -6,7 +6,9 @@
             [noumenon.agent :as agent]
             [noumenon.analyze :as analyze]
             [noumenon.benchmark :as bench]
+            [noumenon.model :as model]
             [noumenon.query :as query]
+            [noumenon.training-data :as td]
             [noumenon.util :refer [log!]]))
 
 ;; --- Loading ---
@@ -156,8 +158,8 @@
   [proposal]
   (let [{:keys [target modification rationale]} proposal]
     (cond
-      (not (#{:examples :system-prompt :rules :code} target))
-      "Invalid :target — must be :examples, :system-prompt, :rules, or :code"
+      (not (#{:examples :system-prompt :rules :code :train} target))
+      "Invalid :target — must be :examples, :system-prompt, :rules, :code, or :train"
 
       (not (string? rationale))
       "Missing or invalid :rationale"
@@ -196,6 +198,10 @@
       (and (= :code target)
            (validate-code-target modification))
       (validate-code-target modification)
+
+      (and (= :train target)
+           (not (map? (:config modification))))
+      "For :train target, :modification must contain {:config {...}}"
 
       :else nil)))
 
@@ -244,7 +250,13 @@
     (let [{:keys [file content]} modification
           orig (read-file-content file)]
       (write-code-file! file content)
-      orig)))
+      orig)
+
+    :train
+    (let [orig-config (model/load-config)]
+      (spit (resource-path "model/config.edn")
+            (pr-str (merge orig-config (:config modification))))
+      orig-config)))
 
 (defn- revert-modification!
   "Revert a modification using the saved original."
@@ -255,7 +267,9 @@
     :rules         (write-rules! original)
     :code          (if original
                      (spit (:file modification) original)
-                     (.delete (io/file (:file modification))))))
+                     (.delete (io/file (:file modification))))
+    :train         (spit (resource-path "model/config.edn")
+                         (pr-str original))))
 
 ;; --- Test gate (for code modifications) ---
 
@@ -393,6 +407,17 @@
                   (append-history! history-path record)
                   {:outcome :gate-failed :record record}))
             (do
+              ;; For :train target, build dataset and train the model
+              (when (= :train target)
+                (let [config  (model/load-config)
+                      dataset (td/build-dataset db config)
+                      mdl     (model/init-model config)
+                      _       (model/train! mdl dataset config)
+                      eval-r  (model/evaluate mdl dataset)]
+                  (log! (str "introspect: model accuracy="
+                             (format "%.3f" (:accuracy eval-r))
+                             " top3=" (format "%.3f" (:top3-accuracy eval-r))))
+                  (model/save-model! mdl "data/models/latest.edn")))
               ;; Reset agent's cached prompts (for prompt/example/rule changes)
               (when (#{:examples :system-prompt :rules} target)
                 (agent/reset-prompt-cache!))
