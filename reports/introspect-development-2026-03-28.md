@@ -163,6 +163,22 @@ Introspect results are persisted to a dedicated Datomic database (`noumenon-inte
 2. **No import dependency.** The meta database exists automatically — you don't need to import Noumenon's own repo to use introspect.
 3. **Future meta-data has a home.** Cost tracking, provider config, user preferences, model weights — all belong here.
 
+**Why this was easy — Clojure and Datomic's design decisions:**
+
+Adding a separate internal database alongside the per-repo databases required changing exactly two lines of production code: one call to `db/connect-and-ensure-schema` in `main.clj` and one in `mcp.clj`. No new infrastructure, no configuration files, no connection pool setup, no migration tooling. This is worth pausing on, because it reflects several deliberate design decisions by Rich Hickey and the Datomic/Clojure teams that compound in exactly this kind of scenario:
+
+*Databases are values, not servers.* Datomic Local runs in-process — there is no separate database server to configure, no ports to manage, no Docker containers. Creating a new database is a function call: `(d/create-database client {:db-name "noumenon-internal"})`. It returns immediately. The database is just another directory on disk, co-located with the existing repo databases under the same storage root. This is why Noumenon can create one database per repository without any operational overhead — each `import` just creates a new database by name.
+
+*Schema is data, not DDL.* The introspect schema is a 167-line EDN file — the same data format used for everything else in Clojure. There is no SQL, no migration framework, no schema versioning tool. `ensure-schema` transacts the schema attributes idempotently: new attributes are added, existing ones are skipped. Adding the introspect schema to the system was one line in `schema.clj`: appending `"schema/introspect.edn"` to the `schema-files` vector. The schema is transacted into every database on connect, so the internal database and repo databases share the same schema without any additional plumbing.
+
+*Immutable history by default.* Every Datomic transaction is an immutable fact with a timestamp. There is no `UPDATE` or `DELETE` — only accretion. This means introspect runs are automatically versioned. You can query what the database looked like at any past transaction point. The `db-basis-t` attribute we capture on each run is not an afterthought bolted on for reproducibility — it is the native way Datomic identifies database states. Asking "what did the knowledge graph look like when this introspect run scored 0.59?" is a one-liner: `(d/as-of db basis-t)`.
+
+*The database is a value you can pass around.* In Clojure, `(d/db conn)` returns an immutable snapshot — a value — not a mutable reference. The introspect loop passes the repo's `db` value and the meta database's `meta-conn` as ordinary function arguments. There is no global state, no singleton connection manager, no dependency injection framework. The `evaluate-agent!` function receives `db` and queries it; `run-loop!` receives `meta-conn` and transacts to it. Two databases, two arguments, zero ceremony.
+
+*Datalog queries are data too.* The five new introspect queries are EDN files in `resources/queries/`. They are not compiled, not generated, not wrapped in macros. The same `query/run-named-query` function that answers "which files are most imported?" against a repo database can answer "which introspect iterations improved the score?" against the meta database. The query engine does not know or care which database it is querying.
+
+These are not incidental features. They are consequences of Clojure's core philosophy — immutable values, data-oriented programming, and the relentless elimination of incidental complexity. The fact that adding a second database to a running system was a two-line change is not because the system is simple. It is because the tools were designed by someone who understood that the cost of infrastructure should be proportional to the complexity of the problem, not to the number of moving parts.
+
 **Schema** (`resources/schema/introspect.edn`):
 
 Two entity types following the benchmark pattern:
