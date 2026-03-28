@@ -129,7 +129,7 @@
         (str/replace "{{total-queries}}" (str total-queries))
         (str/replace "{{all-queries}}" (format-query-catalog))
         (str/replace "{{current-rules}}" (pr-str (or rules [])))
-        (str/replace "{{baseline-mean}}" (format "%.3f" base-mean))
+        (str/replace "{{baseline-mean}}" (format "%.1f%%" (* 100.0 base-mean)))
         (str/replace "{{baseline-scores}}" (format-scores baseline-results))
         (str/replace "{{gap-analysis}}" (gap-analysis baseline-results))
         (str/replace "{{history}}" (format-history history)))))
@@ -445,7 +445,7 @@
                        (range eval-runs))
             med  (median (mapv :mean runs))
             best (apply min-key #(Math/abs (- (:mean %) med)) runs)]
-        (log! (str "  median of " eval-runs " runs: " (format "%.3f" med)))
+        (log! (str "  median of " eval-runs " runs: " (format "%.1f%%" (* 100.0 med))))
         best))))
 
 (defn evaluate-agent!
@@ -466,7 +466,7 @@
       primary
       (let [agg-mean (/ (reduce + (map :mean all)) (count all))]
         (log! (str "  aggregate mean across " (count all) " repos: "
-                   (format "%.3f" agg-mean)))
+                   (format "%.1f%%" (* 100.0 agg-mean))))
         {:mean             agg-mean
          :results          (:results primary) ;; per-question detail from primary repo
          :repo-means       (mapv :mean all)
@@ -627,9 +627,9 @@
                            (format "%.0f%%" (* 100 iter-increase))
                            " — rejecting")))
               (if improved?
-                (do (log! (str "introspect: IMPROVED " (format "%+.3f" delta)
-                               " (" (format "%.3f" base-mean)
-                               " -> " (format "%.3f" new-mean) ")"))
+                (do (log! (str "introspect: IMPROVED " (format "%+.1f%%" (* 100 delta))
+                               " (" (format "%.1f%%" (* 100 base-mean))
+                               " -> " (format "%.1f%%" (* 100 new-mean)) ")"))
                     (when git-commit?
                       (git-commit-improvement! repo-path
                                                {:target target :rationale rationale
@@ -639,7 +639,7 @@
                                                :baseline base-mean :result new-mean
                                                :delta delta :modification modification)
                      :eval-result eval-result})
-                (do (log! (str "introspect: reverted (delta=" (format "%+.3f" delta) ")"))
+                (do (log! (str "introspect: reverted (delta=" (format "%+.1f%%" (* 100 delta)) ")"))
                     {:outcome :reverted
                      :record  (make-record proposal :reverted
                                            :baseline base-mean :result new-mean
@@ -669,7 +669,7 @@
         baseline      (evaluate-agent! db repo-name invoke-fn-factory
                                        :eval-runs eval-runs)
         _             (log! (str "introspect: baseline mean="
-                                 (format "%.3f" (:mean baseline))))
+                                 (format "%.1f%%" (* 100.0 (:mean baseline)))))
         _             (when max-cost
                         (log! "introspect: WARNING: max-cost budget is not yet tracked (no LLM cost data available)"))
         budget-done?  (fn [i]
