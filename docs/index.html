@@ -45,7 +45,7 @@
     </div>
     <h1>Ask your codebase precise questions.<br>Get grounded answers.</h1>
     <p class="hero-sub">
-      Noumenon builds a <a href="https://www.datomic.com">Datomic</a> knowledge graph from your repository so agents query structured facts instead of dumping raw files into context windows. In benchmarks across 9 repos and 8 languages, graph-augmented answers scored <strong>2&times; higher</strong> on average.
+      Noumenon builds a <a href="https://www.datomic.com">Datomic</a> knowledge graph from your repository so agents query structured facts instead of dumping raw files into context windows. In benchmarks across 9 repos and 8 languages, graph-augmented answers scored <strong>2.8&times; higher</strong> on average.
     </p>
     <div class="hero-actions">
       <a href="#get-started" class="btn btn-primary">Get Started</a>
@@ -85,7 +85,7 @@
     <div class="problem-grid">
       <div class="card">
         <h3>Context windows don't scale</h3>
-        <p>A Datalog query returns exactly the entities a question needs. In benchmarks, graph context improved LLM accuracy by <strong>+19.7 percentage points</strong> on average.</p>
+        <p>A Datalog query returns exactly the entities a question needs. In benchmarks, graph context improved LLM accuracy by <strong>+27.5 percentage points</strong> on average.</p>
       </div>
       <div class="card">
         <h3>Answers you can't verify</h3>
@@ -139,7 +139,7 @@
       </div>
       <div class="principle">
         <span class="principle-label text-purple">Measurable</span>
-        <p>Built-in A/B benchmarks. 9 repos, 8 languages: 18.2% (raw) to 37.9% (graph-augmented).</p>
+        <p>Built-in A/B benchmarks. 9 repos, 8 languages: 15.2% (raw) to 42.7% (graph-augmented).</p>
       </div>
       <div class="principle">
         <span class="principle-label text-muted">Local</span>
@@ -209,28 +209,28 @@
         </tr>
       </thead>
       <tbody>
-        <tr><td>flask</td><td>Python</td><td>12.5%</td><td>41.2%</td><td class="text-green"><strong>+28.8pp</strong></td></tr>
-        <tr><td>fzf</td><td>Go</td><td>13.8%</td><td>42.5%</td><td class="text-green"><strong>+28.8pp</strong></td></tr>
-        <tr><td>express</td><td>JavaScript</td><td>18.8%</td><td>45.0%</td><td class="text-green"><strong>+26.2pp</strong></td></tr>
-        <tr><td>fresh</td><td>TypeScript</td><td>12.5%</td><td>35.0%</td><td class="text-green"><strong>+22.5pp</strong></td></tr>
-        <tr><td>guava</td><td>Java</td><td>2.5%</td><td>23.8%</td><td class="text-green"><strong>+21.3pp</strong></td></tr>
-        <tr><td>ripgrep</td><td>Rust</td><td>12.5%</td><td>30.0%</td><td class="text-green"><strong>+17.5pp</strong></td></tr>
-        <tr><td>redis</td><td>C</td><td>11.3%</td><td>26.3%</td><td class="text-green"><strong>+15.0pp</strong></td></tr>
-        <tr><td>ring</td><td>Clojure</td><td>51.2%</td><td>60.0%</td><td class="text-green"><strong>+8.8pp</strong></td></tr>
-        <tr><td>noumenon</td><td>Clojure</td><td>28.8%</td><td>37.5%</td><td class="text-green"><strong>+8.8pp</strong></td></tr>
+        <tr><td>fresh</td><td>TypeScript</td><td>0.0%</td><td>41.3%</td><td class="text-green"><strong>+41.3pp</strong></td></tr>
+        <tr><td>fzf</td><td>Go</td><td>2.5%</td><td>38.8%</td><td class="text-green"><strong>+36.3pp</strong></td></tr>
+        <tr><td>ripgrep</td><td>Rust</td><td>2.5%</td><td>37.5%</td><td class="text-green"><strong>+35.0pp</strong></td></tr>
+        <tr><td>flask</td><td>Python</td><td>10.0%</td><td>41.3%</td><td class="text-green"><strong>+31.3pp</strong></td></tr>
+        <tr><td>redis</td><td>C</td><td>2.5%</td><td>26.3%</td><td class="text-green"><strong>+23.8pp</strong></td></tr>
+        <tr><td>express</td><td>JavaScript</td><td>31.3%</td><td>53.8%</td><td class="text-green"><strong>+22.5pp</strong></td></tr>
+        <tr><td>noumenon</td><td>Clojure</td><td>23.8%</td><td>45.0%</td><td class="text-green"><strong>+21.3pp</strong></td></tr>
+        <tr><td>guava</td><td>Java</td><td>7.5%</td><td>26.3%</td><td class="text-green"><strong>+18.8pp</strong></td></tr>
+        <tr><td>ring</td><td>Clojure</td><td>56.3%</td><td>73.8%</td><td class="text-green"><strong>+17.5pp</strong></td></tr>
       </tbody>
       <tfoot>
-        <tr><td><strong>Average</strong></td><td></td><td><strong>18.2%</strong></td><td><strong>37.9%</strong></td><td class="text-green"><strong>+19.7pp</strong></td></tr>
+        <tr><td><strong>Average</strong></td><td></td><td><strong>15.2%</strong></td><td><strong>42.7%</strong></td><td class="text-green"><strong>+27.5pp</strong></td></tr>
       </tfoot>
     </table>
     <div class="benchmark-notes">
       <div class="card">
         <h3>Biggest gains on unfamiliar repos</h3>
-        <p>Flask, fzf, and Express saw +26&ndash;29pp &mdash; the graph fills in what the LLM lacks from training data.</p>
+        <p>Fresh scored 0% without the graph and 41% with it &mdash; the knowledge graph provides what the LLM simply doesn't know.</p>
       </div>
       <div class="card">
-        <h3>Factual lookups improved most</h3>
-        <p>Single-hop accuracy (e.g. &ldquo;which files import X?&rdquo;) jumped from 29.5% to 65.9% on Ring &mdash; +36pp.</p>
+        <h3>Best overall: Ring at 73.8%</h3>
+        <p>Ring scored the highest absolute Full score. Deterministic accuracy hit 75.0%, with LLM-judged questions close behind at 72.2%.</p>
       </div>
       <div class="card">
         <h3>8 languages, zero failures</h3>
@@ -238,7 +238,7 @@
       </div>
     </div>
     <p class="section-sub" style="margin-top: 1.5rem;">
-      <a href="https://github.com/leifericf/noumenon/blob/main/reports/digest-run-2026-03-27.md">Read the full benchmark report &rarr;</a>
+      Last updated: 2026-03-28. <a href="https://github.com/leifericf/noumenon/blob/main/reports/digest-run-2026-03-28.md">Read the full benchmark report &rarr;</a>
     </p>
   </div>
 </section>
