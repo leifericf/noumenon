@@ -179,11 +179,16 @@ In most languages, this would be a convention ("remember to call `revert()` in e
 
 ### 4.6 ML model
 
-A pure-Clojure feedforward network for query routing (predicting which Datalog patterns to try for a question):
+A pure-Clojure feedforward network for query routing — predicting which Datalog patterns to try for a given question. It runs entirely on-device with zero token cost:
 
 - **Architecture**: bag-of-words (64-dim) -> dense (128) -> ReLU -> dense (48) -> softmax
 - **Training**: numerical gradient descent with a fixed time budget (like autoresearch's 5-minute limit)
 - **Config**: `resources/model/config.edn` is the "train.py equivalent" — the optimizer proposes hyperparameter changes
+- **Integration**: the ask agent checks for a trained model at startup and appends its top-3 query suggestions as a hint in the user message. The agent is free to ignore the suggestions — they are guidance, not constraints. When no model is available, behavior is unchanged.
+
+The model, its training, and its inference are all local computation — no API calls, no tokens consumed. The token cost of the introspect loop comes entirely from the evaluation step (running questions through `agent/ask`) and the optimizer step (asking the LLM for proposals). The model training itself is free.
+
+Model weights are saved alongside a vocabulary snapshot so that tokenization is consistent between training and inference. The load order is: local trained model (`data/models/latest.edn`) > bundled pre-trained model (`resources/model/weights.edn`) > no model (graceful degradation). Once the model is good enough to ship, copying the weights file to `resources/model/` is all that's needed — it becomes a classpath resource, versioned in git like any other configuration.
 
 [Deep Diamond](https://github.com/uncomplicate/deep-diamond) and [Neanderthal](https://github.com/uncomplicate/neanderthal) are included as dependencies for future GPU-accelerated training. The current implementation is pure [Clojure](https://clojure.org) with Java `double-array` operations — type-hinted for primitive performance, no boxing overhead. This is where Clojure's JVM hosting pays off practically: the high-level code (data pipelines, configuration, orchestration) stays in idiomatic Clojure, while the hot inner loop (matrix multiply, softmax) drops down to Java primitive arrays with `^doubles` type hints. No FFI, no separate C extension, no build toolchain — just a type annotation that tells the JVM compiler to use unboxed doubles. Haskell's foreign function interface or Python's ctypes/Cython would require far more ceremony for the same result.
 
@@ -603,6 +608,8 @@ Each question creates a fresh `agent/ask` session. The system prompt is re-sent 
 6. **Prompts and queries in Datomic** — store prompt templates and named queries in the meta database instead of classpath resources, enabling transactional modification with automatic rollback via Datomic's immutable history
 7. **Multi-objective optimization** — optimize for both accuracy AND cost (fewer agent iterations per question)
 8. **Meta-database queries via MCP** — expose introspect queries through the MCP server so external agents can query improvement history
+9. **Human target constraint** — wire the `--target` CLI flag through to the loop so humans can restrict the optimizer's search space
+10. **Ship pre-trained weights** — once the model demonstrably helps, copy weights to `resources/model/weights.edn` as a bundled default
 
 ---
 
@@ -658,6 +665,7 @@ Each question creates a fresh `agent/ask` session. The system prompt is re-sent 
 | `1571803` | feat | Named Datalog queries for introspect data |
 | `ec803df` | refactor | Clojure metaprogramming: `with-modification` macro, multimethods, in-process eval |
 | `c6a93a9` | test | Code verification and multimethod round-trip tests |
+| `79d973d` | feat | Integrate query routing model into ask loop |
 
 ## Appendix C: Test Suite
 
