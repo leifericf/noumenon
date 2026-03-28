@@ -59,13 +59,16 @@
 
 (deftest enrich-file-clojure-test
   (let [src "(ns myapp.core\n  (:require [myapp.db :as db]\n            [myapp.util :as util]\n            [clojure.string :as str]))"
-        result (imports/enrich-file :clojure src "src/myapp/core.clj" clj-paths)]
+        {:keys [resolved raw]} (imports/enrich-file :clojure src "src/myapp/core.clj" clj-paths)]
     (testing "resolves internal deps"
-      (is (= #{"src/myapp/db.clj" "src/myapp/util.clj"} (set result))))
+      (is (= #{"src/myapp/db.clj" "src/myapp/util.clj"} (set resolved))))
     (testing "excludes external deps"
-      (is (not (some #{"clojure/string.clj"} result))))
+      (is (not (some #{"clojure/string.clj"} resolved))))
     (testing "excludes self"
-      (is (not (some #{"src/myapp/core.clj"} result))))))
+      (is (not (some #{"src/myapp/core.clj"} resolved))))
+    (testing "raw imports include all requires"
+      (is (some #{"myapp.db"} raw))
+      (is (some #{"clojure.string"} raw)))))
 
 ;; --- Python extraction ---
 
@@ -313,13 +316,13 @@
         result-test  (imports/enrich-file :clojure (read-fixture "test/myapp/core_test.clj")
                                           "test/myapp/core_test.clj" paths)]
     (testing "core imports db and util"
-      (is (= #{"src/myapp/db.clj" "src/myapp/util.clj"} (set result-core))))
+      (is (= #{"src/myapp/db.clj" "src/myapp/util.clj"} (set (:resolved result-core)))))
     (testing "db imports util"
-      (is (= ["src/myapp/util.clj"] result-db)))
+      (is (= ["src/myapp/util.clj"] (:resolved result-db))))
     (testing "util imports nothing internal"
-      (is (empty? result-util)))
+      (is (empty? (:resolved result-util))))
     (testing "test imports core"
-      (is (= ["src/myapp/core.clj"] result-test)))))
+      (is (= ["src/myapp/core.clj"] (:resolved result-test))))))
 
 (deftest enrich-fixture-python-test
   (let [paths #{"myapp/core.py" "myapp/db.py" "myapp/util.py" "myapp/__init__.py"}
@@ -328,7 +331,7 @@
                                     "myapp/core.py" paths)]
     (when (seq (imports/extract-imports :python "import os"))  ; skip if python3 unavailable
       (testing "core imports db and util"
-        (is (= #{"myapp/db.py" "myapp/util.py"} (set result)))))))
+        (is (= #{"myapp/db.py" "myapp/util.py"} (set (:resolved result))))))))
 
 (deftest enrich-fixture-javascript-test
   (let [paths #{"src/app.js" "src/db.js" "src/util.js" "src/config.js"}
@@ -337,7 +340,7 @@
                                     "src/app.js" paths)]
     (when (seq (imports/extract-imports :javascript "import x from './y';"))
       (testing "app imports db, util, config"
-        (is (= #{"src/db.js" "src/util.js" "src/config.js"} (set result)))))))
+        (is (= #{"src/db.js" "src/util.js" "src/config.js"} (set (:resolved result))))))))
 
 (deftest enrich-fixture-rust-test
   (let [paths #{"src/main.rs" "src/parser.rs" "src/lexer/mod.rs"}
@@ -345,7 +348,7 @@
         result (imports/enrich-file :rust (read-fixture "src/main.rs")
                                     "src/main.rs" paths)]
     (testing "main declares parser and lexer modules"
-      (is (= #{"src/parser.rs" "src/lexer/mod.rs"} (set result))))))
+      (is (= #{"src/parser.rs" "src/lexer/mod.rs"} (set (:resolved result)))))))
 
 (deftest enrich-fixture-java-test
   (let [paths #{"com/example/Main.java" "com/example/Foo.java"}
@@ -353,7 +356,7 @@
         result (imports/enrich-file :java (read-fixture "com/example/Main.java")
                                     "com/example/Main.java" paths)]
     (testing "Main imports Foo, skips stdlib"
-      (is (= ["com/example/Foo.java"] result)))))
+      (is (= ["com/example/Foo.java"] (:resolved result))))))
 
 (deftest enrich-fixture-elixir-test
   (let [paths #{"lib/my_app.ex" "lib/my_app/accounts.ex" "lib/my_app/repo.ex"}
@@ -366,11 +369,11 @@
                                           "lib/my_app/repo.ex" paths)]
     (when (seq (imports/extract-imports :elixir "alias Foo"))  ; skip if elixir unavailable
       (testing "app imports accounts and repo via multi-alias"
-        (is (= #{"lib/my_app/accounts.ex" "lib/my_app/repo.ex"} (set result-app))))
+        (is (= #{"lib/my_app/accounts.ex" "lib/my_app/repo.ex"} (set (:resolved result-app)))))
       (testing "accounts imports repo"
-        (is (some #{"lib/my_app/repo.ex"} result-accts)))
+        (is (some #{"lib/my_app/repo.ex"} (:resolved result-accts))))
       (testing "repo has no internal imports"
-        (is (empty? result-repo))))))
+        (is (empty? (:resolved result-repo)))))))
 
 (deftest enrich-fixture-erlang-test
   (let [paths #{"src/my_server.erl" "include/my_header.hrl"}
@@ -378,7 +381,7 @@
         result (imports/enrich-file :erlang (read-fixture "src/my_server.erl")
                                     "src/my_server.erl" paths)]
     (testing "my_server includes my_header"
-      (is (= ["include/my_header.hrl"] result)))))
+      (is (= ["include/my_header.hrl"] (:resolved result))))))
 
 (deftest enrich-fixture-csharp-test
   (let [paths #{"src/MyApp/Program.cs" "src/MyApp/Models/User.cs"
@@ -391,13 +394,13 @@
         result-svc  (imports/enrich-file :csharp (read-fixture "src/MyApp/Services/UserService.cs")
                                          "src/MyApp/Services/UserService.cs" paths)]
     (testing "Program imports Models and Services (via suffix match)"
-      (is (pos? (count result-prog))))
+      (is (pos? (count (:resolved result-prog)))))
     (testing "User.cs imports Services (via suffix match)"
-      (is (pos? (count result-user))))
+      (is (pos? (count (:resolved result-user)))))
     (testing "UserService imports Models (via suffix match)"
-      (is (pos? (count result-svc))))
+      (is (pos? (count (:resolved result-svc)))))
     (testing "System namespace not resolved"
-      (is (not (some #(re-matches #".*System.*" %) result-prog))))))
+      (is (not (some #(re-matches #".*System.*" %) (:resolved result-prog)))))))
 
 (deftest enrich-fixture-msbuild-test
   (let [paths #{"src/MyApp/MyApp.csproj" "test/MyApp.Tests/MyApp.Tests.csproj"}
@@ -410,9 +413,9 @@
                                           "test/MyApp.Tests/MyApp.Tests.csproj" paths)]
     (testing ".sln imports both .csproj files"
       (is (= #{"src/MyApp/MyApp.csproj" "test/MyApp.Tests/MyApp.Tests.csproj"}
-             (set result-sln))))
+             (set (:resolved result-sln)))))
     (testing "Tests.csproj imports MyApp.csproj"
-      (is (= ["src/MyApp/MyApp.csproj"] result-tests)))))
+      (is (= ["src/MyApp/MyApp.csproj"] (:resolved result-tests))))))
 
 (deftest enrich-fixture-vcxproj-test
   (let [paths #{"src/main.cpp" "src/util.cpp" "include/util.h" "MyProject.vcxproj"}
@@ -421,4 +424,4 @@
                                     (read-fixture "MyProject.vcxproj")
                                     "MyProject.vcxproj" paths)]
     (testing ".vcxproj imports source and header files"
-      (is (= #{"src/main.cpp" "src/util.cpp" "include/util.h"} (set result))))))
+      (is (= #{"src/main.cpp" "src/util.cpp" "include/util.h"} (set (:resolved result)))))))

@@ -451,13 +451,16 @@ end")
 
 (defn enrich-file
   "Parse imports from source text and resolve to repo file paths.
-   Returns a vec of resolved file-path strings (internal deps only)."
+   Returns {:resolved [file-paths] :raw [import-names]}."
   [lang content source-path all-paths]
-  (->> (extract-imports lang content)
-       (keep #(resolve-import lang % source-path all-paths))
-       (remove #{source-path})
-       distinct
-       vec))
+  (let [raw-imports (extract-imports lang content)
+        resolved    (->> raw-imports
+                         (keep #(resolve-import lang % source-path all-paths))
+                         (remove #{source-path})
+                         distinct
+                         vec)]
+    {:resolved resolved
+     :raw      (distinct (vec raw-imports))}))
 
 ;; ---------------------------------------------------------------------------
 ;; Impure shell — orchestrate enrichment for a repo
@@ -479,11 +482,12 @@ end")
     (sort-by :file/path safe)))
 
 (defn- file->tx-data
-  "Build tx-data for one file's resolved imports."
-  [file-path import-paths]
-  (when (seq import-paths)
-    {:file/path    file-path
-     :file/imports (mapv (fn [p] [:file/path p]) import-paths)}))
+  "Build tx-data for one file's resolved imports and raw dependency names."
+  [file-path {:keys [resolved raw]}]
+  (when (or (seq resolved) (seq raw))
+    (cond-> {:file/path file-path}
+      (seq resolved) (assoc :file/imports (mapv (fn [p] [:file/path p]) resolved))
+      (seq raw)      (assoc :sem/dependencies raw))))
 
 (def ^:private batch-size 50)
 
@@ -500,9 +504,9 @@ end")
   "Extract and resolve imports for a single file. Returns tx-data map or nil."
   [repo-path all-paths {:keys [file/path file/lang]}]
   (try
-    (let [content  (analyze/git-show repo-path path)
-          resolved (enrich-file lang content path all-paths)]
-      (file->tx-data path resolved))
+    (let [content (analyze/git-show repo-path path)
+          result  (enrich-file lang content path all-paths)]
+      (file->tx-data path result))
     (catch Exception _
       {:error? true :file/path path})))
 
@@ -512,7 +516,7 @@ end")
   (try
     (when-let [deps (extract-c-includes-from-compiler repo-path path)]
       (let [resolved (->> deps (filter all-paths) (remove #{path}) distinct vec)]
-        (file->tx-data path resolved)))
+        (file->tx-data path {:resolved resolved :raw (vec deps)})))
     (catch Exception _
       {:error? true :file/path path})))
 
