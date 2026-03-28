@@ -52,7 +52,7 @@ The existing benchmark tests a direct LLM prompt (question + context), not the a
 
 ### 2.2 Modifications must be safely reversible
 
-The optimizer LLM can propose bad changes — broken [EDN](https://edn-format.org), invalid Datalog, code that doesn't compile. These must never corrupt the system. Every modification must be reversible, and the original state must be restored exactly (not approximately — file formatting, comments, and whitespace matter).
+The optimizer LLM can propose bad changes — broken [EDN](https://edn-format.org), invalid Datalog, code that doesn't compile. These must never corrupt the system. Every modification must be reversible, and the original state must be restored exactly (not approximately — file formatting, comments, and whitespace matter). Clojure's immutable data structures help here — "save the original" is just binding a value, not defensively deep-copying a mutable object. The saved value cannot be accidentally modified by later code, a guarantee that no amount of discipline can provide in languages with mutable defaults.
 
 ### 2.3 LLM output is unreliable
 
@@ -127,6 +127,10 @@ The optimizer LLM chooses which target to modify based on gap analysis:
 | `:code` | `src/noumenon/*.clj` (source code) | High | Lint + tests + benchmark |
 | `:train` | `model/config.edn` (ML hyperparameters) | Medium | Training + benchmark |
 
+Every one of these artifacts is an EDN file — the same data format. A Python equivalent would need YAML for config, JSON for prompts, SQL for rules, Python source for code, and a TOML or INI file for hyperparameters, each with its own parser, validator, and serializer. In Clojure, one function (`edn/read-string`) reads them all. One function (`pr-str`) writes them all. The `with-modification` macro that handles apply-and-revert works identically across all five target types because they are all just data.
+
+The apply and revert operations for each target are implemented as [multimethods](https://clojure.org/reference/multimethods) — Clojure's open dispatch mechanism. Adding a sixth target type means adding two `defmethod` forms (one for apply, one for revert). No switch statement to modify, no interface to implement, no base class to inherit from. Unlike Java's visitor pattern (which requires modifying every visitor when you add a case) or Haskell's type classes (which require the type to be defined at the same time as the class), Clojure multimethods can be extended at any time, from any namespace, without touching existing code. This is the kind of pragmatic extensibility that matters when an AI optimizer might discover new target types that the original developer never anticipated.
+
 ### 4.3 Evaluation function
 
 Each evaluation runs 22 deterministic benchmark questions through `agent/ask` with a reduced iteration budget (6 per question). Answers are scored against ground truth using exact-match `deterministic-score` (no LLM judge — eliminates judge variance). The primary metric is the mean score. Cost per evaluation: ~130 LLM calls.
@@ -144,7 +148,7 @@ The optimizer LLM receives:
 7. History of all prior iterations (from Datomic)
 8. Descriptions of all five target types with output format specs
 
-It proposes exactly one EDN map per iteration with `:target`, `:modification`, `:rationale`, and `:goal`.
+It proposes exactly one EDN map per iteration with `:target`, `:modification`, `:rationale`, and `:goal`. Because EDN is both Clojure's native data literal and a readable serialization format, the LLM's output is parsed with a single call to `edn/read-string` — no JSON library, no deserialization framework, no schema validation layer. The data the LLM produces is the data the program consumes. In most languages, LLM output requires a chain of JSON parsing, schema validation, and type coercion before it can be used. In Clojure, the distance between "text from the wire" and "data in your program" is one function call.
 
 ### 4.5 Code self-modification
 
@@ -152,9 +156,26 @@ The `:code` target has the strictest safety constraints, because broken code can
 
 - Files must be under `src/noumenon/` and end in `.clj`
 - Path traversal (`..`) is blocked
-- The linter must pass before tests run
-- The full test suite must pass before benchmark evaluation
+- Proposed code is verified in-process via `read-string` (syntax) and `require :reload` (compilation)
+- The linter must pass
 - Failure at any gate triggers immediate revert
+
+The in-process verification is where Clojure's homoiconicity pays off concretely. Because Clojure source code is data (lists, vectors, maps, symbols), `read-string` can parse proposed code without invoking a compiler — it just reads data structures. If the syntax is valid, `require :reload` compiles and loads the namespace in the running JVM. The entire gate check takes ~2 seconds in-process, compared to ~60 seconds when shelling out to separate JVM processes for lint and test. This is not possible in compiled languages like Go or Rust, where verifying proposed code requires a full build toolchain invocation. Even in other dynamic languages like Python, `ast.parse` only checks syntax — it cannot verify that imports resolve or that functions exist. Clojure's `require :reload` does full compilation including dependency resolution, macro expansion, and var resolution, all within the running process.
+
+The core apply-evaluate-revert logic is encapsulated in a `with-modification` macro — a custom language extension that works like Clojure's built-in `with-open` (or Python's `with` statement, or C#'s `using`). It applies the modification, runs the body, and automatically reverts if the outcome is not `:improved` or if an exception is thrown:
+
+```clojure
+(with-modification proposal
+  ;; body — if it returns non-:improved or throws, original is restored
+  (if (not (:pass? (run-code-gate! file content)))
+    {:outcome :gate-failed ...}
+    (let [eval-result (evaluate-agent! db repo-name invoke-fn-factory)]
+      (if (> delta 0.001)
+        {:outcome :improved ...}
+        {:outcome :reverted ...}))))
+```
+
+In most languages, this would be a convention ("remember to call `revert()` in every error path") or a clunky try/finally block duplicated at each call site. In Clojure, the macro generates the try/catch/revert boilerplate at compile time. The caller writes only the decision logic. This is not Haskell-style type-level abstraction that requires a PhD to follow — it is a practical labor-saving tool that eliminates an entire class of bugs (forgotten reverts) by making the correct pattern the only pattern available.
 
 ### 4.6 ML model
 
@@ -164,7 +185,7 @@ A pure-Clojure feedforward network for query routing (predicting which Datalog p
 - **Training**: numerical gradient descent with a fixed time budget (like autoresearch's 5-minute limit)
 - **Config**: `resources/model/config.edn` is the "train.py equivalent" — the optimizer proposes hyperparameter changes
 
-[Deep Diamond](https://github.com/uncomplicate/deep-diamond) and [Neanderthal](https://github.com/uncomplicate/neanderthal) are included as dependencies for future GPU-accelerated training. The current implementation is pure [Clojure](https://clojure.org) with `double-array` operations.
+[Deep Diamond](https://github.com/uncomplicate/deep-diamond) and [Neanderthal](https://github.com/uncomplicate/neanderthal) are included as dependencies for future GPU-accelerated training. The current implementation is pure [Clojure](https://clojure.org) with Java `double-array` operations — type-hinted for primitive performance, no boxing overhead. This is where Clojure's JVM hosting pays off practically: the high-level code (data pipelines, configuration, orchestration) stays in idiomatic Clojure, while the hot inner loop (matrix multiply, softmax) drops down to Java primitive arrays with `^doubles` type hints. No FFI, no separate C extension, no build toolchain — just a type annotation that tells the JVM compiler to use unboxed doubles. Haskell's foreign function interface or Python's ctypes/Cython would require far more ceremony for the same result.
 
 ---
 
