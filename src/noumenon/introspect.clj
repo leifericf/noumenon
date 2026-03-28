@@ -404,17 +404,24 @@
 (defn- evaluate-once!
   "Run one evaluation pass. Returns {:mean double :results [...] :total-iterations long}"
   [db repo-name invoke-fn-factory questions]
-  (let [ask-results (mapv (fn [q]
-                            (log! (str "  eval: " (name (:id q))))
-                            (let [ask-r (agent/ask db (:question q)
+  (let [total       (count questions)
+        ask-results (mapv (fn [idx q]
+                            (let [t0    (System/currentTimeMillis)
+                                  _     (log! (str "  eval [" (inc idx) "/" total "] "
+                                                   (name (:id q))))
+                                  ask-r (agent/ask db (:question q)
                                                    {:invoke-fn      (invoke-fn-factory)
                                                     :repo-name      repo-name
                                                     :max-iterations 6})
                                   {:keys [score reasoning]}
-                                  (bench/deterministic-score q db (or (:answer ask-r) ""))]
+                                  (bench/deterministic-score q db (or (:answer ask-r) ""))
+                                  elapsed (/ (- (System/currentTimeMillis) t0) 1000.0)]
+                              (log! (str "  eval [" (inc idx) "/" total "] "
+                                         (name (:id q)) " — " (format "%.1fs" elapsed)
+                                         " " (name score)))
                               {:id (:id q) :score score :reasoning reasoning
                                :iterations (get-in ask-r [:usage :iterations] 0)}))
-                          questions)
+                          (range) questions)
         scores          (mapv (comp score-kw->num :score) ask-results)
         total-iters     (reduce + (map :iterations ask-results))]
     {:mean             (if (seq scores) (/ (reduce + scores) (count scores)) 0.0)
