@@ -412,19 +412,21 @@
   (let [raw-path (args "repo_path")
         repo-path (.getCanonicalPath (io/file raw-path))]
     (validate-repo-path! repo-path)
-    (let [db-dir   (util/resolve-db-dir defaults)
-          db-name  (util/derive-db-name repo-path)
-          conn     (get-or-create-conn db-dir db-name)
-          analyze? (args "analyze")
-          opts     (if analyze?
-                     (let [{:keys [prompt-fn model-id]}
-                           (llm/wrap-as-prompt-fn-from-opts
-                            {:provider (:provider defaults)
-                             :model    (:model defaults)})]
-                       {:concurrency 8 :analyze? true
-                        :model-id model-id :invoke-llm prompt-fn})
-                     {:concurrency 8})
-          result   (sync/update-repo! conn repo-path repo-path opts)]
+    (let [db-dir    (util/resolve-db-dir defaults)
+          db-name   (util/derive-db-name repo-path)
+          conn      (get-or-create-conn db-dir db-name)
+          meta-conn (db/ensure-meta-db db-dir)
+          analyze?  (args "analyze")
+          opts      (if analyze?
+                      (let [{:keys [prompt-fn model-id]}
+                            (llm/wrap-as-prompt-fn-from-opts
+                             {:provider (:provider defaults)
+                              :model    (:model defaults)})]
+                        {:concurrency 8 :analyze? true
+                         :meta-db (d/db meta-conn)
+                         :model-id model-id :invoke-llm prompt-fn})
+                      {:concurrency 8})
+          result    (sync/update-repo! conn repo-path repo-path opts)]
       (tool-result (format-update-changes result)))))
 
 (defn- handle-ask [args defaults]

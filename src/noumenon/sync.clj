@@ -224,6 +224,7 @@
    Options:
      :analyze?    — also run LLM analysis on changed files (default false)
      :invoke-llm  — LLM invoke function (required if :analyze? true)
+     :meta-db     — meta database value (required if :analyze? true)
      :model-id    — model identifier for analysis
      :concurrency — worker count for analyze/enrich"
   [conn repo-path repo-uri opts]
@@ -263,7 +264,8 @@
               analyze-r (when-let [invoke-llm (:invoke-llm opts)]
                           (analyze/analyze-repo!
                            conn repo-path invoke-llm
-                           {:model-id     (:model-id opts)
+                           {:meta-db      (:meta-db opts)
+                            :model-id     (:model-id opts)
                             :concurrency  (or (:analyze-concurrency opts) 3)
                             :min-delay-ms 0}))]
           (update-head-sha! conn repo-path repo-uri)
