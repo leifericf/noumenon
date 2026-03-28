@@ -235,6 +235,13 @@ Adding a separate internal database alongside the per-repo databases required ch
 
 These are not incidental features. They are consequences of Clojure's core philosophy — immutable values, data-oriented programming, and the relentless elimination of incidental complexity. The fact that adding a second database to a running system was a two-line change is not because the system is simple. It is because the tools were designed by someone who understood that the cost of infrastructure should be proportional to the complexity of the problem, not to the number of moving parts.
 
+It is worth remembering that Clojure is a [Lisp](https://en.wikipedia.org/wiki/Lisp_(programming_language)) — a descendant of the language [John McCarthy](https://en.wikipedia.org/wiki/John_McCarthy_(computer_scientist)) designed in 1958 specifically for artificial intelligence research. Lisp introduced ideas that the rest of the industry is still catching up to: code as data, the REPL, garbage collection, dynamic typing, higher-order functions, and homoiconicity (programs that can inspect and rewrite themselves). That a system for autonomous self-improvement — an AI agent that modifies its own prompts, rules, and source code, evaluates the results, and decides what to keep — runs naturally on a Lisp is not a coincidence. These languages were *designed* for exactly this kind of work, over sixty years ago.
+
+Clojure brings these ideas into the modern era: immutable persistent data structures, first-class concurrency, seamless Java interop, and a data-oriented philosophy that treats everything — schema, queries, configuration, even database transactions — as plain data that can be inspected, transformed, and composed. Datomic extends this philosophy to the database itself. Together they form a foundation where building a self-improving system feels less like engineering and more like assembly from well-designed parts.
+
+> *"If I have seen further it is by standing on the shoulders of Giants."*
+> — Isaac Newton, 1675
+
 ### 5.7 Testing with in-memory databases
 
 Datomic Local supports two storage modes through the same API: directory-backed (persistent, used in production) and in-memory (ephemeral, used in tests). The distinction is a single argument — a path string or the keyword `:mem`:
