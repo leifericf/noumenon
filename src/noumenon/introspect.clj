@@ -86,6 +86,9 @@
                      (when reasoning (str " — " reasoning)))))
          (str/join "\n"))))
 
+(defn- truncate [s max-len]
+  (if (> (count s) max-len) (subs s 0 max-len) s))
+
 (defn- format-history [history]
   (if (empty? history)
     "No prior iterations."
@@ -96,8 +99,8 @@
                  ": target=" (if target (name target) "unknown")
                  " outcome=" (if outcome (name outcome) "unknown")
                  (when delta (str " delta=" (format "%+.3f" (double delta))))
-                 (when goal (str " goal=\"" goal "\""))
-                 "\n  " (or rationale "no rationale"))))
+                 (when goal (str " goal=\"" (truncate (str goal) 200) "\""))
+                 "\n  " (truncate (or rationale "no rationale") 500))))
          (str/join "\n\n"))))
 
 (defn- format-query-catalog []
