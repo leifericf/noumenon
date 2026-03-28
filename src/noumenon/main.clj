@@ -201,7 +201,10 @@
             sync-opts (cond-> (build-sync-opts opts)
                         analyze (assoc :meta-db (d/db meta-conn)))
             result    (sync/update-repo! conn repo-path repo-uri sync-opts)]
-        (when-not analyze
+        (if analyze
+          (log! (str "Next: run '" cli/program-name " ask -q \"...\" " repo-path
+                     "' or '" cli/program-name " query <query-name> " repo-path
+                     "' to explore the updated graph."))
           (log! (str "Next: run '" cli/program-name " analyze " repo-path
                      "' to enrich with semantic metadata.")))
         {:exit 0 :result result}))))
@@ -397,6 +400,7 @@
           (do (print-error! (str "Database \"" db-name "\" not found.")) {:exit 1})
           (do (db/delete-db client db-name)
               (log! (str "Deleted database \"" db-name "\"."))
+              (log! "WARNING: All analysis data has been destroyed. Re-running analyze may be expensive.")
               (log! (str "Re-import: " cli/program-name " import <repo-path>"))
               {:exit 0})))
       (let [names (db/list-db-dirs db-dir)]
@@ -441,17 +445,24 @@
    :rubric-hash        "Rubric"
    :answer-prompt-hash "Answer prompt"})
 
+(def ^:private hash-fields
+  #{:question-set-hash :rubric-hash :answer-prompt-hash})
+
 (defn- format-compat-error
   "Format a checkpoint compatibility error message."
   [mismatches]
   (str "Incompatible checkpoint. The benchmark configuration has changed "
-       "since this checkpoint was created. Start a fresh run without --resume.\n"
+       "since this checkpoint was created.\n"
        "Mismatched fields:\n"
        (str/join "\n"
-                 (map #(str "  " (get compat-field-labels (:field %) (name (:field %)))
-                            ": checkpoint=" (:checkpoint %)
-                            " current=" (:current %))
-                      mismatches))))
+                 (map (fn [{:keys [field checkpoint current]}]
+                        (let [label (get compat-field-labels field (name field))]
+                          (if (hash-fields field)
+                            (str "  " label ": (changed)")
+                            (str "  " label ": checkpoint=" checkpoint
+                                 " current=" current))))
+                      mismatches))
+       "\nStart a fresh run: " cli/program-name " benchmark <repo-path>"))
 
 (defn- do-benchmark-resume
   "Handle --resume path for benchmark. Returns {:exit n}."
@@ -684,6 +695,7 @@
    :unknown-subcommand           #(str "Unknown subcommand: " (:subcommand %)
                                        ". Run '" cli/program-name " --help' for available subcommands.")
    :no-repo-path                 "Missing <repo-path> argument."
+   :resume-consumed-repo-path   "Missing <repo-path> argument. Did --resume consume your repo-path? Place --resume after <repo-path>."
    :query-missing-args           "Missing <query-name> and <repo-path> arguments."
    :missing-db-dir-value         "Missing value for --db-dir."
    :missing-delete-value          "Missing database name for --delete."
@@ -724,7 +736,7 @@
   #{:no-args :unknown-subcommand})
 
 (def ^:private errors-with-subcommand-usage
-  #{:no-repo-path :missing-db-dir-value :unknown-flag
+  #{:no-repo-path :resume-consumed-repo-path :missing-db-dir-value :unknown-flag
     :ask-missing-question :ask-missing-args :query-missing-args
     :missing-param-value :invalid-param-value
     :invalid-concurrency :missing-concurrency-value

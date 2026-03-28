@@ -113,7 +113,7 @@
 
 (def ^:private reanalyze-flag
   {:flag "--reanalyze" :key :reanalyze :parse :string
-   :desc "Re-analyze files: all, prompt-changed, model-changed, stale"
+   :desc "Re-analyze files: all, prompt-changed, model-changed, stale (default: only unanalyzed files)"
    :error-missing :missing-reanalyze-value})
 
 (def ^:private analyze-flags
@@ -150,7 +150,10 @@
             :desc "Also run LLM analysis on changed files"}
            model-flag
            (assoc provider-flag :valid all-valid-providers)
-           db-dir-flag concurrency-flag]
+           db-dir-flag
+           {:flag "--concurrency" :key :concurrency :parse :range-int :min 1 :max 20
+            :desc "Parallel workers for import/enrich, 1-20 (default: 8)"
+            :error-invalid :invalid-concurrency :error-missing :missing-concurrency-value}]
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
@@ -223,7 +226,7 @@
                   :error-invalid :invalid-max-iterations
                   :error-missing :missing-max-iterations-value}
                  {:flag "--continue-from" :key :continue-from :parse :string
-                  :desc "Session ID from a budget-exhausted run — resumes the agent"}
+                  :desc "Session ID from a budget-exhausted run — resumes the agent (place before <repo-path>)"}
                  db-dir-flag]
                 verbose-flags))
    :initial {:subcommand "ask"}
@@ -325,7 +328,7 @@
    "introspect" {:spec introspect-command-spec
                  :summary "Autonomous self-improvement loop (optimize prompts via benchmark)"
                  :usage "introspect [options] <repo-path>"
-                 :epilog "Runs an autonomous loop: propose prompt change, evaluate via benchmark,\nkeep if improved, revert if not. Uses an LLM to propose improvements and\nthe agent benchmark to evaluate them.\n\nTargets (comma-separated): examples (default), system-prompt, rules, code, train.\nThe :code target requires passing lint and compilation. The :train target retrains\nthe on-device ML model. Example: --target examples,system-prompt\nUse --max-hours or --max-cost for overnight runs."}
+                 :epilog "Runs an autonomous loop: propose prompt change, evaluate via benchmark,\nkeep if improved, revert if not. Uses an LLM to propose improvements and\nthe agent benchmark to evaluate them.\n\nTargets (comma-separated): examples, system-prompt, rules, code, train\n(default: all — LLM chooses based on benchmark results).\nThe :code target requires passing lint and compilation. The :train target retrains\nthe on-device ML model. Example: --target examples,system-prompt\nUse --max-hours or --max-cost for overnight runs."}
    "reseed"    {:spec {:flags [db-dir-flag]
                        :initial {:subcommand "reseed"}
                        :positionals {:required 0 :error nil :keys []}}
@@ -511,6 +514,11 @@
                    (assoc result :layers (mapv keyword (str/split layers-str #",")))
                    result)]
       (cond
+        (and (= :no-repo-path (:error result))
+             (:resume result)
+             (str/starts-with? (str (:resume result)) "/"))
+        (assoc result :error :resume-consumed-repo-path)
+
         (:error result) result
         ;; --fast: deterministic only, full layer only (cheapest mode)
         (:fast result)  (-> result

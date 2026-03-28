@@ -1026,8 +1026,8 @@
         cost-ans (llm/estimate-cost model est-in est-out)
         cost-jdg (llm/estimate-cost (or judge-model model) est-in est-out)
         total    (+ cost-ans cost-jdg)]
-    (log! (str "WARNING: Benchmarks are expensive. "
-               total-stages " stages × ~"
+    (log! (str "[COST WARNING] Benchmarks are expensive. "
+               total-stages " stages x ~"
                (:input avg-tokens-per-stage) " input + ~"
                (:output avg-tokens-per-stage) " output tokens/stage"))
     (when (pos? total)
@@ -1201,7 +1201,7 @@
                    " run-id=" run-id
                    " details=" (pr-str (:details eval-result))))
         (when (= :warn (:status eval-result))
-          (log! "WARNING: All canary questions scored :wrong. Results may be unreliable — check model/provider configuration."))))
+          (log! "[CANARY WARNING] All canary questions failed — results may be unreliable. Check that analyze has been run and the correct model is configured."))))
 
     (when-not @stop-flag
       (run-pairs! rest-pairs shared concurrency))))
@@ -1480,6 +1480,10 @@
                " questions=" (count questions)
                " layers=" (str/join "," (map name layers))
                " stages=" total
+               " mode=" (cond
+                          (:deterministic-only mode) "fast"
+                          (:skip-judge mode)         "no-judge"
+                          :else                      "full")
                (when (:skip-judge mode) " skip-judge")
                (when (:deterministic-only mode) " deterministic-only")
                (when resuming?
