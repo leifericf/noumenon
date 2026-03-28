@@ -74,15 +74,20 @@
   (let [examples   (benchmark-examples db)
         token-seqs (mapv (comp tokenize :text) examples)
         vocab      (build-vocab token-seqs vocab-size)
-        labels     (query-name->index)]
-    {:examples   (mapv (fn [ex toks]
-                         {:text   (:text ex)
-                          :tokens (encode vocab toks)
-                          :label  (get labels (:query-name ex) 0)})
-                       examples token-seqs)
-     :vocab      vocab
+        labels     (query-name->index)
+        dropped    (remove #(labels (:query-name %)) examples)
+        _          (when (seq dropped)
+                     (log! (str "training-data: dropped " (count dropped)
+                                " examples with unknown query names")))
+        labeled    (keep (fn [[ex toks]]
+                           (when-let [label (labels (:query-name ex))]
+                             {:text (:text ex) :tokens (encode vocab toks)
+                              :label label}))
+                         (map vector examples token-seqs))]
+    {:examples    (vec labeled)
+     :vocab       vocab
      :label-index (into {} (map (fn [[k v]] [v k]) labels))
-     :n-classes  (count labels)}))
+     :n-classes   (count labels)}))
 
 (defn save-dataset!
   "Save a dataset to EDN file."
