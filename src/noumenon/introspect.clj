@@ -211,6 +211,19 @@
       (and (= :train target) (not (map? (:config modification))))
       "For :train target, :modification must contain {:config {...}}"
 
+      (and (= :train target)
+           (seq (remove #{:vocab-size :embedding-dim :hidden-dim :output-dim
+                          :learning-rate :batch-size :time-budget-sec
+                          :dropout :weight-decay}
+                        (keys (:config modification)))))
+      (str "Unknown train config keys: "
+           (->> (keys (:config modification))
+                (remove #{:vocab-size :embedding-dim :hidden-dim :output-dim
+                          :learning-rate :batch-size :time-budget-sec
+                          :dropout :weight-decay})
+                (map name)
+                (str/join ", ")))
+
       :else nil)))
 
 ;; --- Artifact I/O (multimethods — open for extension) ---
