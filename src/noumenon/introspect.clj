@@ -233,22 +233,27 @@
   (let [f (io/file path)]
     (when (.exists f) (slurp f))))
 
+(defn- save-raw
+  "Read the raw file bytes for a resource. Used for exact rollback."
+  [resource-name]
+  (slurp (resource-path resource-name)))
+
 (defn- apply-modification!
-  "Apply a proposal's modification to disk. Returns the original value for rollback."
+  "Apply a proposal's modification to disk. Returns the original raw file content for rollback."
   [{:keys [target modification]}]
   (case target
     :examples
-    (let [orig (load-current-examples)]
+    (let [orig (save-raw "prompts/agent-examples.edn")]
       (write-examples! (:examples modification))
       orig)
 
     :system-prompt
-    (let [orig (load-current-system-prompt)]
+    (let [orig (save-raw "prompts/agent-system.edn")]
       (write-system-prompt! (:template modification))
       orig)
 
     :rules
-    (let [orig (pr-str (load-current-rules))]
+    (let [orig (save-raw "queries/rules.edn")]
       (write-rules! (:rules modification))
       orig)
 
@@ -259,23 +264,22 @@
       orig)
 
     :train
-    (let [orig-config (model/load-config)]
+    (let [orig (save-raw "model/config.edn")]
       (spit (resource-path "model/config.edn")
-            (pr-str (merge orig-config (:config modification))))
-      orig-config)))
+            (pr-str (merge (model/load-config) (:config modification))))
+      orig)))
 
 (defn- revert-modification!
-  "Revert a modification using the saved original."
+  "Revert a modification by restoring original raw file content."
   [{:keys [target modification]} original]
   (case target
-    :examples      (write-examples! original)
-    :system-prompt (write-system-prompt! original)
-    :rules         (write-rules! original)
+    :examples      (spit (resource-path "prompts/agent-examples.edn") original)
+    :system-prompt (spit (resource-path "prompts/agent-system.edn") original)
+    :rules         (spit (resource-path "queries/rules.edn") original)
     :code          (if original
                      (spit (:file modification) original)
                      (.delete (io/file (:file modification))))
-    :train         (spit (resource-path "model/config.edn")
-                         (pr-str original))))
+    :train         (spit (resource-path "model/config.edn") original)))
 
 ;; --- Test gate (for code modifications) ---
 
