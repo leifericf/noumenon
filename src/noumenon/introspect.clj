@@ -353,8 +353,16 @@
 (def ^:private committable-paths
   ["resources/prompts/" "resources/queries/" "resources/model/" "src/noumenon/"])
 
+(defn- sanitize-commit-text
+  "Strip newlines and limit length to prevent commit message injection."
+  [s max-len]
+  (-> (str s)
+      (str/replace #"[\n\r]" " ")
+      (subs 0 (min max-len (count (str s))))))
+
 (defn- git-commit-improvement! [repo-path {:keys [target rationale delta]}]
-  (let [msg (str "introspect(" (name target) "): " rationale
+  (let [safe-rationale (sanitize-commit-text rationale 200)
+        msg (str "introspect(" (name target) "): " safe-rationale
                  (when delta (str " [" (format "%+.3f" (double delta)) "]")))]
     (log! (str "introspect: committing: " msg))
     (doseq [p committable-paths]
