@@ -19,6 +19,5 @@
  "ai-authored-segments"
  "authors-by-file"
  "bug-hotspots"
- "component-dependencies"
  "transitive-impact"
  "test-impact"]
