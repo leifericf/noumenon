@@ -244,7 +244,7 @@
                   :error-invalid :invalid-max-hours
                   :error-missing :missing-max-hours-value}
                  {:flag "--target" :key :target :parse :string
-                  :desc "Artifact to optimize: examples, system-prompt, or both (default: examples)"
+                  :desc "Comma-separated targets: examples, system-prompt, rules, code, train (default: examples)"
                   :error-missing :missing-target-value}
                  {:flag "--eval-runs" :key :eval-runs :parse :pos-int
                   :desc "Evaluation passes per iteration for median (default: 1)"
@@ -325,7 +325,7 @@
    "introspect" {:spec introspect-command-spec
                  :summary "Autonomous self-improvement loop (optimize prompts via benchmark)"
                  :usage "introspect [options] <repo-path>"
-                 :epilog "Runs an autonomous loop: propose prompt change, evaluate via benchmark,\nkeep if improved, revert if not. Uses an LLM to propose improvements and\nthe agent benchmark to evaluate them.\n\nTargets: examples (default), system-prompt, or both.\nUse --max-hours or --max-cost for overnight runs."}
+                 :epilog "Runs an autonomous loop: propose prompt change, evaluate via benchmark,\nkeep if improved, revert if not. Uses an LLM to propose improvements and\nthe agent benchmark to evaluate them.\n\nTargets (comma-separated): examples (default), system-prompt, rules, code, train.\nThe :code target requires passing lint and compilation. The :train target retrains\nthe on-device ML model. Example: --target examples,system-prompt\nUse --max-hours or --max-cost for overnight runs."}
    "serve"     {:spec {:flags [{:flag "--db-dir" :key :db-dir :parse :string
                                 :desc "Override storage directory (default: data/datomic/)"
                                 :error-missing :missing-db-dir-value}
