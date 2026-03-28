@@ -607,7 +607,7 @@
 (defn- handle-introspect [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [db db-name]}]
+    (fn [{:keys [db db-name repo-path]}]
       (let [{:keys [invoke-fn]}
             (llm/make-messages-fn-from-opts
              {:provider    (or (args "provider") (:provider defaults))
@@ -625,6 +625,7 @@
             result (introspect/run-loop!
                     {:db                  db
                      :repo-name           db-name
+                     :repo-path           repo-path
                      :invoke-fn-factory   invoke-fn-factory
                      :optimizer-invoke-fn invoke-fn
                      :max-iterations      (or (args "max_iterations") 10)

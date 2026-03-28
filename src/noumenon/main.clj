@@ -583,7 +583,7 @@
 
 (defn do-introspect
   "Run the introspect self-improvement loop. Returns {:exit n :result map-or-nil}."
-  [{:keys [model provider max-iterations max-hours max-cost] :as opts}]
+  [{:keys [model provider max-iterations max-hours max-cost git-commit] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
@@ -591,13 +591,11 @@
         (with-existing-db
           ctx
           (fn [{:keys [db db-name]}]
-            (let [;; Optimizer LLM — proposes improvements (higher temperature for creativity)
-                  {:keys [invoke-fn]}
+            (let [{:keys [invoke-fn]}
                   (llm/make-messages-fn-from-opts {:provider    provider
                                                    :model       model
                                                    :temperature 0.7
                                                    :max-tokens  8192})
-                  ;; Agent invoke factory — creates fresh invoke-fns for evaluation
                   invoke-fn-factory
                   (fn []
                     (:invoke-fn
@@ -608,11 +606,13 @@
                   result (introspect/run-loop!
                           {:db                  db
                            :repo-name           db-name
+                           :repo-path           (:repo-path opts)
                            :invoke-fn-factory   invoke-fn-factory
                            :optimizer-invoke-fn invoke-fn
                            :max-iterations      (or max-iterations 10)
                            :max-hours           max-hours
-                           :max-cost            max-cost})]
+                           :max-cost            max-cost
+                           :git-commit?         git-commit})]
               (log! (str "\nIntrospect complete: " (:improvements result)
                          " improvements in " (:iterations result)
                          " iterations (final score: "

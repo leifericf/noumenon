@@ -1,5 +1,5 @@
 (ns noumenon.introspect-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is]]
             [noumenon.introspect :as intro]))
 
 ;; --- Proposal parsing ---
@@ -40,13 +40,64 @@
               :modification {:template "Prompt for {{repo-name}} with {{schema}} and {{rules}} plus {{examples}}"}
               :rationale "test"}))))
 
+(deftest validate-proposal-rules-valid
+  (is (nil? (intro/validate-proposal
+             {:target :rules
+              :modification {:rules "[[(my-rule ?x ?y) [?x :file/path ?y]]]"}
+              :rationale "test"}))))
+
+(deftest validate-proposal-rules-invalid-edn
+  (is (string? (intro/validate-proposal
+                {:target :rules
+                 :modification {:rules "not valid edn {{"}
+                 :rationale "test"}))))
+
+(deftest validate-proposal-code-valid
+  (is (nil? (intro/validate-proposal
+             {:target :code
+              :modification {:file "src/noumenon/query.clj"
+                             :content "(ns noumenon.query)"}
+              :rationale "test"}))))
+
+(deftest validate-proposal-code-wrong-dir
+  (is (string? (intro/validate-proposal
+                {:target :code
+                 :modification {:file "test/foo.clj" :content "x"}
+                 :rationale "test"}))))
+
+(deftest validate-proposal-code-not-clj
+  (is (string? (intro/validate-proposal
+                {:target :code
+                 :modification {:file "src/noumenon/foo.py" :content "x"}
+                 :rationale "test"}))))
+
+;; --- Gap analysis ---
+
+(deftest gap-analysis-empty
+  (let [prompt (intro/build-meta-prompt
+                {:system-prompt "test" :examples ["a"] :rules []
+                 :history [] :baseline-results []})]
+    (is (string? prompt))
+    (is (.contains prompt "No baseline data"))))
+
+(deftest gap-analysis-with-results
+  (let [prompt (intro/build-meta-prompt
+                {:system-prompt "test" :examples ["a"] :rules []
+                 :history []
+                 :baseline-results [{:id :q01 :score :correct :reasoning "ok"}
+                                    {:id :q02 :score :wrong :reasoning "missed"}]})]
+    (is (.contains prompt "WRONG answers"))
+    (is (.contains prompt "q02"))))
+
 ;; --- History formatting ---
 
-(deftest format-history-empty
+(deftest format-history-with-goals
   (let [prompt (intro/build-meta-prompt
-                {:system-prompt "test" :examples ["a"] :history [] :baseline-results []})]
-    (is (string? prompt))
-    (is (.contains prompt "No prior iterations."))))
+                {:system-prompt "test" :examples ["a"] :rules []
+                 :history [{:target :examples :rationale "test" :outcome :improved
+                            :delta 0.05 :goal "improve accuracy"}]
+                 :baseline-results []})]
+    (is (.contains prompt "goal=\"improve accuracy\""))))
 
 ;; --- Score calculation ---
 
