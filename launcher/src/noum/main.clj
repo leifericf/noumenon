@@ -289,14 +289,26 @@
                       "&run_id_b=" (nth positional 2))]
       (print-api-result (api-get! conn (str "/api/benchmark/compare" params))))))
 
-(defn- do-history [{:keys [flags]}]
-  (if-not (:type flags)
-    (do (tui/eprintln "Usage: noum history --type <prompt|rules> [--name <name>]") 1)
-    (let [conn   (ensure-backend! flags)
-          params (str "?type=" (:type flags)
-                      (when (:name flags) (str "&name=" (:name flags))))
-          resp   (api-get! conn (str "/api/artifacts/history" params))]
-      (print-api-result resp))))
+(defn- do-history [{:keys [flags positional]}]
+  (let [atype (or (:type flags) (first positional))
+        aname (or (:name flags) (second positional))]
+    (cond
+      (nil? atype)
+      (do (tui/eprintln "Usage: noum history <prompt|rules> [name]") 1)
+
+      (not (#{"prompt" "rules"} atype))
+      (do (tui/eprintln (str "Unknown type: " atype ". Must be 'prompt' or 'rules'.")) 1)
+
+      (and (= "prompt" atype) (nil? aname))
+      (do (tui/eprintln "Usage: noum history prompt <name>")
+          (tui/eprintln "Hint: prompt names include 'analyze-file', 'agent-system', 'introspect'.")
+          1)
+
+      :else
+      (let [conn   (ensure-backend! flags)
+            params (str "?type=" atype (when aname (str "&name=" aname)))
+            resp   (api-get! conn (str "/api/artifacts/history" params))]
+        (print-api-result resp)))))
 
 (defn- do-help [{:keys [positional]}]
   (if-let [cmd (first positional)]

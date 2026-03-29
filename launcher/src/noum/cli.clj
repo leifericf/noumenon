@@ -63,7 +63,7 @@
                  :usage   "noum reseed"
                  :api-path "/api/reseed" :api-method :post}
    "history"    {:summary "Show artifact change history"
-                 :usage   "noum history --type <prompt|rules> [--name <name>]"}
+                 :usage   "noum history <prompt|rules> [name]"}
    "setup"      {:summary "Configure MCP for Claude Desktop or Code"
                  :usage   "noum setup <desktop|code>"}
    "install"    {:summary "Install Claude Desktop and/or Code"
