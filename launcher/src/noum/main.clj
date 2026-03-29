@@ -131,6 +131,9 @@
         (daemon/ensure! (merge {:jre-path jre-path :jar-path jar-path}
                                (select-keys effective [:db-dir :provider :model :token])))))))
 
+(defn- url-encode [s]
+  (java.net.URLEncoder/encode (str s) "UTF-8"))
+
 ;; --- Command handlers (return exit codes, never call System/exit) ---
 
 (def ^:private positional-maps
@@ -173,7 +176,10 @@
       (do (tui/eprintln (str "Command '" command "' is not yet implemented.")) 1)
 
       (and min-args (< (count positional) min-args))
-      (do (tui/eprintln (str "Usage: " usage)) 1)
+      (do (tui/eprintln (str "Usage: " usage))
+          (when (and (zero? (count positional)) (>= (or min-args 0) 1))
+            (tui/eprintln "Use `noum databases` to see imported repositories."))
+          1)
 
       :else
       (let [conn        (ensure-backend! flags)
@@ -185,17 +191,17 @@
 
 (defn- do-db-get
   "GET endpoint addressed by database name. Shared by status and schema."
-  [{:keys [flags positional]} path-prefix]
+  [{:keys [flags positional]} path-prefix cmd-name]
   (if-let [repo (first positional)]
     (let [conn (ensure-backend! flags)]
       (api-get! conn (str path-prefix repo)))
-    {:ok false :error "Usage: noum <command> <repo>"}))
+    {:ok false :error (str "Usage: noum " cmd-name " <repo>. Use `noum databases` to see names.")}))
 
 (defn- do-status [parsed]
-  (print-api-result (do-db-get parsed "/api/status/")))
+  (print-api-result (do-db-get parsed "/api/status/" "status")))
 
 (defn- do-schema [parsed]
-  (let [resp (do-db-get parsed "/api/schema/")]
+  (let [resp (do-db-get parsed "/api/schema/" "schema")]
     (if (:ok resp)
       (do (println (get-in resp [:data :schema])) 0)
       (do (tui/eprintln (str (style/red "Error: ") (:error resp))) 1))))
@@ -263,30 +269,38 @@
 
 (defn- do-delete [{:keys [flags positional]}]
   (if (empty? positional)
-    (do (tui/eprintln "Usage: noum delete <name>") 1)
+    (do (tui/eprintln "Usage: noum delete <name>")
+        (tui/eprintln "Use `noum databases` to see available database names.")
+        1)
     (let [conn (ensure-backend! flags)
           resp (try
-                 (let [r (http/delete (str (base-url conn) "/api/databases/" (first positional))
-                                      {:headers (auth-headers conn) :timeout 30000})]
+                 (let [r (http/delete (str (base-url conn) "/api/databases/" (url-encode (first positional)))
+                                      {:headers (auth-headers conn)
+                                       :timeout 30000
+                                       :throw   false})]
                    (json/parse-string (:body r) true))
                  (catch Exception e {:ok false :error (.getMessage e)}))]
       (print-api-result resp))))
 
 (defn- do-results [{:keys [flags positional]}]
   (if (empty? positional)
-    (do (tui/eprintln "Usage: noum results <repo> [--run-id <id>]") 1)
+    (do (tui/eprintln "Usage: noum results <repo> [--run-id <id>]")
+        (tui/eprintln "Omit --run-id to get the latest run.")
+        1)
     (let [conn   (ensure-backend! flags)
-          params (str "?repo_path=" (first positional)
-                      (when-let [rid (:run-id flags)] (str "&run_id=" rid)))]
+          params (str "?repo_path=" (url-encode (first positional))
+                      (when-let [rid (:run-id flags)] (str "&run_id=" (url-encode rid))))]
       (print-api-result (api-get! conn (str "/api/benchmark/results" params))))))
 
 (defn- do-compare [{:keys [flags positional]}]
   (if (< (count positional) 3)
-    (do (tui/eprintln "Usage: noum compare <repo> <run-a> <run-b>") 1)
+    (do (tui/eprintln "Usage: noum compare <repo> <run-a> <run-b>")
+        (tui/eprintln "Use `noum results <repo>` to find run IDs.")
+        1)
     (let [conn   (ensure-backend! flags)
-          params (str "?repo_path=" (first positional)
-                      "&run_id_a=" (second positional)
-                      "&run_id_b=" (nth positional 2))]
+          params (str "?repo_path=" (url-encode (first positional))
+                      "&run_id_a=" (url-encode (second positional))
+                      "&run_id_b=" (url-encode (nth positional 2)))]
       (print-api-result (api-get! conn (str "/api/benchmark/compare" params))))))
 
 (defn- do-history [{:keys [flags positional]}]
