@@ -32,6 +32,7 @@ jobs:
 
   build-launcher:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - runner: ubuntu-latest
@@ -49,11 +50,6 @@ jobs:
             arch: arm64
             bb-arch: macos-aarch64
             binary: noum-macos-arm64
-          - runner: macos-13
-            os: macos
-            arch: x86_64
-            bb-arch: macos-amd64
-            binary: noum-macos-x86_64
           - runner: windows-latest
             os: windows
             arch: x86_64
@@ -157,7 +153,6 @@ jobs:
           files: |
             artifacts/noumenon-jar/noumenon-*.jar
             artifacts/noum-macos-arm64/noum-macos-arm64
-            artifacts/noum-macos-x86_64/noum-macos-x86_64
             artifacts/noum-linux-x86_64/noum-linux-x86_64
             artifacts/noum-linux-arm64/noum-linux-arm64
             artifacts/noum-windows-x86_64.exe/noum-windows-x86_64.exe
@@ -204,7 +199,6 @@ jobs:
         id: hashes
         run: |
           echo "macos_arm64=$(sha256sum artifacts/noum-macos-arm64/noum-macos-arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "macos_x86_64=$(sha256sum artifacts/noum-macos-x86_64/noum-macos-x86_64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "linux_arm64=$(sha256sum artifacts/noum-linux-arm64/noum-linux-arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "linux_x86_64=$(sha256sum artifacts/noum-linux-x86_64/noum-linux-x86_64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
@@ -223,13 +217,8 @@ jobs:
             version "VERSION_PLACEHOLDER"
 
             on_macos do
-              if Hardware::CPU.arm?
-                url "https://github.com/leifericf/noumenon/releases/download/vVERSION_PLACEHOLDER/noum-macos-arm64"
-                sha256 "SHA_MACOS_ARM64"
-              else
-                url "https://github.com/leifericf/noumenon/releases/download/vVERSION_PLACEHOLDER/noum-macos-x86_64"
-                sha256 "SHA_MACOS_X86_64"
-              end
+              url "https://github.com/leifericf/noumenon/releases/download/vVERSION_PLACEHOLDER/noum-macos-arm64"
+              sha256 "SHA_MACOS_ARM64"
             end
 
             on_linux do
@@ -254,7 +243,6 @@ jobs:
           FORMULA
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" Formula/noumenon.rb
           sed -i "s/SHA_MACOS_ARM64/${{ steps.hashes.outputs.macos_arm64 }}/g" Formula/noumenon.rb
-          sed -i "s/SHA_MACOS_X86_64/${{ steps.hashes.outputs.macos_x86_64 }}/g" Formula/noumenon.rb
           sed -i "s/SHA_LINUX_ARM64/${{ steps.hashes.outputs.linux_arm64 }}/g" Formula/noumenon.rb
           sed -i "s/SHA_LINUX_X86_64/${{ steps.hashes.outputs.linux_x86_64 }}/g" Formula/noumenon.rb
           git config user.name "github-actions[bot]"
