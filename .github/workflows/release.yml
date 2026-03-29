@@ -113,8 +113,6 @@ jobs:
             binary: noum-linux-x86_64
           - runner: macos-latest
             binary: noum-macos-arm64
-          - runner: windows-latest
-            binary: noum-windows-x86_64.exe
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/download-artifact@v4
