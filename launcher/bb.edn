@@ -1,0 +1,10 @@
+{:paths ["src" "resources"]
+ :deps {}
+ :tasks
+ {uber {:doc "Build uberjar for self-contained binary"
+        :task (let [src-dir "src"
+                    res-dir "resources"
+                    target  "target/noum.jar"]
+                (babashka.fs/create-dirs "target")
+                (shell "bb" "uberjar" target "-m" "noum.main"
+                       "--classpath" (str src-dir ":" res-dir)))}}}

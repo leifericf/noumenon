@@ -1,9 +1,11 @@
-# Clojure
+# Clojure / Babashka
 .cpcache/
 .nrepl-port
 *.jar
 *.class
 target/
+launcher/target/
+launcher/resources/version.edn
 
 # Datomic Local
 .datomic/
