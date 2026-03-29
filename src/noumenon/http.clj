@@ -312,11 +312,16 @@
   "Connect by database name (not repo path). For GET endpoints where
    we only need the database, not a filesystem path."
   [db-name db-dir f]
-  (let [conn    (db/get-or-create-conn db-dir db-name)
-        meta-conn (db/ensure-meta-db db-dir)]
-    (f {:conn conn :db (d/db conn)
-        :meta-conn meta-conn :meta-db (d/db meta-conn)
-        :db-name db-name})))
+  (let [db-path (io/file db-dir "noumenon" db-name)]
+    (when-not (.isDirectory db-path)
+      (throw (ex-info (str "Database not found: " db-name
+                           ". Use `noum databases` to see available databases.")
+                      {:status 404 :message (str "Database not found: " db-name)})))
+    (let [conn    (db/get-or-create-conn db-dir db-name)
+          meta-conn (db/ensure-meta-db db-dir)]
+      (f {:conn conn :db (d/db conn)
+          :meta-conn meta-conn :meta-db (d/db meta-conn)
+          :db-name db-name}))))
 
 (defn- handle-schema [request config]
   (let [db-name (get-in request [:params :repo])]
@@ -344,13 +349,14 @@
 (defn- handle-delete-database [request config]
   (let [db-name (get-in request [:params :name])
         db-dir  (:db-dir config)
-        client  (db/create-client db-dir)]
-    (db/delete-db client db-name)
-    ;; Clean up the directory that Datomic Local leaves behind
-    (let [db-path (io/file db-dir "noumenon" db-name)]
-      (when (.isDirectory db-path)
-        (run! io/delete-file (reverse (file-seq db-path)))))
-    (ok {:deleted db-name})))
+        db-path (io/file db-dir "noumenon" db-name)]
+    (if (.isDirectory db-path)
+      (do (let [client (db/create-client db-dir)]
+            (db/delete-db client db-name))
+          (when (.isDirectory db-path)
+            (run! io/delete-file (reverse (file-seq db-path))))
+          (ok {:deleted db-name}))
+      (error-response 404 (str "Database not found: " db-name)))))
 
 (defn- run-benchmark [{:keys [conn meta-db db repo-path]} params config progress-fn]
   (let [{:keys [prompt-fn]}
