@@ -702,7 +702,7 @@
    Returns {:run-id str :iterations n :improvements n :final-score double}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
            meta-conn max-iterations max-hours max-cost git-commit?
-           model-config allowed-targets eval-runs stop-flag run-id]
+           model-config allowed-targets eval-runs stop-flag run-id progress-fn]
     :or   {max-iterations 10 eval-runs 1}}]
   (let [run-id        (or run-id (generate-run-id))
         start-ms      (System/currentTimeMillis)
@@ -766,6 +766,10 @@
                   ;; Persist each iteration immediately
                   (d/transact meta-conn
                               {:tx-data (iter-tx-data run-id i record)})
+                  (when progress-fn
+                    (progress-fn {:current (inc i) :total max-iterations
+                                  :message (str (name (or (:target record) :unknown))
+                                                " " (name (or outcome :unknown)))}))
                   (recur (inc i) new-baseline (conj history record)
                          (if (= :improved outcome) (inc improvements) improvements))))))]
     ;; Finalize the run with completion stats

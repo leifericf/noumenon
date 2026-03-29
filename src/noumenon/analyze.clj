@@ -470,7 +470,7 @@
 
 (defn- analyze-one-file!
   "Analyze one file with progress logging. Updates stats-atom in place."
-  [{:keys [conn repo-path analysis-opts total stats-atom]} [_idx file-map]]
+  [{:keys [conn repo-path analysis-opts total stats-atom progress-fn]} [_idx file-map]]
   (let [start  (System/currentTimeMillis)
         result (analyze-file! conn repo-path file-map analysis-opts)
         dur    (- (System/currentTimeMillis) start)
@@ -482,6 +482,8 @@
                (name (:status result))
                (when-let [u (:usage result)]
                  (str " tokens=" (:input-tokens u) "/" (:output-tokens u)))))
+    (when progress-fn
+      (progress-fn {:current (:started n) :total total :message path}))
     (when (:truncated? result)
       (log! (str "WARNING: truncated " path)))))
 
@@ -582,7 +584,7 @@
    `opts` may include :model-id, :concurrency, :min-delay-ms.
    Returns summary map with :total-usage."
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
-  ([conn repo-path invoke-llm {:keys [meta-db model-id concurrency min-delay-ms max-files]
+  ([conn repo-path invoke-llm {:keys [meta-db model-id concurrency min-delay-ms max-files progress-fn]
                                :or   {concurrency 3 min-delay-ms 0}}]
    (let [head-paths    (into #{} (map :path) (files/parse-ls-tree (files/git-ls-tree repo-path)))
          all-files     (->> (files-needing-analysis (d/db conn))
@@ -605,7 +607,8 @@
                                  :elapsed-ms 0 :total-usage llm/zero-usage})
                ctx        {:conn conn :repo-path repo-path
                            :analysis-opts analysis-opts
-                           :total total :stats-atom stats-atom}
+                           :total total :stats-atom stats-atom
+                           :progress-fn progress-fn}
                start-ms   (System/currentTimeMillis)]
            (pipeline/run-concurrent!
             (vec (map-indexed vector files))

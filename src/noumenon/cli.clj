@@ -365,10 +365,35 @@
                        :positionals {:required 0 :error nil :keys []}}
                 :summary "Start MCP server (JSON-RPC over stdio)"
                 :usage "serve [options]"
-                :epilog "Communicates via JSON-RPC over stdio (stdin/stdout).\nConfigure your MCP client to launch: noumenon serve [options]\nThe server auto-updates the knowledge graph on each query by default;\npass --no-auto-update to disable."}})
+                :epilog "Communicates via JSON-RPC over stdio (stdin/stdout).\nConfigure your MCP client to launch: noumenon serve [options]\nThe server auto-updates the knowledge graph on each query by default;\npass --no-auto-update to disable."}
+   "daemon"    {:spec {:flags [{:flag "--db-dir" :key :db-dir :parse :string
+                                :desc "Override storage directory (default: data/datomic/)"
+                                :error-missing :missing-db-dir-value}
+                               {:flag "--provider" :key :provider :parse :string
+                                :desc "Default LLM provider (default: glm)"
+                                :valid all-valid-providers
+                                :error-invalid :invalid-provider
+                                :error-missing :missing-provider-value}
+                               {:flag "--model" :key :model :parse :string
+                                :desc "Default model alias"
+                                :error-missing :missing-model-value}
+                               {:flag "--port" :key :port :parse :range-int :min 0 :max 65535
+                                :desc "HTTP port (default: 0 = auto-assign)"
+                                :error-invalid :invalid-port :error-missing :missing-port-value}
+                               {:flag "--bind" :key :bind :parse :string
+                                :desc "Bind address (default: 127.0.0.1, use 0.0.0.0 for Docker)"
+                                :error-missing :missing-bind-value}
+                               {:flag "--token" :key :token :parse :string
+                                :desc "Bearer token for authentication"
+                                :error-missing :missing-token-value}]
+                       :initial {:subcommand "daemon"}
+                       :positionals {:required 0 :error nil :keys []}}
+                :summary "Start HTTP daemon for noum CLI and future UI"
+                :usage "daemon [options]"
+                :epilog "Starts an HTTP API server on 127.0.0.1 for the noum launcher\nand future Electron UI. Writes connection info to ~/.noumenon/daemon.edn.\nUse --port to specify a fixed port, or omit for auto-assignment.\nUse --token for remote access authentication."}})
 
 (def ^:private command-order
-  ["digest" "import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "benchmark" "introspect" "reseed" "artifact-history"])
+  ["digest" "import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "daemon" "benchmark" "introspect" "reseed" "artifact-history"])
 
 ;; --- Help text generation ---
 

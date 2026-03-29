@@ -1115,9 +1115,14 @@
       :stop-flag    (:stop-flag shared)
       :error-atom   (:error-atom shared)
       :process-item! (fn [[qid condition question]]
-                       (let [stage-types (stage-types-for question)]
-                         (run-pair! (assoc shared :qid qid :condition condition
-                                           :question question :stage-types stage-types))))})))
+                       (let [stage-types (stage-types-for question)
+                             result (run-pair! (assoc shared :qid qid :condition condition
+                                                      :question question :stage-types stage-types))]
+                         (when-let [pfn (:progress-fn shared)]
+                           (let [done (count (:stages @(:checkpoint shared)))]
+                             (pfn {:current done :total (:total shared)
+                                   :message (str (name qid) " [" (name condition) "]")})))
+                         result))})))
 
 (defn- make-initial-checkpoint
   "Build the initial checkpoint map for a fresh or resumed run."
@@ -1475,7 +1480,8 @@
                         :stop-flag stop-flag :error-atom error-atom
                         :rate-gate rate-gate :min-delay-ms min-delay-ms
                         :run-id run-id :total total :mode mode
-                        :max-question-stages max-question-stages}]
+                        :max-question-stages max-question-stages
+                        :progress-fn (:progress-fn opts)}]
     (log! (str "bench/run-start run-id=" run-id
                " questions=" (count questions)
                " layers=" (str/join "," (map name layers))

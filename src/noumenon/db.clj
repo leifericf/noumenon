@@ -29,6 +29,22 @@
     (schema/ensure-schema conn)
     conn))
 
+;; --- Connection cache (shared across mcp, http, etc.) ---
+
+(defonce conn-cache (atom {}))
+
+(defn get-or-create-conn
+  "Get or create a connection, keyed on [db-dir db-name].
+   Thread-safe via locking."
+  [db-dir db-name]
+  (let [cache-key [db-dir db-name]]
+    (or (get @conn-cache cache-key)
+        (locking conn-cache
+          (or (get @conn-cache cache-key)
+              (let [conn (connect-and-ensure-schema db-dir db-name)]
+                (swap! conn-cache assoc cache-key conn)
+                conn))))))
+
 (defn ensure-meta-db
   "Connect to the noumenon-internal meta database, ensure schema, and seed
    artifacts from classpath if needed. Returns the connection."

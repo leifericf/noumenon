@@ -14,6 +14,7 @@
             [noumenon.llm :as llm]
             [noumenon.imports :as imports]
             [noumenon.introspect :as introspect]
+            [noumenon.http :as http]
             [noumenon.mcp :as mcp]
             [noumenon.query :as query]
             [noumenon.sync :as sync]
@@ -796,7 +797,19 @@
                      "introspect"     (do-introspect parsed)
                      "reseed"         (do-reseed parsed)
                      "artifact-history" (do-artifact-history parsed)
-                     "serve"          (do (mcp/serve! parsed) {:exit 0}))]
+                     "serve"          (do (mcp/serve! parsed) {:exit 0})
+                     "daemon"         (do (let [port (http/start!
+                                                      {:port     (:port parsed 0)
+                                                       :bind     (:bind parsed "127.0.0.1")
+                                                       :db-dir   (util/resolve-db-dir parsed)
+                                                       :provider (:provider parsed)
+                                                       :model    (:model parsed)
+                                                       :token    (:token parsed)})]
+                                            (log! (str "Daemon running on port " port ". Press Ctrl+C to stop."))
+                                            (.addShutdownHook (Runtime/getRuntime)
+                                                              (Thread. ^Runnable http/stop!))
+                                            @(promise))
+                                          {:exit 0}))]
         (when (and (:result result)
                    (zero? (:exit result))
                    (not (#{"benchmark" "serve" "status" "list-databases"

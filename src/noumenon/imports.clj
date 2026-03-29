@@ -647,7 +647,7 @@ end")
   "Extract cross-file import graph deterministically and transact into Datomic.
    Returns a summary map. `opts` may include :concurrency (default 8)."
   ([conn repo-path] (enrich-repo! conn repo-path {}))
-  ([conn repo-path {:keys [concurrency] :or {concurrency 8}}]
+  ([conn repo-path {:keys [concurrency progress-fn] :or {concurrency 8}}]
    (let [db        (d/db conn)
          all-files (files-with-lang db)
          all-paths (into #{} (map :file/path) all-files)
@@ -667,6 +667,8 @@ end")
        (d/transact conn {:tx-data [{:db/id "datomic.tx"
                                     :tx/op :enrich
                                     :tx/source :deterministic}]}))
+     (when progress-fn
+       (progress-fn {:current total :total total :message "enrich complete"}))
      (let [files-skipped (log-enrich-summary! final concurrency skipped-tools)]
        (-> final
            (dissoc :batch)

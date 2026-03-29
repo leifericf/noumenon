@@ -14,6 +14,7 @@
             [noumenon.introspect :as introspect]
             [noumenon.llm :as llm]
             [noumenon.query :as query]
+            [noumenon.sessions :as sessions]
             [noumenon.sync :as sync]
             [noumenon.util :as util :refer [log!]])
   (:import [java.io BufferedReader PrintWriter]))
@@ -32,42 +33,12 @@
 
 ;; --- Connection cache ---
 
-(defonce ^:private connections (atom {}))
-
 ;; --- Async introspect sessions ---
 
-(defonce ^:private introspect-sessions (atom {}))
-;; {run-id {:status :running/:completed/:stopped/:error
-;;          :future <future> :result <map> :stop-flag <atom<bool>>
-;;          :started-at <epoch-ms> :completed-at <epoch-ms>}}
-
-(def ^:private max-introspect-sessions 5)
-(def ^:private session-ttl-ms (* 30 60 1000))
-
-(defn- evict-stale-sessions!
-  "Remove completed/errored sessions older than session-ttl-ms."
-  []
-  (let [now (System/currentTimeMillis)]
-    (swap! introspect-sessions
-           (fn [sessions]
-             (into {}
-                   (remove (fn [[_ v]]
-                             (and (#{:completed :error :stopped} (:status v))
-                                  (when-let [t (:completed-at v)]
-                                    (> (- now t) session-ttl-ms)))))
-                   sessions)))))
-
 (defn- get-or-create-conn
-  "Get or create a connection, keyed on [db-dir db-name].
-   Uses locking to avoid retrying side-effecting db/connect-and-ensure-schema."
+  "Delegate to shared db/conn-cache."
   [db-dir db-name]
-  (let [cache-key [db-dir db-name]]
-    (or (get @connections cache-key)
-        (locking connections
-          (or (get @connections cache-key)
-              (let [conn (db/connect-and-ensure-schema db-dir db-name)]
-                (swap! connections assoc cache-key conn)
-                conn))))))
+  (db/get-or-create-conn db-dir db-name))
 
 ;; --- JSON-RPC plumbing ---
 
@@ -332,7 +303,7 @@
 (defn- handle-import [args defaults]
   (with-conn args defaults
     (fn [{:keys [conn repo-path]}]
-      (let [git-r   (git/import-commits! conn repo-path repo-path)
+      (let [git-r   (git/import-commits! conn repo-path repo-path (:progress-fn defaults))
             files-r (files/import-files! conn repo-path repo-path)]
         (tool-result (format-import-summary git-r files-r))))))
 
@@ -503,7 +474,8 @@
                 result      (analyze/analyze-repo! conn repo-path prompt-fn
                                                    (cond-> {:meta-db     meta-db
                                                             :model-id    model-id
-                                                            :concurrency concurrency}
+                                                            :concurrency concurrency
+                                                            :progress-fn (:progress-fn defaults)}
                                                      max-files (assoc :max-files max-files)))]
             (tool-result (str "Analysis complete. "
                               (:files-analyzed result 0) " files analyzed"
@@ -569,6 +541,7 @@
                                               :mode mode
                                               :budget {:max-questions (args "max_questions")}
                                               :report? (args "report")
+                                              :progress-fn (:progress-fn defaults)
                                               :concurrency 3)]
         (tool-result
          (str "Benchmark complete. Run ID: " (:run-id result)
@@ -686,7 +659,8 @@
         ;; Analyze
         (when-not (args "skip_analyze")
           (let [r (analyze/analyze-repo! conn repo-path prompt-fn
-                                         {:meta-db meta-db :model-id model-id :concurrency 3})]
+                                         {:meta-db meta-db :model-id model-id :concurrency 3
+                                          :progress-fn (:progress-fn defaults)})]
             (swap! results assoc :analyze r)))
         ;; Benchmark
         (when-not (args "skip_benchmark")
@@ -698,7 +672,8 @@
                                              :conn conn :mode mode
                                              :budget {:max-questions (args "max_questions")}
                                              :report? (args "report")
-                                             :concurrency 3)]
+                                             :concurrency 3
+                                             :progress-fn (:progress-fn defaults))]
             (swap! results assoc :benchmark
                    (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
         (tool-result (format-digest-summary @results))))))
@@ -731,7 +706,8 @@
                              :max-cost            (args "max_cost")
                              :eval-runs           (or (args "eval_runs") 1)
                              :git-commit?         (args "git_commit")
-                             :model-config        {:provider provider :model model}}
+                             :model-config        {:provider provider :model model}
+                             :progress-fn         (:progress-fn defaults)}
                       (args "target")
                       (assoc :allowed-targets
                              (set (map keyword (str/split (args "target") #","))))))]
@@ -743,11 +719,10 @@
 
 (defn- handle-introspect-start [args defaults]
   (validate-llm-inputs! args)
-  (evict-stale-sessions!)
-  (when (>= (->> @introspect-sessions vals (filter (comp #{:running} :status)) count)
-            max-introspect-sessions)
+  (sessions/evict-stale!)
+  (when (>= (sessions/running-count) sessions/max-sessions)
     (throw (ex-info "Too many active introspect sessions"
-                    {:user-message (str "Maximum " max-introspect-sessions
+                    {:user-message (str "Maximum " sessions/max-sessions
                                         " concurrent sessions. Stop one first.")})))
   (with-conn args defaults
     (fn [{:keys [db meta-conn db-name repo-path]}]
@@ -778,50 +753,43 @@
                                (set (map keyword (str/split (args "target") #",")))))
             run-id    (str (System/currentTimeMillis) "-" (java.util.UUID/randomUUID))
             now       (System/currentTimeMillis)]
-        ;; Store session BEFORE starting the future to avoid race condition
-        (swap! introspect-sessions assoc run-id
-               {:status :running :stop-flag stop-flag :started-at now})
+        (sessions/register! run-id {:status :running :stop-flag stop-flag :started-at now})
         (let [fut (future
                     (try
                       (let [result (introspect/run-loop! (assoc run-opts :run-id run-id))
                             final-status (if @stop-flag :stopped :completed)]
-                        (swap! introspect-sessions update run-id merge
-                               {:status final-status :result result
-                                :completed-at (System/currentTimeMillis)})
+                        (sessions/update-session! run-id
+                                                  #(merge % {:status final-status :result result
+                                                             :completed-at (System/currentTimeMillis)}))
                         result)
                       (catch Exception e
-                        (swap! introspect-sessions update run-id merge
-                               {:status :error :error (.getMessage e)
-                                :completed-at (System/currentTimeMillis)}))))]
-          (swap! introspect-sessions assoc-in [run-id :future] fut)
+                        (sessions/update-session! run-id
+                                                  #(merge % {:status :error :error (.getMessage e)
+                                                             :completed-at (System/currentTimeMillis)})))))]
+          (sessions/update-session! run-id #(assoc % :future fut))
           (tool-result (str "Introspect started. Run ID: " run-id
                             "\nUse noumenon_introspect_status to check progress.")))))))
-
-(defn- format-result-summary [result]
-  (str "Improvements: " (:improvements result)
-       " in " (:iterations result) " iterations"
-       "\nFinal score: " (format "%.3f" (double (:final-score result 0)))))
 
 (defn- handle-introspect-status [args _defaults]
   (let [run-id (args "run_id")]
     (validate-string-length! "run_id" run-id max-run-id-len)
-    (if-let [session (get @introspect-sessions run-id)]
+    (if-let [session (sessions/get-session run-id)]
       (let [{:keys [status result error started-at]} session]
         (tool-result
          (case status
            :running   (let [elapsed-min (quot (- (System/currentTimeMillis) (or started-at 0))
                                               60000)]
                         (str "Status: running\nElapsed: " elapsed-min " minutes"))
-           :completed (str "Status: completed\n" (format-result-summary result))
+           :completed (str "Status: completed\n" (sessions/format-result-summary result))
            :stopped   (str "Status: stopped (by request)\n"
-                           (when result (format-result-summary result)))
+                           (when result (sessions/format-result-summary result)))
            :error     (str "Status: error\n" error))))
       (tool-error (str "Unknown run ID: " run-id)))))
 
 (defn- handle-introspect-stop [args _defaults]
   (let [run-id (args "run_id")]
     (validate-string-length! "run_id" run-id max-run-id-len)
-    (if-let [session (get @introspect-sessions run-id)]
+    (if-let [session (sessions/get-session run-id)]
       (case (:status session)
         :running   (do (reset! (:stop-flag session) true)
                        (tool-result (str "Stop requested for " run-id
@@ -918,12 +886,33 @@
 (defn- handle-tools-list [_params]
   {:tools tools})
 
-(defn- handle-tools-call [params defaults]
+(defn- make-mcp-progress-fn
+  "Create a progress-fn that sends MCP notifications/progress to the writer.
+   Returns nil if no progressToken was provided by the client."
+  [^PrintWriter writer progress-token]
+  (when progress-token
+    (fn [{:keys [current total message]}]
+      (let [notification (json/write-str
+                          {:jsonrpc "2.0"
+                           :method  "notifications/progress"
+                           :params  {:progressToken progress-token
+                                     :progress      current
+                                     :total         (or total 0)
+                                     :message       message}})]
+        (locking writer
+          (.println writer notification))))))
+
+(defn- handle-tools-call [params defaults ^PrintWriter writer]
   (let [tool-name (get params "name")
-        arguments (or (get params "arguments") {})]
+        arguments (or (get params "arguments") {})
+        meta-info (get params "_meta")
+        progress-token (get meta-info "progressToken")
+        progress-fn (make-mcp-progress-fn writer progress-token)]
     (if-let [handler (tool-handlers tool-name)]
       (try
-        (handler arguments defaults)
+        (handler arguments (if progress-fn
+                             (assoc defaults :progress-fn progress-fn)
+                             defaults))
         (catch clojure.lang.ExceptionInfo e
           (log! "tool/error" tool-name (.getMessage e))
           (tool-error (or (:user-message (ex-data e))
@@ -964,12 +953,12 @@
 
 (defn- dispatch-method
   "Dispatch a JSON-RPC method. Returns a JSON response string, or nil for notifications."
-  [id method params defaults]
+  [id method params defaults ^PrintWriter writer]
   (case method
     "initialize"              (format-response id (handle-initialize params))
     "notifications/initialized" nil
     "tools/list"              (format-response id (handle-tools-list params))
-    "tools/call"              (format-response id (handle-tools-call params defaults))
+    "tools/call"              (format-response id (handle-tools-call params defaults writer))
     "ping"                    (format-response id {})
     "resources/list"          (format-response id {:resources []})
     (format-error id -32601 (str "Method not found: " method))))
@@ -982,7 +971,7 @@
           id      (get request "id")
           method  (get request "method")
           params  (or (get request "params") {})]
-      (when-let [response (dispatch-method id method params defaults)]
+      (when-let [response (dispatch-method id method params defaults writer)]
         (.println writer response)))
     (catch Exception e
       (log! "parse/error" (.getMessage e))

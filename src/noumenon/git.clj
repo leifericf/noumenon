@@ -314,7 +314,7 @@
      :skipped (- (count commits) (count to-import))}))
 
 (defn- transact-commits!
-  [conn repo-uri commits]
+  [conn repo-uri commits progress-fn]
   (let [total (count commits)]
     (doseq [[i commit] (map-indexed vector commits)]
       (try
@@ -326,28 +326,31 @@
                            :changed-files (:changed-files commit)}
                           e))))
       (when (and (pos? total) (zero? (mod (inc i) 100)))
-        (log! (str "  [" (inc i) "/" total "] commits imported..."))))))
+        (log! (str "  [" (inc i) "/" total "] commits imported...")))
+      (when progress-fn
+        (progress-fn {:current (inc i) :total total :message (str "commit " (subs (:sha commit) 0 7))})))))
 
 (defn import-commits!
   "Import git history from repo-path into Datomic via conn.
    Parses git log, filters already-imported commits, transacts one per tx.
    `repo-uri` identifies the repository entity.
    Returns a summary map with :commits-imported, :commits-skipped, :elapsed-ms."
-  [conn repo-path repo-uri]
-  (let [start-ms  (System/currentTimeMillis)
-        raw       (git-log repo-path)
-        all       (parse-commits raw)
-        {:keys [to-import skipped] :as _plan}
-        (build-import-plan (d/db conn) all)]
-    (when (and (empty? all) (seq raw))
-      (log! "WARNING: git log produced output but no commits were parsed"))
-    (when (empty? all)
-      (log! "WARNING: no commits found in" (str repo-path)))
-    (transact-commits! conn repo-uri to-import)
-    (let [elapsed (- (System/currentTimeMillis) start-ms)]
-      (log! (str "Imported " (count to-import) " commits, "
-                 "skipped " skipped " already present. "
-                 "(" elapsed " ms)"))
-      {:commits-imported (count to-import)
-       :commits-skipped  skipped
-       :elapsed-ms       elapsed})))
+  ([conn repo-path repo-uri] (import-commits! conn repo-path repo-uri nil))
+  ([conn repo-path repo-uri progress-fn]
+   (let [start-ms  (System/currentTimeMillis)
+         raw       (git-log repo-path)
+         all       (parse-commits raw)
+         {:keys [to-import skipped] :as _plan}
+         (build-import-plan (d/db conn) all)]
+     (when (and (empty? all) (seq raw))
+       (log! "WARNING: git log produced output but no commits were parsed"))
+     (when (empty? all)
+       (log! "WARNING: no commits found in" (str repo-path)))
+     (transact-commits! conn repo-uri to-import progress-fn)
+     (let [elapsed (- (System/currentTimeMillis) start-ms)]
+       (log! (str "Imported " (count to-import) " commits, "
+                  "skipped " skipped " already present. "
+                  "(" elapsed " ms)"))
+       {:commits-imported (count to-import)
+        :commits-skipped  skipped
+        :elapsed-ms       elapsed}))))
