@@ -797,11 +797,17 @@
                      "introspect"     (do-introspect parsed)
                      "reseed"         (do-reseed parsed)
                      "artifact-history" (do-artifact-history parsed)
-                     "serve"          (do (mcp/serve! parsed) {:exit 0})
-                     "daemon"         (do (let [port (http/start!
+                     "serve"          (let [user-db (str (System/getProperty "user.home")
+                                                         "/.noumenon/data")]
+                                        (mcp/serve! (update parsed :db-dir #(or % user-db)))
+                                        {:exit 0})
+                     "daemon"         (do (let [daemon-db-dir (or (:db-dir parsed)
+                                                                  (str (System/getProperty "user.home")
+                                                                       "/.noumenon/data"))
+                                                port (http/start!
                                                       {:port     (:port parsed 0)
                                                        :bind     (:bind parsed "127.0.0.1")
-                                                       :db-dir   (util/resolve-db-dir parsed)
+                                                       :db-dir   daemon-db-dir
                                                        :provider (:provider parsed)
                                                        :model    (:model parsed)
                                                        :token    (:token parsed)})]
