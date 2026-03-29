@@ -335,7 +335,9 @@
         names  (db/list-db-dirs db-dir)]
     (if (seq names)
       (let [client (db/create-client db-dir)
-            stats  (mapv #(db/db-stats client %) names)]
+            stats  (->> names
+                        (mapv #(db/db-stats client %))
+                        (remove :error))]
         (ok stats))
       (ok []))))
 
@@ -343,9 +345,12 @@
   (let [db-name (get-in request [:params :name])
         db-dir  (:db-dir config)
         client  (db/create-client db-dir)]
-    (if (db/delete-db client db-name)
-      (ok {:deleted db-name})
-      (error-response 404 (str "Database not found: " db-name)))))
+    (db/delete-db client db-name)
+    ;; Clean up the directory that Datomic Local leaves behind
+    (let [db-path (io/file db-dir "noumenon" db-name)]
+      (when (.isDirectory db-path)
+        (run! io/delete-file (reverse (file-seq db-path)))))
+    (ok {:deleted db-name})))
 
 (defn- run-benchmark [{:keys [conn meta-db db repo-path]} params config progress-fn]
   (let [{:keys [prompt-fn]}
@@ -549,6 +554,17 @@
               {:handler handler :params params})))
         routes))
 
+(defn- parse-query-params
+  "Parse query string into a keyword map. Returns {} if no query string."
+  [query-string]
+  (if (or (nil? query-string) (str/blank? query-string))
+    {}
+    (->> (str/split query-string #"&")
+         (map #(str/split % #"=" 2))
+         (filter #(= 2 (count %)))
+         (map (fn [[k v]] [(keyword k) (java.net.URLDecoder/decode v "UTF-8")]))
+         (into {}))))
+
 ;; --- Ring handler ---
 
 (defn make-handler
@@ -561,9 +577,12 @@
   [config]
   (fn [request]
     (let [method (keyword (str/lower-case (name (:request-method request))))
-          path   (:uri request)]
+          path   (:uri request)
+          qp     (parse-query-params (:query-string request))]
       (if-let [{:keys [handler params]} (match-route method path)]
-        (let [request (assoc request :params (merge (:params request) params))]
+        (let [request (assoc request
+                             :params (merge (:params request) params)
+                             :query-params qp)]
           (or (check-auth request (:token config))
               (try
                 (handler request config)
