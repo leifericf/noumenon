@@ -2,7 +2,7 @@
 
 All notable changes to Noumenon are documented in this file.
 
-## 0.3.0 (unreleased)
+## 0.3.0
 
 ### Features
 
@@ -11,8 +11,17 @@ All notable changes to Noumenon are documented in this file.
   commands with a custom TUI (spinner, menu, progress bar, table) built on
   JLine3. See [reports/noum-launcher-development-2026-03-29.md](reports/noum-launcher-development-2026-03-29.md).
 - **HTTP daemon API** — 22 REST endpoints on localhost via http-kit. Bearer
-  token auth, SSE scaffolding for progress streaming. Three frontends share
-  one backend: `noum` TUI, MCP server, future Electron UI.
+  token auth, SSE progress streaming. Three frontends share one backend:
+  `noum` TUI, MCP server, future GUI app.
+- **SSE progress streaming** — All long-running endpoints (import, analyze,
+  enrich, digest, benchmark, introspect) stream progress events via
+  `Accept: text/event-stream`. TUI progress bars driven by SSE in real-time.
+- **MCP progress notifications** — Sends `notifications/progress` JSON-RPC
+  messages during long-running tool calls when client provides `progressToken`.
+- **Shared introspect sessions** — Runs started via MCP can be monitored and
+  stopped via HTTP (`noum` CLI), and vice versa.
+- **`--host` for remote backends** — `noum --host server:7891 --token abc`
+  connects to a remote daemon. Skips local JRE/JAR download.
 - **Docker image** — 167MB Alpine image with custom jlink JRE (7 modules).
   Non-root execution, auth required for network access. Published to
   `ghcr.io/leifericf/noumenon` on each release.
@@ -20,13 +29,17 @@ All notable changes to Noumenon are documented in this file.
 - **`noum install`** — Installs Claude Desktop and/or Claude Code.
 - **Config file** — `~/.noumenon/config.edn` for persistent defaults
   (host, token, provider, model). CLI flags override.
+- **Database name resolution** — Commands that accept `<repo>` now also accept
+  a database name (reverse lookup via `:repo/uri`).
+- **OpenAPI spec** — Hand-written OpenAPI 3.1 specification at `docs/openapi.yaml`.
 
 ### CI/CD
 
-- Multi-platform release pipeline: 5 `noum` binaries (macOS arm64/x86_64,
-  Linux arm64/x86_64, Windows x86_64) built via Babashka self-contained
-  executable method.
-- Integration tests on clean macOS, Linux, and Windows GitHub Actions runners.
+- Multi-platform release pipeline: 4 `noum` binaries (macOS arm64, Linux
+  arm64/x86_64, Windows x86_64) built via Babashka self-contained executable.
+- Three-tier release validation: dry-run (`workflow_dispatch`), pre-release
+  (`v*-rc*` tags — draft release, no Homebrew/Scoop/Pages), and final release.
+- Integration tests on clean macOS and Linux GitHub Actions runners.
 - Automated Homebrew formula and Scoop manifest updates on release.
 - GitHub Pages deployment gated on release tags (no longer deploys on push).
 - Docker image build and push to ghcr.io on release tags.
