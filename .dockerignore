@@ -1,0 +1,10 @@
+data/
+target/
+launcher/
+.git/
+.env
+.env.local
+*.jar
+reports/
+docs/
+test/
