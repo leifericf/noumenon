@@ -2,11 +2,22 @@ name: Release
 on:
   push:
     tags: [v*]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Run full pipeline without publishing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  packages: write
+
 jobs:
-  release:
+  build-jar:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -14,7 +25,304 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@13.0
         with: { cli: latest }
       - run: clojure -T:build uber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noumenon-jar
+          path: target/noumenon-*.jar
+
+  build-launcher:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os: linux
+            arch: amd64
+            bb-arch: linux-amd64-static
+            binary: noum-linux-x86_64
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+            bb-arch: linux-aarch64-static
+            binary: noum-linux-arm64
+          - runner: macos-latest
+            os: macos
+            arch: arm64
+            bb-arch: macos-aarch64
+            binary: noum-macos-arm64
+          - runner: macos-13
+            os: macos
+            arch: x86_64
+            bb-arch: macos-amd64
+            binary: noum-macos-x86_64
+          - runner: windows-latest
+            os: windows
+            arch: x86_64
+            bb-arch: windows-amd64
+            binary: noum-windows-x86_64.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Babashka
+        shell: bash
+        run: |
+          BB_VERSION="1.12.217"
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            curl -sL "https://github.com/babashka/babashka/releases/download/v${BB_VERSION}/babashka-${BB_VERSION}-${{ matrix.bb-arch }}.zip" -o bb.zip
+            unzip bb.zip
+          else
+            curl -sL "https://github.com/babashka/babashka/releases/download/v${BB_VERSION}/babashka-${BB_VERSION}-${{ matrix.bb-arch }}.tar.gz" | tar xz
+          fi
+
+      - name: Copy shared version into launcher resources
+        shell: bash
+        run: cp resources/version.edn launcher/resources/version.edn
+
+      - name: Build launcher uberjar
+        shell: bash
+        working-directory: launcher
+        run: |
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            ../bb.exe uberjar target/noum.jar -m noum.main --classpath "src;resources"
+          else
+            ../bb uberjar target/noum.jar -m noum.main --classpath src:resources
+          fi
+
+      - name: Create self-contained binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            cat bb.exe launcher/target/noum.jar > ${{ matrix.binary }}
+          else
+            cat bb launcher/target/noum.jar > ${{ matrix.binary }}
+            chmod +x ${{ matrix.binary }}
+          fi
+
+      - name: Smoke test
+        shell: bash
+        run: ./${{ matrix.binary }} version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: ${{ matrix.binary }}
+
+  integration-test:
+    needs: build-launcher
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            binary: noum-linux-x86_64
+          - runner: macos-latest
+            binary: noum-macos-arm64
+          - runner: windows-latest
+            binary: noum-windows-x86_64.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+
+      - name: Make executable
+        if: matrix.runner != 'windows-latest'
+        run: chmod +x ${{ matrix.binary }}
+
+      - name: Test version
+        run: ./${{ matrix.binary }} version
+
+      - name: Test help
+        run: ./${{ matrix.binary }} help
+
+      - name: Test ping (daemon not running)
+        run: ./${{ matrix.binary }} ping || true
+
+  # --- Publishing jobs (skipped for dry-run and rc tags where noted) ---
+
+  release:
+    if: ${{ !inputs.dry-run }}
+    needs: [build-jar, build-launcher, integration-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
       - uses: softprops/action-gh-release@v2
         with:
-          files: target/noumenon-*.jar
+          files: |
+            artifacts/noumenon-jar/noumenon-*.jar
+            artifacts/noum-macos-arm64/noum-macos-arm64
+            artifacts/noum-macos-x86_64/noum-macos-x86_64
+            artifacts/noum-linux-x86_64/noum-linux-x86_64
+            artifacts/noum-linux-arm64/noum-linux-arm64
+            artifacts/noum-windows-x86_64.exe/noum-windows-x86_64.exe
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          draft: ${{ contains(github.ref_name, '-rc') }}
+
+  docker:
+    if: ${{ !inputs.dry-run }}
+    needs: [build-jar, integration-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/leifericf/noumenon
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-rc') }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  update-homebrew:
+    if: ${{ !inputs.dry-run && !contains(github.ref_name, '-rc') }}
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Compute SHA256 hashes
+        id: hashes
+        run: |
+          echo "macos_arm64=$(sha256sum artifacts/noum-macos-arm64/noum-macos-arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "macos_x86_64=$(sha256sum artifacts/noum-macos-x86_64/noum-macos-x86_64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "linux_arm64=$(sha256sum artifacts/noum-linux-arm64/noum-linux-arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "linux_x86_64=$(sha256sum artifacts/noum-linux-x86_64/noum-linux-x86_64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git clone https://x-access-token:${GH_TOKEN}@github.com/leifericf/homebrew-noumenon.git tap
+          cd tap
+          cat > Formula/noumenon.rb << 'FORMULA'
+          class Noumenon < Formula
+            desc "Datomic knowledge graph for codebase understanding"
+            homepage "https://noumenon.leifericf.com"
+            license "MIT"
+            version "VERSION_PLACEHOLDER"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/leifericf/noumenon/releases/download/vVERSION_PLACEHOLDER/noum-macos-arm64"
+                sha256 "SHA_MACOS_ARM64"
+              else
+                url "https://github.com/leifericf/noumenon/releases/download/vVERSION_PLACEHOLDER/noum-macos-x86_64"
+                sha256 "SHA_MACOS_X86_64"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/leifericf/noumenon/releases/download/vVERSION_PLACEHOLDER/noum-linux-arm64"
+                sha256 "SHA_LINUX_ARM64"
+              else
+                url "https://github.com/leifericf/noumenon/releases/download/vVERSION_PLACEHOLDER/noum-linux-x86_64"
+                sha256 "SHA_LINUX_X86_64"
+              end
+            end
+
+            def install
+              binary = Dir["noum-*"].first
+              bin.install binary => "noum"
+            end
+
+            test do
+              assert_match "noum", shell_output("#{bin}/noum version")
+            end
+          end
+          FORMULA
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" Formula/noumenon.rb
+          sed -i "s/SHA_MACOS_ARM64/${{ steps.hashes.outputs.macos_arm64 }}/g" Formula/noumenon.rb
+          sed -i "s/SHA_MACOS_X86_64/${{ steps.hashes.outputs.macos_x86_64 }}/g" Formula/noumenon.rb
+          sed -i "s/SHA_LINUX_ARM64/${{ steps.hashes.outputs.linux_arm64 }}/g" Formula/noumenon.rb
+          sed -i "s/SHA_LINUX_X86_64/${{ steps.hashes.outputs.linux_x86_64 }}/g" Formula/noumenon.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/noumenon.rb
+          git commit -m "Update to v${VERSION}"
+          git push
+
+  update-scoop:
+    if: ${{ !inputs.dry-run && !contains(github.ref_name, '-rc') }}
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: noum-windows-x86_64.exe
+
+      - name: Compute SHA256
+        id: hash
+        run: echo "windows=$(sha256sum noum-windows-x86_64.exe | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Update Scoop manifest
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git clone https://x-access-token:${GH_TOKEN}@github.com/leifericf/scoop-noumenon.git bucket
+          cd bucket
+          cat > bucket/noumenon.json << EOF
+          {
+            "version": "${VERSION}",
+            "description": "Datomic knowledge graph for codebase understanding",
+            "homepage": "https://noumenon.leifericf.com",
+            "license": "MIT",
+            "architecture": {
+              "64bit": {
+                "url": "https://github.com/leifericf/noumenon/releases/download/v${VERSION}/noum-windows-x86_64.exe",
+                "hash": "${{ steps.hash.outputs.windows }}"
+              }
+            },
+            "bin": [["noum-windows-x86_64.exe", "noum"]],
+            "checkver": {"github": "https://github.com/leifericf/noumenon"},
+            "autoupdate": {
+              "architecture": {
+                "64bit": {
+                  "url": "https://github.com/leifericf/noumenon/releases/download/v\$version/noum-windows-x86_64.exe"
+                }
+              }
+            }
+          }
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bucket/noumenon.json
+          git commit -m "Update to v${VERSION}"
+          git push
+
+  deploy-pages:
+    if: ${{ !inputs.dry-run && !contains(github.ref_name, '-rc') }}
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deploy
+        uses: actions/deploy-pages@v4

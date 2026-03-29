@@ -1,7 +1,7 @@
 name: CI
 on: [push, pull_request]
 jobs:
-  build:
+  backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,3 +17,16 @@ jobs:
         with:
           name: noumenon-jar
           path: target/noumenon-*.jar
+
+  launcher:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: turtlequeue/setup-babashka@v1.7.0
+        with: { babashka-version: 1.12.217 }
+      - name: Verify launcher loads
+        working-directory: launcher
+        run: bb -cp src:resources -m noum.main version
+      - name: Verify help output
+        working-directory: launcher
+        run: bb -cp src:resources -m noum.main help
