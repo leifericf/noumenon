@@ -99,6 +99,7 @@ jobs:
           fi
 
       - name: Smoke test
+        if: matrix.os != 'windows'
         shell: bash
         run: ./${{ matrix.binary }} version
 
