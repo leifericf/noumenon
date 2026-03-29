@@ -1,0 +1,832 @@
+# Noumenon HTTP API — OpenAPI 3.1.0
+#
+# NOTE: This spec is hand-written. It should be auto-generated from the route
+# definitions in src/noumenon/http.clj in the future (e.g. via reitit + ring-swagger).
+# Until then, keep this file in sync with http.clj manually.
+
+openapi: 3.1.0
+info:
+  title: Noumenon API
+  description: |
+    HTTP API for the Noumenon knowledge graph daemon. Used by the `noum` CLI
+    launcher, future GUI app, and any HTTP client.
+
+    All long-running POST endpoints support SSE progress streaming via
+    `Accept: text/event-stream`. Without that header, they return blocking JSON.
+
+    SSE events use the ProgressEvent schema: `event: progress`, `event: result`,
+    `event: done`, `event: error`.
+  version: 0.3.0
+  license:
+    name: MIT
+    url: https://github.com/leifericf/noumenon/blob/main/LICENSE
+
+servers:
+  - url: http://127.0.0.1:{port}
+    description: Local daemon
+    variables:
+      port:
+        default: "7891"
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Required when daemon is bound to non-localhost (--bind 0.0.0.0)
+
+  schemas:
+    OkResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          description: Response payload (varies by endpoint)
+
+    ErrorResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: false
+        error:
+          type: string
+
+    RepoPath:
+      type: object
+      properties:
+        repo_path:
+          type: string
+          description: Absolute path to a git repository
+      required: [repo_path]
+
+    ProviderModel:
+      type: object
+      properties:
+        provider:
+          type: string
+          enum: [glm, claude-api, claude-cli]
+        model:
+          type: string
+          description: Model alias (e.g. sonnet, haiku, opus)
+
+    ProgressEvent:
+      description: SSE progress event sent during long-running operations
+      type: object
+      properties:
+        current:
+          type: integer
+        total:
+          type: integer
+        message:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Daemon health check
+      security: []
+      responses:
+        "200":
+          description: Daemon is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        example: ok
+                      version:
+                        type: string
+                        example: 0.3.0
+                      uptime-ms:
+                        type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/import:
+    post:
+      operationId: importRepo
+      summary: Import git history and file structure
+      description: |
+        Supports SSE progress streaming (per-commit events).
+        SSE events use the ProgressEvent schema.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepoPath"
+      responses:
+        "200":
+          description: Import complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      commits-imported:
+                        type: integer
+                      commits-skipped:
+                        type: integer
+                      files-imported:
+                        type: integer
+                      files-skipped:
+                        type: integer
+                      dirs-imported:
+                        type: integer
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/ProgressEvent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/analyze:
+    post:
+      operationId: analyzeRepo
+      summary: Run LLM semantic analysis
+      description: |
+        Supports SSE progress streaming (per-file events).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/RepoPath"
+                - $ref: "#/components/schemas/ProviderModel"
+                - type: object
+                  properties:
+                    concurrency:
+                      type: integer
+                      default: 3
+                      maximum: 20
+                    max_files:
+                      type: integer
+                    reanalyze:
+                      type: string
+                      enum: [all, prompt-changed, model-changed, stale]
+      responses:
+        "200":
+          description: Analysis complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/enrich:
+    post:
+      operationId: enrichRepo
+      summary: Extract cross-file import graph (no LLM)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/RepoPath"
+                - type: object
+                  properties:
+                    concurrency:
+                      type: integer
+                      default: 8
+                      maximum: 20
+      responses:
+        "200":
+          description: Enrich complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/update:
+    post:
+      operationId: updateRepo
+      summary: Sync knowledge graph with latest git state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/RepoPath"
+                - type: object
+                  properties:
+                    analyze:
+                      type: boolean
+                      description: Also run LLM analysis on changed files
+      responses:
+        "200":
+          description: Update complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/digest:
+    post:
+      operationId: digestRepo
+      summary: Run full pipeline (import, enrich, analyze, benchmark)
+      description: |
+        Supports SSE progress streaming (step + sub-operation events).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/RepoPath"
+                - $ref: "#/components/schemas/ProviderModel"
+                - type: object
+                  properties:
+                    skip_import:
+                      type: boolean
+                    skip_enrich:
+                      type: boolean
+                    skip_analyze:
+                      type: boolean
+                    skip_benchmark:
+                      type: boolean
+                    max_questions:
+                      type: integer
+                    layers:
+                      type: string
+                      description: "Comma-separated: raw,import,enrich,full"
+                    report:
+                      type: boolean
+      responses:
+        "200":
+          description: Digest complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/ask:
+    post:
+      operationId: askQuestion
+      summary: Ask a question using AI-powered iterative querying
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/RepoPath"
+                - $ref: "#/components/schemas/ProviderModel"
+                - type: object
+                  properties:
+                    question:
+                      type: string
+                    max_iterations:
+                      type: integer
+                      default: 10
+                      maximum: 50
+                    continue_from:
+                      type: string
+                      description: Session ID to resume
+                  required: [question]
+      responses:
+        "200":
+          description: Answer found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      answer:
+                        type: string
+                      status:
+                        type: string
+                      session-id:
+                        type: string
+                      usage:
+                        type: object
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/query:
+    post:
+      operationId: runQuery
+      summary: Run a named Datalog query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/RepoPath"
+                - type: object
+                  properties:
+                    query_name:
+                      type: string
+                    params:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    limit:
+                      type: integer
+                      default: 500
+                      maximum: 10000
+                  required: [query_name]
+      responses:
+        "200":
+          description: Query results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      query:
+                        type: string
+                      total:
+                        type: integer
+                      results:
+                        type: array
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/queries:
+    get:
+      operationId: listQueries
+      summary: List available named queries
+      responses:
+        "200":
+          description: Query list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        description:
+                          type: string
+                        inputs:
+                          type: array
+                          items:
+                            type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/schema/{repo}:
+    get:
+      operationId: getSchema
+      summary: Get database schema
+      parameters:
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Database name
+      responses:
+        "200":
+          description: Schema
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/status/{repo}:
+    get:
+      operationId: getStatus
+      summary: Get entity counts
+      parameters:
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Database name
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      commits:
+                        type: integer
+                      files:
+                        type: integer
+                      dirs:
+                        type: integer
+                      head-sha:
+                        type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/databases:
+    get:
+      operationId: listDatabases
+      summary: List all databases
+      responses:
+        "200":
+          description: Database list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        commits:
+                          type: integer
+                        files:
+                          type: integer
+                        dirs:
+                          type: integer
+                        cost:
+                          type: number
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/databases/{name}:
+    delete:
+      operationId: deleteDatabase
+      summary: Delete a database
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/benchmark:
+    post:
+      operationId: runBenchmark
+      summary: Run benchmark evaluation
+      description: |
+        Supports SSE progress streaming (per-question events).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/RepoPath"
+                - $ref: "#/components/schemas/ProviderModel"
+                - type: object
+                  properties:
+                    max_questions:
+                      type: integer
+                    layers:
+                      type: string
+                    report:
+                      type: boolean
+      responses:
+        "200":
+          description: Benchmark complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/benchmark/results:
+    get:
+      operationId: getBenchmarkResults
+      summary: Get benchmark results
+      parameters:
+        - name: run_id
+          in: query
+          schema:
+            type: string
+        - name: repo_path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Benchmark run data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/benchmark/compare:
+    get:
+      operationId: compareBenchmarks
+      summary: Compare two benchmark runs
+      parameters:
+        - name: run_id_a
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: run_id_b
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: repo_path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Comparison data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/introspect:
+    post:
+      operationId: runIntrospect
+      summary: Run autonomous self-improvement loop
+      description: |
+        Supports SSE progress streaming (per-iteration events).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/RepoPath"
+                - $ref: "#/components/schemas/ProviderModel"
+                - type: object
+                  properties:
+                    max_iterations:
+                      type: integer
+                      default: 10
+                    max_hours:
+                      type: number
+                    max_cost:
+                      type: number
+                    target:
+                      type: string
+                      description: "Comma-separated: examples,system-prompt,rules,code,train"
+                    eval_runs:
+                      type: integer
+                      default: 1
+                    git_commit:
+                      type: boolean
+      responses:
+        "200":
+          description: Introspect complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/introspect/status:
+    get:
+      operationId: getIntrospectStatus
+      summary: Check introspect session status
+      parameters:
+        - name: run_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum: [running, completed, stopped, error]
+                      elapsed-min:
+                        type: integer
+                      improvements:
+                        type: integer
+                      iterations:
+                        type: integer
+                      final-score:
+                        type: number
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/introspect/stop:
+    post:
+      operationId: stopIntrospect
+      summary: Stop a running introspect session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                run_id:
+                  type: string
+              required: [run_id]
+      responses:
+        "200":
+          description: Stop acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/introspect/history:
+    get:
+      operationId: getIntrospectHistory
+      summary: Query introspect history
+      parameters:
+        - name: query_name
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - introspect-runs
+              - introspect-improvements
+              - introspect-by-target
+              - introspect-score-trend
+              - introspect-failed-approaches
+      responses:
+        "200":
+          description: History results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/reseed:
+    post:
+      operationId: reseed
+      summary: Reload prompts, queries, and rules
+      responses:
+        "200":
+          description: Reseeded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      queries:
+                        type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/artifacts/history:
+    get:
+      operationId: getArtifactHistory
+      summary: Show artifact change history
+      parameters:
+        - name: type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [prompt, rules]
+        - name: name
+          in: query
+          schema:
+            type: string
+          description: Required when type=prompt
+      responses:
+        "200":
+          description: History entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"

@@ -2,6 +2,50 @@
 
 All notable changes to Noumenon are documented in this file.
 
+## 0.3.0 (unreleased)
+
+### Features
+
+- **`noum` CLI launcher** — Self-contained Babashka binary with zero external
+  dependencies. Auto-downloads JRE and backend on first use. 30 one-word
+  commands with a custom TUI (spinner, menu, progress bar, table) built on
+  JLine3. See [reports/noum-launcher-development-2026-03-29.md](reports/noum-launcher-development-2026-03-29.md).
+- **HTTP daemon API** — 22 REST endpoints on localhost via http-kit. Bearer
+  token auth, SSE scaffolding for progress streaming. Three frontends share
+  one backend: `noum` TUI, MCP server, future Electron UI.
+- **Docker image** — 167MB Alpine image with custom jlink JRE (7 modules).
+  Non-root execution, auth required for network access. Published to
+  `ghcr.io/leifericf/noumenon` on each release.
+- **`noum setup`** — Auto-configures MCP for Claude Desktop and Claude Code.
+- **`noum install`** — Installs Claude Desktop and/or Claude Code.
+- **Config file** — `~/.noumenon/config.edn` for persistent defaults
+  (host, token, provider, model). CLI flags override.
+
+### CI/CD
+
+- Multi-platform release pipeline: 5 `noum` binaries (macOS arm64/x86_64,
+  Linux arm64/x86_64, Windows x86_64) built via Babashka self-contained
+  executable method.
+- Integration tests on clean macOS, Linux, and Windows GitHub Actions runners.
+- Automated Homebrew formula and Scoop manifest updates on release.
+- GitHub Pages deployment gated on release tags (no longer deploys on push).
+- Docker image build and push to ghcr.io on release tags.
+
+### Security
+
+- Daemon refuses to bind to non-localhost without `--token` or `NOUMENON_TOKEN`.
+- Token resolved from env var to avoid process-list leaks.
+- `daemon.edn` written with owner-only file permissions (600).
+- Docker image runs as non-root user.
+
+### Breaking
+
+- Removed `uncomplicate/deep-diamond` and `uncomplicate/neanderthal` from
+  dependencies (unused, reduced uberjar from 350MB to 16MB). ML model
+  training uses pure Clojure.
+
+---
+
 ## 0.2.1
 
 ### Features

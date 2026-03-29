@@ -42,7 +42,7 @@
 <section class="hero">
   <div class="container">
     <div class="hero-badge">
-      <span>&#9679;</span> Open source &middot; Runs locally &middot; MIT License
+      <span>&#9679;</span> Open source &middot; Zero dependencies &middot; MIT License
     </div>
     <h1>Ask your codebase precise questions.<br>Get grounded answers.</h1>
     <p class="hero-sub">
@@ -59,7 +59,7 @@
         <span class="terminal-dot"></span>
         <span class="terminal-title">Terminal</span>
       </div>
-      <pre><span class="prompt">$</span> clj -M:run ask -q <span class="green">"Which files are the biggest risk hotspots?"</span> ./my-repo
+      <pre><span class="prompt">$</span> noum ask ./my-repo <span class="green">"Which files are the biggest risk hotspots?"</span>
 
 <span class="comment"># iteration 1 — querying files-by-complexity (47 results)</span>
 <span class="comment"># iteration 2 — querying commit frequency and authorship</span>
@@ -179,7 +179,7 @@
         <span class="terminal-dot"></span>
         <span class="terminal-title">Terminal</span>
       </div>
-      <pre><span class="prompt">$</span> clj -M:run introspect --max-iterations 5 --provider glm ./my-repo
+      <pre><span class="prompt">$</span> noum introspect ./my-repo --max-iterations 5 --provider glm
 
 <span class="comment"># baseline mean=52.3% (22 deterministic questions)</span>
 <span class="comment"># === Iteration 1/5 ===</span>
@@ -300,7 +300,7 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
           <span class="terminal-dot"></span>
           <span class="terminal-title">Terminal</span>
         </div>
-        <pre><span class="prompt">$</span> clj -M:run query list
+        <pre><span class="prompt">$</span> noum queries
 
 <span class="output">  hotspots                Complexity and change frequency
   bug-hotspots            Files with high fix-commit ratio
@@ -313,7 +313,7 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
   pure-segments           Pure functions and their files
   llm-cost-total          Aggregate analysis cost</span>
 
-<span class="prompt">$</span> clj -M:run query hotspots ./my-repo
+<span class="prompt">$</span> noum query hotspots ./my-repo
 
 <span class="highlight">file                      changes  complexity</span>
 <span class="output">src/core/parser.ts        47       very-complex
@@ -332,15 +332,15 @@ src/auth/session.ts       28       complex</span></pre>
   <div class="container section-center">
     <h2 class="section-title">Get started</h2>
     <p class="section-sub">
-      Requires JDK 21+ and Clojure CLI. See the <a href="https://github.com/leifericf/noumenon#readme">README</a> for details.
+      One command to install, zero dependencies. See the <a href="https://github.com/leifericf/noumenon#readme">README</a> for details.
     </p>
     <div class="steps">
       <div class="step">
         <div class="step-number">1</div>
         <div class="step-content">
-          <h3>Clone and run</h3>
-          <p>Or download the standalone JAR from GitHub Releases.</p>
-          <code>git clone https://github.com/leifericf/noumenon.git && cd noumenon</code>
+          <h3>Install</h3>
+          <p>Single binary, auto-downloads everything it needs on first use.</p>
+          <code>curl -sSL https://noumenon.dev/install | bash</code>
         </div>
       </div>
       <div class="step">
@@ -348,7 +348,7 @@ src/auth/session.ts       28       complex</span></pre>
         <div class="step-content">
           <h3>Import a repository</h3>
           <p>Local path or remote URL. Import is deterministic and takes seconds for most repos.</p>
-          <code>clj -M:run import /path/to/your/repo</code>
+          <code>noum import /path/to/your/repo</code>
         </div>
       </div>
       <div class="step">
@@ -356,7 +356,7 @@ src/auth/session.ts       28       complex</span></pre>
         <div class="step-content">
           <h3>Query or ask</h3>
           <p>Named queries for instant results, or natural-language questions with iterative LLM reasoning.</p>
-          <code>clj -M:run ask -q "Which files have the most risk?" /path/to/your/repo</code>
+          <code>noum ask /path/to/your/repo "Which files have the most risk?"</code>
         </div>
       </div>
     </div>

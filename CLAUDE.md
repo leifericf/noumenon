@@ -92,16 +92,21 @@ Use `->` for entity-first transforms, `->>` for sequence-last transforms. Use `c
 
 ## Project Commands
 
-All commands use deps.edn aliases from the project root:
+### User-facing CLI (`noum`)
+
+The `noum` Babashka launcher is the primary interface. Run `noum help` for all commands.
+
+### Development commands
 
 | Command | Purpose |
 |---------|---------|
-| `clj -M:run` | Run CLI — subcommands: digest, import, analyze, enrich, update, watch, query, ask, show-schema, status, list-databases, serve, benchmark |
+| `clj -M:run` | JVM CLI — subcommands: digest, import, analyze, enrich, update, watch, query, ask, show-schema, status, list-databases, serve, daemon, benchmark |
 | `clj -M:test` | Run test suite (Cognitect test-runner) |
 | `clj -M:lint` | Lint with clj-kondo |
 | `clj -M:fmt check` | Check formatting with cljfmt |
 | `clj -M:fmt fix` | Fix formatting with cljfmt |
 | `clj -M:nrepl` | Start nREPL on port 7888 |
+| `bb -cp src:resources -m noum.main` | Run launcher from source (in `launcher/` dir) |
 
 ## REPL-Driven Development
 

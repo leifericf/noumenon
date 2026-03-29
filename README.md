@@ -2,16 +2,28 @@
 
 [Datomic](https://www.datomic.com)-backed knowledge graph for codebase understanding. See [noumenon.leifericf.com](https://noumenon.leifericf.com) for an overview.
 
-## Requirements
+## Installation
 
-- [JDK 21+](https://adoptium.net)
-- [Clojure CLI](https://clojure.org/guides/install_clojure) (`clj`)
-- [Git](https://git-scm.com)
-- Provider setup (depends on chosen provider)
+### Quick install (macOS / Linux)
+
+```bash
+curl -sSL https://noumenon.dev/install | bash
+```
+
+Or via Homebrew:
+
+```bash
+brew install leifericf/noumenon/noumenon
+```
+
+Or download a binary directly from [GitHub Releases](https://github.com/leifericf/noumenon/releases):
+`noum-macos-arm64`, `noum-macos-x86_64`, `noum-linux-arm64`, `noum-linux-x86_64`, `noum-windows-x86_64.exe`
+
+The `noum` binary is self-contained — it automatically downloads a JRE and the Noumenon backend on first use. No Java knowledge required.
 
 ### Provider setup
 
-Noumenon supports three provider modes:
+Noumenon supports three LLM provider modes:
 
 | Provider | Mode | What you need |
 |---|---|---|
@@ -19,47 +31,9 @@ Noumenon supports three provider modes:
 | `claude-api` | HTTP API | [`ANTHROPIC_API_KEY`](https://console.anthropic.com/settings/keys) |
 | `claude-cli` (alias: `claude`) | Local CLI | [Claude Code](https://claude.ai/claude-code) installed and authenticated |
 
-Use `.env.example` as a template for local environment setup.
+### Development setup
 
-## Installation
-
-### Option 1: Run from source (recommended)
-
-```bash
-git clone https://github.com/leifericf/noumenon.git
-cd noumenon
-clj -M:run --help
-```
-
-### Option 2: Standalone JAR
-
-Download the latest JAR from [GitHub Releases](https://github.com/leifericf/noumenon/releases):
-
-```bash
-java -jar noumenon-0.2.1.jar --help
-```
-
-Build from source if needed:
-
-```bash
-clj -T:build uber
-java -jar target/noumenon-0.2.1.jar --version
-```
-
-### Option 3: Use as a Clojure dependency
-
-```clojure
-{:aliases
- {:noumenon
-  {:extra-deps {io.github.leifericf/noumenon {:git/tag "v0.2.1" :git/sha "2782dd1"}}
-   :main-opts ["-m" "noumenon.main"]}}}
-```
-
-Then run:
-
-```bash
-clj -M:noumenon --help
-```
+For contributing or running from source, see the [Development](#development) section.
 
 ## Quick Start
 
@@ -68,21 +42,21 @@ Use a local Git repo path or a Git URL.
 ### 1) Import deterministic facts
 
 ```bash
-clj -M:run import /path/to/repo
+noum import /path/to/repo
 # or:
-clj -M:run import https://github.com/ring-clojure/ring.git
+noum import https://github.com/ring-clojure/ring.git
 ```
 
 ### 2) Run semantic analysis
 
 ```bash
-clj -M:run analyze /path/to/repo --provider glm --model sonnet
+noum analyze /path/to/repo --provider glm --model sonnet
 ```
 
 ### 3) (Optional) Build deterministic import graph
 
 ```bash
-clj -M:run enrich /path/to/repo
+noum enrich /path/to/repo
 ```
 
 ### Keep the graph in sync
@@ -90,8 +64,8 @@ clj -M:run enrich /path/to/repo
 As the codebase changes, update the knowledge graph with the latest git state:
 
 ```bash
-clj -M:run update /path/to/repo
-clj -M:run watch /path/to/repo
+noum update /path/to/repo
+noum watch /path/to/repo
 ```
 
 `update` also works for first-time setup — it runs the full import if no database exists. On subsequent runs it detects HEAD changes and incrementally updates. The MCP server auto-syncs before queries.
@@ -99,17 +73,17 @@ clj -M:run watch /path/to/repo
 ### 4) Inspect status, databases, and queries
 
 ```bash
-clj -M:run status /path/to/repo
-clj -M:run list-databases
-clj -M:run show-schema /path/to/repo
-clj -M:run query list
-clj -M:run query files-by-complexity /path/to/repo
+noum databases                              # list all imported repos
+noum status myrepo                          # entity counts (use database name)
+noum schema myrepo                          # show schema
+noum queries                                # list available queries
+noum query files-by-complexity /path/to/repo
 ```
 
 ### 5) Ask the graph a natural-language question
 
 ```bash
-clj -M:run ask -q "Which files are the biggest risk hotspots?" /path/to/repo
+noum ask /path/to/repo "Which files are the biggest risk hotspots?"
 ```
 
 ## Pipeline Overview
@@ -139,39 +113,43 @@ flowchart LR
 ## Command Reference
 
 ```bash
-clj -M:run <command> [options]
-clj -M:run <command> --help
+noum <command> [options]
+noum help <command>
 ```
 
-The CLI and [MCP](https://modelcontextprotocol.io) server expose the same capabilities. Use `--help` on any subcommand for details.
+The `noum` CLI and [MCP](https://modelcontextprotocol.io) server expose the same capabilities.
 
-| Command | CLI | MCP tool | Description |
-|---|---|---|---|
-| Import | `import <path>` | `noumenon_import` | Import git history and file structure |
-| Analyze | `analyze <path>` | `noumenon_analyze` | Enrich files with LLM semantic metadata (`--reanalyze` for re-analysis) |
-| Enrich | `enrich <path>` | `noumenon_enrich` | Extract cross-file import graph (no LLM) |
-| Update | `update <path>` | `noumenon_update` | Sync knowledge graph with latest git state |
-| Digest | `digest <path>` | `noumenon_digest` | Run full pipeline: import, enrich, analyze, benchmark |
-| Ask | `ask -q <question> <path>` | `noumenon_ask` | Ask a question using iterative Datalog querying |
-| Query | `query <name> <path>` | `noumenon_query` | Run a named Datalog query |
-| List queries | `query list` | `noumenon_list_queries` | List available named queries |
-| Show schema | `show-schema <path>` | `noumenon_get_schema` | Show database schema with all attributes |
-| Status | `status <path>` | `noumenon_status` | Show entity counts for a repository |
-| List databases | `list-databases` | `noumenon_list_databases` | List all databases with stats |
-| Benchmark | `benchmark <path>` | `noumenon_benchmark_run` | Evaluate knowledge graph efficacy |
-| Benchmark results | -- | `noumenon_benchmark_results` | Get benchmark results (latest or by ID) |
-| Benchmark compare | -- | `noumenon_benchmark_compare` | Compare two benchmark runs by score differences |
-| Introspect | `introspect <path>` | `noumenon_introspect` (blocking) / `noumenon_introspect_start` (async) | Autonomous self-improvement loop |
-| Introspect status | -- | `noumenon_introspect_status` | Check running introspect session |
-| Introspect history | -- | `noumenon_introspect_history` | Query introspect runs and iterations |
-| Reseed | `reseed` | `noumenon_reseed` | Reload prompts, queries, and rules into meta database |
-| Artifact history | `artifact-history --type <type>` | `noumenon_artifact_history` | Show change history for a prompt or rules artifact |
-| Watch | `watch <path>` | -- | Auto-sync on new commits (CLI-only) |
-| Serve | `serve` | -- | Start MCP server (CLI-only) |
+| `noum` | MCP tool | Description |
+|---|---|---|
+| `import <repo>` | `noumenon_import` | Import git history and file structure |
+| `analyze <repo>` | `noumenon_analyze` | Enrich files with LLM semantic metadata |
+| `enrich <repo>` | `noumenon_enrich` | Extract cross-file import graph (no LLM) |
+| `update <repo>` | `noumenon_update` | Sync knowledge graph with latest git state |
+| `digest <repo>` | `noumenon_digest` | Full pipeline: import, enrich, analyze, benchmark |
+| `ask <repo> "question"` | `noumenon_ask` | Ask a question using iterative Datalog querying |
+| `query <name> <repo>` | `noumenon_query` | Run a named Datalog query |
+| `queries` | `noumenon_list_queries` | List available named queries |
+| `schema <repo>` | `noumenon_get_schema` | Show database schema |
+| `status <repo>` | `noumenon_status` | Show entity counts |
+| `databases` | `noumenon_list_databases` | List all databases with stats |
+| `delete <name>` | -- | Delete a database |
+| `bench <repo>` | `noumenon_benchmark_run` | Evaluate knowledge graph efficacy |
+| `results [id]` | `noumenon_benchmark_results` | Get benchmark results |
+| `compare <a> <b>` | `noumenon_benchmark_compare` | Compare two benchmark runs |
+| `introspect <repo>` | `noumenon_introspect_start` | Autonomous self-improvement loop |
+| `reseed` | `noumenon_reseed` | Reload prompts, queries, and rules |
+| `history --type <t>` | `noumenon_artifact_history` | Show artifact change history |
+| `watch <repo>` | -- | Auto-sync on new commits |
+| `serve` | -- | Start MCP server (stdin/stdout) |
+| `setup desktop` | -- | Configure MCP for Claude Desktop |
+| `setup code` | -- | Write `.mcp.json` for Claude Code |
+| `install claude` | -- | Install Claude Desktop and/or Code |
+| `start` / `stop` / `ping` | -- | Manage the HTTP daemon |
+| `upgrade` | -- | Update noumenon.jar and launcher |
 
 ## Named Queries
 
-56 named Datalog queries live in `resources/queries/` (EDN), covering hotspots, ownership, dependencies, complexity, churn, impact analysis, issue tracking, LLM cost tracking, benchmarks, and introspect history. Run `clj -M:run query list` to see them all.
+56 named Datalog queries live in `resources/queries/` (EDN), covering hotspots, ownership, dependencies, complexity, churn, impact analysis, issue tracking, LLM cost tracking, benchmarks, and introspect history. Run `noum queries` to see them all.
 
 ## Data Model
 
@@ -256,14 +234,18 @@ These files are still tracked as entities (path, size, extension) but their cont
 
 ## MCP Server
 
-Run Noumenon as an [MCP](https://modelcontextprotocol.io) server so agents can call it as a tool:
+Run Noumenon as an [MCP](https://modelcontextprotocol.io) server so AI agents can call it as a tool.
+
+### Automatic setup
 
 ```bash
-clj -M:run serve
-# or java -jar noumenon-0.2.1.jar serve
+noum setup desktop    # Configure Claude Desktop
+noum setup code       # Write .mcp.json for Claude Code
 ```
 
-### [Claude Desktop](https://claude.ai/download) config
+### Manual configuration
+
+#### [Claude Desktop](https://claude.ai/download)
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -271,30 +253,33 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "noumenon": {
-      "command": "java",
-      "args": ["-jar", "/path/to/noumenon-0.2.1.jar", "serve"]
+      "command": "noum",
+      "args": ["serve"]
     }
   }
 }
 ```
 
-### [Claude Code](https://claude.ai/claude-code) config
+#### [Claude Code](https://claude.ai/claude-code)
 
-Add to `~/.claude/settings.json` (global) or `.mcp.json` (per-project):
+Add to `.mcp.json` (per-project) or `~/.claude/settings.json` (global):
 
 ```json
 {
   "mcpServers": {
     "noumenon": {
-      "command": "bash",
-      "args": ["-c", "source .env && exec clj -M:run serve"],
-      "cwd": "/path/to/noumenon"
+      "command": "noum",
+      "args": ["serve"]
     }
   }
 }
 ```
 
-The `source .env` loads provider tokens. If you don't need env vars, simplify to `"command": "clj"` with `"args": ["-M:run", "serve"]`.
+## HTTP API
+
+The daemon exposes a REST-ish HTTP API on localhost for the `noum` CLI and future GUI app. See [`docs/openapi.yaml`](docs/openapi.yaml) for the full OpenAPI 3.1 specification.
+
+All long-running endpoints support [SSE](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) progress streaming via `Accept: text/event-stream`.
 
 ## Benchmarks
 
@@ -313,22 +298,66 @@ Run the benchmark on your own repo to measure whether the knowledge graph improv
 
 `benchmark` costs ~$0.25-$1.30 per run depending on mode. Providers without per-token pricing (e.g. `glm`) still track token counts but report `$0.00`.
 
-## Development
+## Data Storage & Backup
+
+Noumenon uses [Datomic Local](https://docs.datomic.com/datomic-local.html) — an embedded database that stores everything as files on disk. No external database server required.
+
+**Default location:** `~/.noumenon/data/` (when using `noum`) or `data/datomic/` (when developing from source).
+
+**Backup:** Copy the database directory. That's the [official approach](https://docs.datomic.com/datomic-local.html). Stop the daemon first for consistency (`noum stop`, copy, `noum start`).
+
+**Docker:** Mount a volume at the data directory to persist databases across container restarts. A token is required for network access:
 
 ```bash
-clj -M:lint
-clj -M:fmt check
-clj -M:test
-clj -T:build uber
-clj -M:nrepl
+docker run -d -p 7891:7891 \
+  -e NOUMENON_TOKEN=<your-token> \
+  -v /host/data:/data \
+  ghcr.io/leifericf/noumenon
+```
+
+Then connect from any machine: `noum --host server:7891 --token <your-token> status myrepo`
+
+The image is 167MB (Alpine + custom jlink JRE), runs as non-root, and refuses to start without auth when network-accessible. For TLS, put a reverse proxy (Caddy, nginx) in front.
+
+**Enterprise:** [Datomic Pro](https://www.datomic.com/get-datomic.html) (free) is available for deployments requiring a proper transactor with PostgreSQL or DynamoDB storage. The Noumenon codebase uses the same Datomic client API — switching is a configuration change, not a code change.
+
+## Development
+
+Requires [JDK 21+](https://adoptium.net), [Clojure CLI](https://clojure.org/guides/install_clojure), and [Babashka](https://github.com/babashka/babashka).
+
+```bash
+git clone https://github.com/leifericf/noumenon.git
+cd noumenon
+clj -M:test              # run test suite
+clj -M:lint              # lint
+clj -M:fmt check         # check formatting
+clj -T:build uber        # build backend JAR
+cd launcher && bb -cp src:resources -m noum.main help  # run launcher from source
+```
+
+## Architecture
+
+```mermaid
+flowchart TB
+  noum["noum CLI\n(Babashka TUI)"]
+  mcp["noum serve\n(MCP)"]
+  gui["GUI app\n(future)"]
+  daemon["JVM Daemon\nDatomic + LLM engine"]
+
+  noum -->|HTTP| daemon
+  mcp -->|stdin/stdout| daemon
+  gui -->|HTTP| daemon
 ```
 
 ## Project Layout
 
-- `src/noumenon/` - application namespaces
+- `src/noumenon/` - JVM backend (Datomic, LLM, MCP, HTTP daemon)
+- `launcher/` - Babashka CLI launcher (`noum` binary)
+- `launcher/src/noum/tui/` - custom TUI library (JLine3)
 - `resources/schema/` - Datomic schema (EDN)
 - `resources/queries/` - named Datalog queries and rules
 - `resources/prompts/` - prompt templates
+- `docs/` - GitHub Pages site + OpenAPI spec
 - `test/` - test suite
 - `data/` - local runtime artifacts (ignored)
 
@@ -342,14 +371,14 @@ Works with Helix Core via [git-p4](https://git-scm.com/docs/git-p4), which creat
 
 ```bash
 git p4 clone //depot/project/main/... data/repos/project
-clj -M:run import data/repos/project
+noum import data/repos/project
 ```
 
 ### Sync with new changelists
 
 ```bash
 cd data/repos/project && git p4 sync && git p4 rebase && cd -
-clj -M:run update data/repos/project
+noum update data/repos/project
 ```
 
 If your server has [Helix4Git](https://www.perforce.com/products/helix-core-git-connector), point Noumenon at the Git URL directly — no `git-p4` needed.
