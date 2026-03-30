@@ -48,15 +48,26 @@ Security and UX hardening release following a full codebase audit.
 - **JRE spinner cleanup** — Extraction spinner stopped on download failure.
 - **Analyze provenance** — Correct `resolved-model` stored on parse error
   retry (was using retry model instead of first call's model).
+- **Empty database on lookup** — `lookup-repo-uri` no longer creates empty
+  databases as a side effect when resolving unknown names.
+- **Enrich count** — `noum databases` now shows the number of dependency
+  edges for enrich (was showing transaction count).
 
 ### UX
 
+- **Relative path resolution** — All commands now resolve relative repo paths
+  (e.g. `noum digest myrepo`) to absolute before sending to the daemon.
+  Previously, relative paths failed because the daemon runs in a different
+  working directory.
+- **Unified path/name handling** — `status`, `schema`, and `delete` now
+  accept filesystem paths in addition to database names, matching all other
+  commands.
 - **Delete confirmation** — `noum delete` now prompts for y/N confirmation.
   Pass `--force` to skip in scripts.
 - **First-run download notice** — JRE and JAR downloads show size estimates
   before starting.
-- **Post-install guidance** — `noum install` prints next-step `noum setup`
-  command.
+- **Setup idempotency** — `noum setup` reports "already configured" on re-run
+  instead of silently overwriting.
 - **Setup path hint** — `noum setup code` prints the absolute path of
   `.mcp.json` and reminds users to run from the project directory.
 - **Watch resilience** — Watch loop prints warnings on failure and exits after
@@ -64,20 +75,27 @@ Security and UX hardening release following a full codebase audit.
 - **Ask without quoting** — `noum ask /repo what is this` joins unquoted
   words (previously only used the first word as the question).
 - **History usage** — Help now shows two forms: `noum history rules` and
-  `noum history prompt <name>`.
+  `noum history prompt <name>`, with available prompt names listed.
 - **Ping recovery hint** — Failure message suggests `noum start`.
+- **Start feedback** — Reports "already running" when daemon is up.
 - **Stop feedback** — Prints "Daemon not running." instead of silent no-op.
+- **Human-readable uptime** — `noum ping` shows `3m 12s` instead of raw
+  milliseconds.
 - **Version to stderr** — Consistent with all other informational output.
 - **Upgrade accuracy** — Summary changed to "Update noumenon.jar (re-run
   installer to update noum)". Checks version before downloading.
-- **Removed `open` command** — Was listed as "future" in help but failed
-  when run.
+- **Immediate spinner** — SSE commands show a spinner immediately while
+  waiting for the first server event, instead of a blank cursor.
 - **Indeterminate progress** — SSE progress with total=0 (digest step
   transitions) shows a spinner instead of silent gaps.
 - **UTF-8 fallback** — TUI table separators, progress bars, and spinners
   fall back to ASCII on non-UTF-8 terminals.
 - **Shell-aware install** — `install.sh` detects bash/zsh/fish and prints
   the correct PATH config file.
+- **Removed `install` command** — Users install Claude Desktop/Code via their
+  own official installers.
+- **Removed `open` command** — Was listed as "future" in help but failed
+  when run.
 
 ---
 
