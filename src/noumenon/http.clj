@@ -23,6 +23,41 @@
   (:import [java.lang ProcessHandle]
            [java.security MessageDigest]))
 
+;; --- Input validation ---
+
+(def ^:private max-param-value-len 4096)
+(def ^:private max-run-id-len 256)
+(def ^:private max-layers-len 64)
+(def ^:private allowed-layers #{:raw :import :enrich :full})
+
+(defn- validate-string-length!
+  "Reject string values exceeding max-len."
+  [field-name s max-len]
+  (when (and (string? s) (> (count s) max-len))
+    (throw (ex-info (str field-name " exceeds maximum length")
+                    {:status 400
+                     :message (str field-name " exceeds maximum length of " max-len)}))))
+
+(defn- validate-query-params!
+  "Reject query parameter values exceeding max-param-value-len."
+  [kw-params]
+  (doseq [[k v] kw-params]
+    (when (string? v)
+      (validate-string-length! (name k) v max-param-value-len))))
+
+(defn- validate-layers
+  "Parse and validate a comma-separated layers string. Returns keyword vector or nil."
+  [layers-str]
+  (when layers-str
+    (validate-string-length! "layers" layers-str max-layers-len)
+    (let [kws (mapv keyword (str/split layers-str #","))]
+      (when-let [bad (seq (remove allowed-layers kws))]
+        (throw (ex-info (str "Unknown layers: " (pr-str bad))
+                        {:status 400
+                         :message (str "Unknown layers: " (pr-str bad)
+                                       ". Valid: raw, import, enrich, full")})))
+      kws)))
+
 ;; --- JSON response helpers ---
 
 (defn- json-response [status body]
@@ -244,8 +279,7 @@
         bench-r   (when-not (:skip_benchmark params)
                     (step-progress "benchmark"
                                    #(let [db     (d/db conn)
-                                          layers (when-let [ls (:layers params)]
-                                                   (mapv keyword (str/split ls #",")))
+                                          layers (validate-layers (:layers params))
                                           mode   (cond-> {} layers (assoc :layers layers))
                                           r      (bench/run-benchmark! db repo-path prompt-fn
                                                                        :meta-db meta-db :conn conn :mode mode
@@ -295,6 +329,7 @@
         (let [query-name (:query_name params)
               raw-params (or (:params params) {})
               kw-params  (into {} (map (fn [[k v]] [(keyword (name k)) v])) raw-params)
+              _          (validate-query-params! kw-params)
               result     (query/run-named-query meta-db db query-name kw-params)]
           (if (:ok result)
             (let [rows  (:ok result)
@@ -381,8 +416,7 @@
 (defn- run-benchmark [{:keys [conn meta-db db repo-path]} params config progress-fn]
   (let [{:keys [prompt-fn]}
         (llm/wrap-as-prompt-fn-from-opts (resolve-provider params config))
-        layers (when-let [ls (:layers params)]
-                 (mapv keyword (str/split ls #",")))
+        layers (validate-layers (:layers params))
         mode   (cond-> {} layers (assoc :layers layers))
         result (bench/run-benchmark! db repo-path prompt-fn
                                      :meta-db meta-db :conn conn :mode mode
@@ -407,6 +441,7 @@
     (with-repo {:repo_path repo} (:db-dir config)
       (fn [{:keys [db]}]
         (let [run-id (:run_id params)
+              _      (when run-id (validate-string-length! "run_id" run-id max-run-id-len))
               runs   (if run-id
                        (d/q '[:find (pull ?r [*]) :in $ ?id
                               :where [?r :bench.run/id ?id]]
@@ -425,7 +460,9 @@
         repo   (or (:repo_path params) (get-in request [:params :repo]))]
     (with-repo {:repo_path repo} (:db-dir config)
       (fn [{:keys [db]}]
-        (let [pull-run (fn [id]
+        (let [_       (validate-string-length! "run_id_a" (:run_id_a params) max-run-id-len)
+              _       (validate-string-length! "run_id_b" (:run_id_b params) max-run-id-len)
+              pull-run (fn [id]
                          (ffirst (d/q '[:find (pull ?r [*]) :in $ ?id
                                         :where [?r :bench.run/id ?id]]
                                       db id)))
