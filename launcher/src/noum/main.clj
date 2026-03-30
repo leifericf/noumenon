@@ -361,13 +361,13 @@
   0)
 
 (defn- do-version [_]
-  (println (str "noum " version))
+  (tui/eprintln (str "noum " version))
   (when (jar/installed?)
     (try
       (when-let [conn (daemon/connection)]
         (let [resp (api-get! conn "/health")]
           (when (:ok resp)
-            (println (str "noumenon " (get-in resp [:data :version]))))))
+            (tui/eprintln (str "noumenon " (get-in resp [:data :version]))))))
       (catch Exception _)))
   0)
 
