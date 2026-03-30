@@ -98,15 +98,18 @@
 ;; --- Repo resolution ---
 
 (defn- lookup-repo-uri
-  "Given a database name, look up the stored :repo/uri. Returns path string or nil."
+  "Given a database name, look up the stored :repo/uri. Returns path string or nil.
+   Only connects if the database already exists — never creates one."
   [db-dir db-name]
-  (try
-    (let [conn (db/get-or-create-conn db-dir db-name)
-          db   (d/db conn)]
-      (ffirst (d/q '[:find ?uri :where [_ :repo/uri ?uri]] db)))
-    (catch Exception e
-      (log! "lookup-repo-uri" db-name (.getMessage e))
-      nil)))
+  (let [db-path (io/file db-dir "noumenon" db-name)]
+    (when (.isDirectory db-path)
+      (try
+        (let [conn (db/get-or-create-conn db-dir db-name)
+              db   (d/db conn)]
+          (ffirst (d/q '[:find ?uri :where [_ :repo/uri ?uri]] db)))
+        (catch Exception e
+          (log! "lookup-repo-uri" db-name (.getMessage e))
+          nil)))))
 
 (defn- resolve-repo
   "Resolve repo-path from request params, return context map or throw.
