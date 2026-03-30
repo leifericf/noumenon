@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install noum — the Noumenon CLI launcher
-# Usage: curl -sSL https://noumenon.dev/install | bash
+# Usage: curl -sSL https://noumenon.leifericf.com/install | bash
 
 set -euo pipefail
 

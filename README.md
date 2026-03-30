@@ -7,7 +7,7 @@
 ### Quick install (macOS / Linux)
 
 ```bash
-curl -sSL https://noumenon.dev/install | bash
+curl -sSL https://noumenon.leifericf.com/install | bash
 ```
 
 Or via Homebrew:

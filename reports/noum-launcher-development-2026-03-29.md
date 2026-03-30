@@ -210,7 +210,7 @@ The 5-platform matrix downloads the Babashka binary for each platform, builds a 
 - **Docker**: `ghcr.io/leifericf/noumenon` (167MB Alpine image)
 - **Homebrew**: `brew install leifericf/noumenon/noumenon` (private tap, made public at launch)
 - **Scoop** (Windows): `scoop install noumenon` (private bucket, made public at launch)
-- **Installer script**: `curl -sSL https://noumenon.dev/install | bash`
+- **Installer script**: `curl -sSL https://noumenon.leifericf.com/install | bash`
 
 ---
 
