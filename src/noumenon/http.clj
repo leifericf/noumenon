@@ -20,7 +20,8 @@
             [noumenon.sessions :as sessions]
             [noumenon.sync :as sync]
             [noumenon.util :as util :refer [log!]])
-  (:import [java.lang ProcessHandle]))
+  (:import [java.lang ProcessHandle]
+           [java.security MessageDigest]))
 
 ;; --- JSON response helpers ---
 
@@ -44,13 +45,19 @@
 
 ;; --- Auth ---
 
+(defn- constant-time=
+  "Constant-time string comparison to prevent timing attacks."
+  [a b]
+  (MessageDigest/isEqual (.getBytes (str a) "UTF-8")
+                         (.getBytes (str b) "UTF-8")))
+
 (defn- check-auth
   "Validate bearer token when the daemon is configured with one.
    Returns nil if auth passes, or an error response map."
   [request token]
   (when token
     (let [header (get-in request [:headers "authorization"] "")]
-      (when-not (= header (str "Bearer " token))
+      (when-not (constant-time= header (str "Bearer " token))
         (error-response 401 "Unauthorized")))))
 
 ;; --- Repo resolution ---
