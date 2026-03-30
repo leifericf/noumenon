@@ -76,7 +76,7 @@
                  :usage   "noum stop"}
    "ping"       {:summary "Check daemon health"
                  :usage   "noum ping"}
-   "upgrade"    {:summary "Update noumenon.jar and the launcher"
+   "upgrade"    {:summary "Update noumenon.jar (re-run installer to update noum)"
                  :usage   "noum upgrade"}
    "help"       {:summary "Show help"
                  :usage   "noum help [command]"}
