@@ -334,7 +334,9 @@
         aname (or (:name flags) (second positional))]
     (cond
       (nil? atype)
-      (do (tui/eprintln "Usage: noum history <prompt|rules> [name]") 1)
+      (do (tui/eprintln "Usage: noum history rules")
+          (tui/eprintln "       noum history prompt <name>")
+          1)
 
       (not (#{"prompt" "rules"} atype))
       (do (tui/eprintln (str "Unknown type: " atype ". Must be 'prompt' or 'rules'.")) 1)
