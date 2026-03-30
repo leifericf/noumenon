@@ -421,7 +421,10 @@
       r1
       (do (log! (str "  Retrying " path " (unparseable response)..."))
           (let [r2 (invoke-once)]
-            (update r2 :usage #(llm/sum-usage (:usage r1) %)))))))
+            ;; Preserve first call's resolved-model for provenance accuracy
+            (-> r2
+                (assoc :resolved-model (:resolved-model r1))
+                (update :usage #(llm/sum-usage (:usage r1) %))))))))
 
 (defn analyze-file!
   "Analyze a single file. Returns {:status :ok/:parse-error/:error, :usage map-or-nil}.
