@@ -156,25 +156,25 @@
 
 (def ^:private positional-maps
   "How positional args map to API body keys, keyed by :positional-map."
-  {:ask   (fn [pos] {:repo_path (first pos) :question (str/join " " (rest pos))})
-   :query (fn [pos] {:query_name (first pos) :repo_path (second pos)})})
+  {:ask   (fn [pos] {:repo_path (canonicalize-path (first pos))
+                     :question (str/join " " (rest pos))})
+   :query (fn [pos] {:query_name (first pos)
+                     :repo_path (canonicalize-path (second pos))})})
 
-(defn- resolve-repo-path
-  "Resolve repo_path to absolute if it looks like a filesystem path."
-  [body]
-  (if-let [rp (:repo_path body)]
-    (let [f (java.io.File. rp)]
-      (if (.exists f)
-        (assoc body :repo_path (.getCanonicalPath f))
-        body))
-    body))
+(defn- canonicalize-path
+  "Resolve a path to absolute/canonical if it exists on disk.
+   Returns the original string unchanged if it's a database name."
+  [path]
+  (let [f (java.io.File. path)]
+    (if (.exists f) (.getCanonicalPath f) path)))
 
 (defn- build-api-body
   "Build the API request body from flags and positional args."
   [flags positional cmd-def]
   (let [mapper (get positional-maps (:positional-map cmd-def)
-                    (fn [pos] (when-let [repo (first pos)] {:repo_path repo})))]
-    (resolve-repo-path (merge flags (mapper positional)))))
+                    (fn [pos] (when-let [repo (first pos)]
+                                {:repo_path (canonicalize-path repo)})))]
+    (merge flags (mapper positional))))
 
 (def ^:private progress-commands
   "Commands that benefit from SSE progress streaming."
@@ -305,9 +305,8 @@
     (let [conn       (ensure-backend! flags)
           repo-path  (first positional)
           interval-s (or (some-> (:interval flags) parse-long) 30)
-          body       (resolve-repo-path
-                      (cond-> {:repo_path repo-path}
-                        (:analyze flags) (assoc :analyze true)))]
+          body       (cond-> {:repo_path (canonicalize-path repo-path)}
+                       (:analyze flags) (assoc :analyze true))]
       (tui/eprintln (str "Watching " repo-path " (polling every " interval-s "s). Ctrl+C to stop."))
       (loop [failures 0]
         (let [resp (try (api-post! conn "/api/update" body)
@@ -350,7 +349,7 @@
         (tui/eprintln "Omit --run-id to get the latest run.")
         1)
     (let [conn   (ensure-backend! flags)
-          repo   (:repo_path (resolve-repo-path {:repo_path (first positional)}))
+          repo   (canonicalize-path (first positional))
           params (str "?repo_path=" (url-encode repo)
                       (when-let [rid (:run-id flags)] (str "&run_id=" (url-encode rid))))]
       (print-api-result (api-get! conn (str "/api/benchmark/results" params))))))
@@ -361,7 +360,7 @@
         (tui/eprintln "Use `noum results <repo>` to find run IDs.")
         1)
     (let [conn   (ensure-backend! flags)
-          repo   (:repo_path (resolve-repo-path {:repo_path (first positional)}))
+          repo   (canonicalize-path (first positional))
           params (str "?repo_path=" (url-encode repo)
                       "&run_id_a=" (url-encode (second positional))
                       "&run_id_b=" (url-encode (nth positional 2)))]
