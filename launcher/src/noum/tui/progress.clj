@@ -15,15 +15,18 @@
                      (reset! last-pct pct)
                      (tui/eprintln (str message " " pct "%")))))
        :done   (fn [] (tui/eprintln (str message " done.")))})
-    (let [width 30]
+    (let [width  30
+          filled-ch (if (tui/utf8?) "█" "#")
+          empty-ch  (if (tui/utf8?) "░" ".")
+          spin-ch   (if (tui/utf8?) "⠋" "*")]
       {:update (fn [current]
                  (let [pct   (if (zero? total) 100 (int (* 100 (/ current total))))
                        filled (int (* width (/ (min current total) (max total 1))))
                        empty  (- width filled)]
                    (tui/eprint (str (style/clear-line)
-                                    (style/cyan "⠋") " " message " "
-                                    (style/green (apply str (repeat filled "█")))
-                                    (style/gray (apply str (repeat empty "░")))
+                                    (style/cyan spin-ch) " " message " "
+                                    (style/green (apply str (repeat filled filled-ch)))
+                                    (style/gray (apply str (repeat empty empty-ch)))
                                     " " pct "% (" current "/" total ")"))))
        :done   (fn []
                  (tui/eprint (style/clear-line))

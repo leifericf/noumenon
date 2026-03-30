@@ -3,7 +3,9 @@
   (:require [noum.tui.core :as tui]
             [noum.tui.style :as style]))
 
-(def ^:private frames ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"])
+(def ^:private unicode-frames ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"])
+(def ^:private ascii-frames ["|" "/" "-" "\\"])
+(def ^:private frames (if (tui/utf8?) unicode-frames ascii-frames))
 
 (defn start
   "Start a spinner with a message. Returns a map with :stop fn."
@@ -24,8 +26,9 @@
                (tui/eprint (str (style/clear-line) (style/show-cursor)))))]
       (.setDaemon t true)
       (.start t)
-      {:stop (fn
-               ([] (reset! running false) (Thread/sleep 100)
-                   (tui/eprintln (str (style/green "✓") " " message)))
-               ([msg] (reset! running false) (Thread/sleep 100)
-                      (tui/eprintln (str (style/green "✓") " " msg))))})))
+      {:stop (let [check (if (tui/utf8?) "✓" "*")]
+               (fn
+                 ([] (reset! running false) (Thread/sleep 100)
+                     (tui/eprintln (str (style/green check) " " message)))
+                 ([msg] (reset! running false) (Thread/sleep 100)
+                        (tui/eprintln (str (style/green check) " " msg)))))})))

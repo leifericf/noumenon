@@ -19,6 +19,6 @@
                                             (format (str "%-" (nth widths i) "s") (str cell)))
                                           row)))]
     (tui/eprintln (style/bold (fmt-row headers)))
-    (tui/eprintln (str/join "  " (map #(apply str (repeat % "─")) widths)))
+    (tui/eprintln (str/join "  " (map #(apply str (repeat % (if (tui/utf8?) "─" "-"))) widths)))
     (doseq [row rows]
       (tui/eprintln (fmt-row row)))))
