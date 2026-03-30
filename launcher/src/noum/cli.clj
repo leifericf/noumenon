@@ -66,8 +66,6 @@
                  :usage   "noum history rules\n  noum history prompt <name>\n\n  Prompt names: analyze-file, agent-system, introspect"}
    "setup"      {:summary "Configure MCP for Claude Desktop or Code"
                  :usage   "noum setup <desktop|code>"}
-   "install"    {:summary "Install Claude Desktop and/or Code"
-                 :usage   "noum install <desktop|code|claude>"}
    "serve"      {:summary "Start MCP server (stdin/stdout, for Claude Desktop/Code)"
                  :usage   "noum serve [options]"}
    "start"      {:summary "Start the daemon"
@@ -89,7 +87,7 @@
    ["Benchmark"  ["bench" "results" "compare"]]
    ["Introspect" ["introspect"]]
    ["Admin"      ["databases" "delete" "reseed" "history"]]
-   ["Setup"      ["setup" "install" "serve"]]
+   ["Setup"      ["setup" "serve"]]
    ["Daemon"     ["start" "stop" "ping" "upgrade"]]
    ["Other"      ["help" "version"]]])
 

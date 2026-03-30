@@ -9,7 +9,6 @@
             [clojure.string :as str]
             [noum.cli :as cli]
             [noum.daemon :as daemon]
-            [noum.install :as install]
             [noum.jar :as jar]
             [noum.jre :as jre]
             [noum.paths :as paths]
@@ -271,13 +270,6 @@
     "code"    (do (setup/setup-code!) 0)
     (do (tui/eprintln "Usage: noum setup <desktop|code>") 1)))
 
-(defn- do-install [{:keys [positional]}]
-  (case (first positional)
-    "desktop" (do (install/install-desktop!) 0)
-    "code"    (do (install/install-code!) 0)
-    "claude"  (do (install/install-both!) 0)
-    (do (tui/eprintln "Usage: noum install <desktop|code|claude>") 1)))
-
 (defn- do-start [{:keys [flags]}]
   (ensure-backend! flags) 0)
 
@@ -427,7 +419,6 @@
   {"help"       do-help
    "version"    do-version
    "setup"      do-setup
-   "install"    do-install
    "start"      do-start
    "stop"       do-stop
    "ping"       do-ping

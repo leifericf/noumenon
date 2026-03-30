@@ -107,7 +107,7 @@
                (let [r (noum "help" cmd)]
                  [(assert-exit (str "help " cmd " exits 0") r 0)
                   (assert-contains (str "help " cmd " shows usage") r "Usage:")]))
-             ["import" "ask" "bench" "setup" "install" "serve"
+             ["import" "ask" "bench" "setup" "serve"
               "start" "stop" "ping" "upgrade" "databases" "introspect"]))))
 
 (defn tests-arg-validation []
@@ -124,7 +124,6 @@
      [(assert-exit "query missing repo exits 1" r 1)
       (assert-contains "query missing repo shows usage" r "Usage:")])
    [(assert-exit "setup no target exits 1" (noum "setup") 1)
-    (assert-exit "install no target exits 1" (noum "install") 1)
     (assert-exit "watch no args exits 1" (noum "watch") 1)
     (assert-exit "delete no args exits 1" (noum "delete") 1)
     (assert-exit "history no type exits 1" (noum "history") 1)]
