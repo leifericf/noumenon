@@ -113,11 +113,22 @@
 
 ;; --- Output ---
 
+(defn- format-duration [ms]
+  (let [s (quot ms 1000) m (quot s 60) h (quot m 60) d (quot h 24)]
+    (cond
+      (< s 60)  (str s "s")
+      (< m 60)  (str m "m " (mod s 60) "s")
+      (< h 24)  (str h "h " (mod m 60) "m")
+      :else     (str d "d " (mod h 24) "h"))))
+
+(defn- format-value [k v]
+  (if (= k :uptime-ms) (format-duration v) v))
+
 (defn- print-result [data]
   (cond
     (map? data)    (doseq [[k v] (sort-by key data)
                            :when (and (some? v) (not (and (coll? v) (empty? v))))]
-                     (tui/eprintln (str "  " (name k) ": " v)))
+                     (tui/eprintln (str "  " (name k) ": " (format-value k v))))
     (vector? data) (doseq [item data]
                      (if (map? item)
                        (do (tui/eprintln (str "  " (or (:name item) (pr-str item))))
