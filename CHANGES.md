@@ -2,6 +2,85 @@
 
 All notable changes to Noumenon are documented in this file.
 
+## 0.3.1
+
+Security and UX hardening release following a full codebase audit.
+
+### Security
+
+- **Path traversal fix** — `DELETE /api/databases/:name` validated against
+  directory traversal (`..`, `/`). Previously, `DELETE /api/databases/..`
+  could recursively delete the entire database directory.
+- **Constant-time token comparison** — Bearer token auth uses
+  `MessageDigest/isEqual` instead of string equality, preventing timing
+  side-channel attacks.
+- **HTTPS by default for remote hosts** — `noum --host` uses `https://` for
+  non-localhost connections. Pass `--insecure` for plaintext HTTP.
+- **Token passed via env var** — Daemon subprocess receives auth token via
+  `NOUMENON_TOKEN` environment variable instead of `--token` CLI arg, hiding
+  it from `ps aux`.
+- **Config file permissions** — `config.edn` set to 600 (owner-only) on read,
+  matching `daemon.edn` behavior.
+- **HTTP input validation** — Added length caps on query params (4096 chars),
+  `run_id` fields (256 chars), and layer allowlist validation, matching the
+  MCP-side guards.
+- **Error message sanitization** — HTTP error responses no longer leak internal
+  filesystem paths.
+- **Docker localhost default** — Container binds to `127.0.0.1` by default
+  (was `0.0.0.0`), so it starts without requiring a token.
+- **Installer integrity** — Dockerfile downloads Clojure installer to file
+  before executing (no more `curl | bash`). Release pipeline publishes
+  `.sha256` sidecar files; `install.sh` verifies binary integrity after
+  download.
+- **Introspect session management** — HTTP introspect endpoint now registers
+  sessions (status/stop work) and enforces the same concurrency cap (5) as
+  the MCP path.
+
+### Fixes
+
+- **SSE error propagation** — Launcher correctly surfaces server-side SSE
+  error events as errors (exit code 1) instead of wrapping them as success.
+- **Non-SSE error handling** — Non-2xx responses on SSE endpoints (e.g. 401)
+  are now parsed as JSON errors instead of being fed to the SSE parser.
+- **`noum serve --token`** — Token flag now passed through to JVM process.
+- **URL-decoded path params** — Database names with special characters
+  correctly resolved in HTTP API routes.
+- **JRE spinner cleanup** — Extraction spinner stopped on download failure.
+- **Analyze provenance** — Correct `resolved-model` stored on parse error
+  retry (was using retry model instead of first call's model).
+
+### UX
+
+- **Delete confirmation** — `noum delete` now prompts for y/N confirmation.
+  Pass `--force` to skip in scripts.
+- **First-run download notice** — JRE and JAR downloads show size estimates
+  before starting.
+- **Post-install guidance** — `noum install` prints next-step `noum setup`
+  command.
+- **Setup path hint** — `noum setup code` prints the absolute path of
+  `.mcp.json` and reminds users to run from the project directory.
+- **Watch resilience** — Watch loop prints warnings on failure and exits after
+  3 consecutive failures (was silently continuing forever).
+- **Ask without quoting** — `noum ask /repo what is this` joins unquoted
+  words (previously only used the first word as the question).
+- **History usage** — Help now shows two forms: `noum history rules` and
+  `noum history prompt <name>`.
+- **Ping recovery hint** — Failure message suggests `noum start`.
+- **Stop feedback** — Prints "Daemon not running." instead of silent no-op.
+- **Version to stderr** — Consistent with all other informational output.
+- **Upgrade accuracy** — Summary changed to "Update noumenon.jar (re-run
+  installer to update noum)". Checks version before downloading.
+- **Removed `open` command** — Was listed as "future" in help but failed
+  when run.
+- **Indeterminate progress** — SSE progress with total=0 (digest step
+  transitions) shows a spinner instead of silent gaps.
+- **UTF-8 fallback** — TUI table separators, progress bars, and spinners
+  fall back to ASCII on non-UTF-8 terminals.
+- **Shell-aware install** — `install.sh` detects bash/zsh/fish and prints
+  the correct PATH config file.
+
+---
+
 ## 0.3.0
 
 ### Features
