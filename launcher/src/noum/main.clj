@@ -28,7 +28,8 @@
 
 (defn- load-config []
   (if (fs/exists? paths/config-path)
-    (edn/read-string (slurp paths/config-path))
+    (do (paths/ensure-private! paths/config-path)
+        (edn/read-string (slurp paths/config-path)))
     {}))
 
 ;; --- HTTP client ---
