@@ -193,11 +193,13 @@
 (defn- make-progress-handler
   "Create an SSE on-progress callback that drives a TUI progress bar.
    Uses a spinner for indeterminate (total=0) operations.
+   Starts a waiting spinner immediately so the user sees feedback.
    Returns the callback fn (or nil if non-interactive)."
   [command]
   (when (and (tui/interactive?) (progress-commands command))
     (let [bar-atom     (atom nil)
-          spinner-atom (atom nil)]
+          spinner-atom (atom {:spinner (spinner/start (str command "..."))
+                              :message (str command "...")})]
       (fn [{:keys [current total message]}]
         (cond
           ;; Indeterminate: use spinner, stop previous spinner on message change
