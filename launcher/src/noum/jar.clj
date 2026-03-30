@@ -30,8 +30,18 @@
 (defn- find-jar-asset [assets]
   (first (filter #(re-matches #"noumenon-.*\.jar" (:name %)) assets)))
 
+(defn- current-version
+  "Read the installed JAR's version from the daemon, or nil."
+  []
+  (try
+    (let [resp (http/get "http://127.0.0.1:7891/health"
+                         {:timeout 2000 :throw false})]
+      (when (= 200 (:status resp))
+        (-> (json/parse-string (:body resp) true) :data :version)))
+    (catch Exception _ nil)))
+
 (defn download!
-  "Download the latest noumenon.jar. Returns the jar path."
+  "Download the latest noumenon.jar. Returns the jar path, or nil if already up to date."
   []
   (let [s       (spinner/start "Checking latest Noumenon release...")
         release (latest-release-info)
@@ -39,15 +49,19 @@
     (when-not asset
       ((:stop s) "No JAR found in release")
       (throw (ex-info (str "No JAR asset found in release " (:tag release)) {})))
-    ((:stop s) (str "Found " (:tag release)))
-    (let [s2 (spinner/start (str "Downloading " (:name asset) "..."))]
-      (fs/create-dirs paths/lib-dir)
-      (let [resp (http/get (:url asset) {:as :stream :follow-redirects true})]
-        (with-open [in (:body resp)
-                    out (clojure.java.io/output-stream paths/jar-path)]
-          (clojure.java.io/copy in out)))
-      ((:stop s2) (str (:name asset) " installed.")))
-    paths/jar-path))
+    (let [remote-ver (:tag release)
+          local-ver  (current-version)]
+      (if (and local-ver (= (str "v" local-ver) remote-ver))
+        (do ((:stop s) (str "Already at latest version (" remote-ver ").")) nil)
+        (do ((:stop s) (str "Found " remote-ver (when local-ver (str " (current: v" local-ver ")"))))
+            (let [s2 (spinner/start (str "Downloading " (:name asset) "..."))]
+              (fs/create-dirs paths/lib-dir)
+              (let [resp (http/get (:url asset) {:as :stream :follow-redirects true})]
+                (with-open [in (:body resp)
+                            out (clojure.java.io/output-stream paths/jar-path)]
+                  (clojure.java.io/copy in out)))
+              ((:stop s2) (str (:name asset) " installed.")))
+            paths/jar-path)))))
 
 (defn ensure!
   "Ensure noumenon.jar is installed. Download if not. Returns jar path."

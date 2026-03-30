@@ -272,10 +272,10 @@
     (do (tui/eprintln (str (style/red "✗") " Daemon not running. Run 'noum start' to start it.")) 1)))
 
 (defn- do-upgrade [_]
-  (tui/eprintln "Checking for updates...")
-  (jar/download!)
-  (tui/eprintln (str (style/green "✓") " Noumenon updated."))
-  (tui/eprintln "To update the noum launcher itself, re-run the installer.")
+  (if (jar/download!)
+    (do (tui/eprintln (str (style/green "✓") " Noumenon updated."))
+        (tui/eprintln "To update the noum launcher itself, re-run the installer."))
+    (tui/eprintln "To update the noum launcher itself, re-run the installer."))
   0)
 
 (defn- do-serve [{:keys [flags]}]
