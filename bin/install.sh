@@ -62,9 +62,25 @@ main() {
   if ! echo "$PATH" | tr ':' '\n' | grep -q "^${INSTALL_DIR}$"; then
     echo ""
     echo "Add ${INSTALL_DIR} to your PATH:"
-    echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
-    echo ""
-    echo "Then restart your shell or run: source ~/.zshrc"
+    case "${SHELL:-}" in
+      */fish)
+        echo "  fish_add_path ${INSTALL_DIR}"
+        echo ""
+        echo "Then restart your shell."
+        ;;
+      */bash)
+        local rc="${HOME}/.bashrc"
+        [ -f "${HOME}/.bash_profile" ] && rc="${HOME}/.bash_profile"
+        echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ${rc}"
+        echo ""
+        echo "Then restart your shell or run: source ${rc}"
+        ;;
+      *)
+        echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
+        echo ""
+        echo "Then restart your shell or run: source ~/.zshrc"
+        ;;
+    esac
   fi
 
   echo ""
