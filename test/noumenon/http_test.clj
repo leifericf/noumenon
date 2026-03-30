@@ -44,6 +44,17 @@
     (is (= 400 (:status dots)) "... should be rejected")
     (is (= 400 (:status blank)) ".. in status should be rejected")))
 
+(deftest url-encoded-path-params-decoded
+  (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+        ;; Use a URL-encoded db name like "my%20repo" -> should decode to "my repo"
+        ;; which will fail validation (spaces stripped by derive-db-name) but the
+        ;; error should reference the decoded name, not the encoded one
+        resp    (handler {:request-method :get :uri "/api/status/my%20repo"})
+        body    (json/read-str (:body resp) :key-fn keyword)]
+    ;; Should get 404 (db not found) rather than some other error
+    (is (= 404 (:status resp)))
+    (is (re-find #"my repo" (:error body)) "db-name should be URL-decoded")))
+
 (deftest databases-endpoint-empty
   (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
         resp    (handler {:request-method :get :uri "/api/databases"})]

@@ -581,7 +581,8 @@
                 val (first vals)]
             (cond
               (str/starts-with? pat ":") (recur (rest pats) (rest vals)
-                                                (assoc params (keyword (subs pat 1)) val))
+                                                (assoc params (keyword (subs pat 1))
+                                                       (java.net.URLDecoder/decode val "UTF-8")))
               (= pat val)                (recur (rest pats) (rest vals) params)
               :else                      nil)))))))
 
