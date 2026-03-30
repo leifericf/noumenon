@@ -273,13 +273,21 @@
           body       (cond-> {:repo_path repo-path}
                        (:analyze flags) (assoc :analyze true))]
       (tui/eprintln (str "Watching " repo-path " (polling every " interval-s "s). Ctrl+C to stop."))
-      (loop []
-        (let [resp (try (api-post! conn "/api/update" body) (catch Exception e {:ok false :error (.getMessage e)}))]
-          (when (and (:ok resp) (not= :up-to-date (get-in resp [:data :status])))
-            (tui/eprintln (str "  Updated: " (get-in resp [:data :added] 0) " added, "
-                               (get-in resp [:data :modified] 0) " modified"))))
-        (Thread/sleep (* interval-s 1000))
-        (recur)))))
+      (loop [failures 0]
+        (let [resp (try (api-post! conn "/api/update" body)
+                        (catch Exception e {:ok false :error (.getMessage e)}))]
+          (if (:ok resp)
+            (do (when (not= :up-to-date (get-in resp [:data :status]))
+                  (tui/eprintln (str "  Updated: " (get-in resp [:data :added] 0) " added, "
+                                     (get-in resp [:data :modified] 0) " modified")))
+                (Thread/sleep (* interval-s 1000))
+                (recur 0))
+            (let [n (inc failures)]
+              (tui/eprintln (str (style/yellow "  Warning: ") "update failed: " (:error resp)))
+              (if (>= n 3)
+                (do (tui/eprintln (str (style/red "Error: ") "3 consecutive failures, stopping watch.")) 1)
+                (do (Thread/sleep (* interval-s 1000))
+                    (recur n))))))))))
 
 (defn- do-delete [{:keys [flags positional]}]
   (if (empty? positional)
