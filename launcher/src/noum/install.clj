@@ -34,7 +34,8 @@
     :else
     (let [s (spinner/start "Installing Claude Desktop via Homebrew...")]
       (proc/shell "brew" "install" "--cask" "claude")
-      ((:stop s) "Claude Desktop installed."))))
+      ((:stop s) "Claude Desktop installed.")
+      (tui/eprintln "  Next: run 'noum setup desktop' to connect Noumenon to Claude."))))
 
 (defn install-code!
   "Install Claude Code CLI."
@@ -46,12 +47,14 @@
     (command-exists? "npm")
     (let [s (spinner/start "Installing Claude Code via npm...")]
       (proc/shell "npm" "install" "-g" "@anthropic-ai/claude-code")
-      ((:stop s) "Claude Code installed."))
+      ((:stop s) "Claude Code installed.")
+      (tui/eprintln "  Next: run 'noum setup code' from your project directory to connect Noumenon to Claude."))
 
     (command-exists? "brew")
     (let [s (spinner/start "Installing Claude Code via Homebrew...")]
       (proc/shell "brew" "install" "claude-code")
-      ((:stop s) "Claude Code installed."))
+      ((:stop s) "Claude Code installed.")
+      (tui/eprintln "  Next: run 'noum setup code' from your project directory to connect Noumenon to Claude."))
 
     :else
     (do (tui/eprintln "npm or Homebrew required to install Claude Code.")
