@@ -83,11 +83,20 @@
                              :timeout 600000
                              :throw   false
                              :as      (if sse? :stream :string)})]
-     (if sse?
+     (cond
+       (and sse? (<= 200 (:status resp) 299))
        (let [result (parse-sse-events (:body resp) on-progress)]
          (if (and (map? result) (false? (:ok result)))
            result
            {:ok true :data result}))
+
+       sse?
+       (let [body-str (slurp (:body resp))]
+         (try (json/parse-string body-str true)
+              (catch Exception _
+                {:ok false :error (str "HTTP " (:status resp) ": " body-str)})))
+
+       :else
        (json/parse-string (:body resp) true)))))
 
 (defn- api-get! [conn path]
