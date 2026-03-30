@@ -56,8 +56,8 @@
    "databases"  {:summary "List all databases"
                  :usage   "noum databases"
                  :api-path "/api/databases" :api-method :get}
-   "delete"     {:summary "Delete a database"
-                 :usage   "noum delete <name>"
+   "delete"     {:summary "Delete a database (prompts for confirmation)"
+                 :usage   "noum delete <name> [--force]"
                  :min-args 1}
    "reseed"     {:summary "Reload prompts, queries, and rules"
                  :usage   "noum reseed"

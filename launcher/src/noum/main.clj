@@ -14,6 +14,7 @@
             [noum.jre :as jre]
             [noum.paths :as paths]
             [noum.setup :as setup]
+            [noum.tui.confirm :as confirm]
             [noum.tui.core :as tui]
             [noum.tui.progress :as progress]
             [noum.tui.style :as style]))
@@ -269,18 +270,22 @@
 
 (defn- do-delete [{:keys [flags positional]}]
   (if (empty? positional)
-    (do (tui/eprintln "Usage: noum delete <name>")
+    (do (tui/eprintln "Usage: noum delete <name> [--force]")
         (tui/eprintln "Use `noum databases` to see available database names.")
         1)
-    (let [conn (ensure-backend! flags)
-          resp (try
-                 (let [r (http/delete (str (base-url conn) "/api/databases/" (url-encode (first positional)))
-                                      {:headers (auth-headers conn)
-                                       :timeout 30000
-                                       :throw   false})]
-                   (json/parse-string (:body r) true))
-                 (catch Exception e {:ok false :error (.getMessage e)}))]
-      (print-api-result resp))))
+    (let [db-name (first positional)]
+      (if (and (not (:force flags))
+               (not (confirm/ask (str "Delete database '" db-name "'? This cannot be undone.") false)))
+        (do (tui/eprintln "Aborted.") 0)
+        (let [conn (ensure-backend! flags)
+              resp (try
+                     (let [r (http/delete (str (base-url conn) "/api/databases/" (url-encode db-name))
+                                          {:headers (auth-headers conn)
+                                           :timeout 30000
+                                           :throw   false})]
+                       (json/parse-string (:body r) true))
+                     (catch Exception e {:ok false :error (.getMessage e)}))]
+          (print-api-result resp))))))
 
 (defn- do-results [{:keys [flags positional]}]
   (if (empty? positional)
