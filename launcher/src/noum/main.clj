@@ -85,7 +85,9 @@
                              :as      (if sse? :stream :string)})]
      (if sse?
        (let [result (parse-sse-events (:body resp) on-progress)]
-         {:ok true :data result})
+         (if (and (map? result) (false? (:ok result)))
+           result
+           {:ok true :data result}))
        (json/parse-string (:body resp) true)))))
 
 (defn- api-get! [conn path]
