@@ -49,10 +49,12 @@
           args     (cond-> [java-bin "-jar" jar-path "daemon" "--port" "0"]
                      db-dir   (into ["--db-dir" db-dir])
                      provider (into ["--provider" provider])
-                     model    (into ["--model" model])
-                     token    (into ["--token" token]))
+                     model    (into ["--model" model]))
+          env      (cond-> (into {} (System/getenv))
+                     token (assoc "NOUMENON_TOKEN" token))
           s        (spinner/start "Starting Noumenon daemon...")
           _        (proc/process {:cmd args
+                                  :env env
                                   :out (io/writer paths/daemon-log :append true)
                                   :err (io/writer paths/daemon-log :append true)})]
       (loop [attempts 0]
