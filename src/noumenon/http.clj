@@ -652,9 +652,12 @@
               (try
                 (handler request config)
                 (catch clojure.lang.ExceptionInfo e
-                  (let [data (ex-data e)]
-                    (error-response (or (:status data) 500)
-                                    (or (:message data) (.getMessage e)))))
+                  (let [data (ex-data e)
+                        status (or (:status data) 500)]
+                    (when (>= status 500)
+                      (log! "http/error" (.getMessage e)))
+                    (error-response status
+                                    (or (:message data) "Internal server error"))))
                 (catch Exception e
                   (log! "http/error" (.getMessage e))
                   (error-response 500 "Internal server error")))))
