@@ -10,14 +10,21 @@
 curl -sSL https://noumenon.leifericf.com/install | bash
 ```
 
-Or via Homebrew:
+Or via Homebrew (macOS / Linux):
 
 ```bash
 brew install leifericf/noumenon/noumenon
 ```
 
+Or via Scoop (Windows):
+
+```powershell
+scoop bucket add noumenon https://github.com/leifericf/scoop-noumenon
+scoop install noumenon
+```
+
 Or download a binary directly from [GitHub Releases](https://github.com/leifericf/noumenon/releases):
-`noum-macos-arm64`, `noum-macos-x86_64`, `noum-linux-arm64`, `noum-linux-x86_64`, `noum-windows-x86_64.exe`
+`noum-macos-arm64`, `noum-linux-arm64`, `noum-linux-x86_64`, `noum-windows-x86_64.exe`
 
 The `noum` binary is self-contained — it automatically downloads a JRE and the Noumenon backend on first use. No Java knowledge required.
 
