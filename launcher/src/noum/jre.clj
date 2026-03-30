@@ -58,13 +58,14 @@
 (defn download!
   "Download and install JRE. Returns the JRE directory path."
   []
-  (let [os      (detect-os)
-        arch    (detect-arch)
-        url     (adoptium-url os arch)
-        s       (spinner/start (str "Downloading JRE " jre-version " for " os "/" arch "..."))
-        tmp-dir (str (fs/create-temp-dir {:prefix "noum-jre-"}))
-        ext     (if (= os "windows") ".zip" ".tar.gz")
-        archive (str (fs/path tmp-dir (str "jre" ext)))]
+  (let [os       (detect-os)
+        arch     (detect-arch)
+        url      (adoptium-url os arch)
+        s        (spinner/start (str "Downloading JRE " jre-version " for " os "/" arch "..."))
+        s2-atom  (atom nil)
+        tmp-dir  (str (fs/create-temp-dir {:prefix "noum-jre-"}))
+        ext      (if (= os "windows") ".zip" ".tar.gz")
+        archive  (str (fs/path tmp-dir (str "jre" ext)))]
     (try
       (let [resp (http/get url {:as :stream :follow-redirects true})]
         (with-open [in (:body resp)
@@ -72,6 +73,7 @@
           (clojure.java.io/copy in out)))
       ((:stop s) "JRE downloaded.")
       (let [s2 (spinner/start "Extracting JRE...")]
+        (reset! s2-atom s2)
         (fs/create-dirs paths/jre-dir)
         (if (= ext ".zip")
           (fs/unzip archive tmp-dir)
@@ -85,7 +87,9 @@
         ((:stop s2) "JRE installed."))
       paths/jre-dir
       (catch Exception e
-        ((:stop s) "JRE download failed.")
+        (if-let [s2 @s2-atom]
+          ((:stop s2) "JRE extraction failed.")
+          ((:stop s) "JRE download failed."))
         (throw e))
       (finally
         (fs/delete-tree tmp-dir)))))
