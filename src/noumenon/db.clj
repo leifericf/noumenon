@@ -67,10 +67,17 @@
            (mapv #(.getName %))))
 
 (defn- tx-op-counts
-  "Return map of {:import n :analyze n :enrich n} from tx metadata."
+  "Return map of {:import n :analyze n :enrich n} from tx metadata.
+   Enrich count is the number of dependency edges, not transactions."
   [db]
-  (->> (d/q '[:find ?op (count ?tx) :where [?tx :tx/op ?op]] db)
-       (into {})))
+  (let [ops (->> (d/q '[:find ?op (count ?tx) :where [?tx :tx/op ?op]] db)
+                 (into {}))]
+    (cond-> ops
+      (contains? ops "enrich")
+      (assoc "enrich" (or (ffirst (d/q '[:find (count ?e)
+                                         :where [?e :file/imports _]]
+                                       db))
+                          0)))))
 
 (defn db-stats
   "Get stats for a database. Pass a pre-created client to avoid creating
