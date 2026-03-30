@@ -271,7 +271,11 @@
     (do (tui/eprintln "Usage: noum setup <desktop|code>") 1)))
 
 (defn- do-start [{:keys [flags]}]
-  (ensure-backend! flags) 0)
+  (let [was-running (daemon/running?)]
+    (ensure-backend! flags)
+    (when was-running
+      (tui/eprintln (str (style/green "✓") " Daemon already running on port " (:port (daemon/connection)))))
+    0))
 
 (defn- do-stop [_]
   (if (daemon/running?)
