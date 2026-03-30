@@ -146,14 +146,29 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
+      - name: Generate SHA256 sidecar files
+        run: |
+          for bin in noum-macos-arm64 noum-linux-x86_64 noum-linux-arm64; do
+            if [ -f "artifacts/${bin}/${bin}" ]; then
+              sha256sum "artifacts/${bin}/${bin}" | cut -d' ' -f1 > "artifacts/${bin}/${bin}.sha256"
+            fi
+          done
+          if [ -f "artifacts/noum-windows-x86_64.exe/noum-windows-x86_64.exe" ]; then
+            sha256sum "artifacts/noum-windows-x86_64.exe/noum-windows-x86_64.exe" | cut -d' ' -f1 > "artifacts/noum-windows-x86_64.exe/noum-windows-x86_64.exe.sha256"
+          fi
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/noumenon-jar/noumenon-*.jar
             artifacts/noum-macos-arm64/noum-macos-arm64
+            artifacts/noum-macos-arm64/noum-macos-arm64.sha256
             artifacts/noum-linux-x86_64/noum-linux-x86_64
+            artifacts/noum-linux-x86_64/noum-linux-x86_64.sha256
             artifacts/noum-linux-arm64/noum-linux-arm64
+            artifacts/noum-linux-arm64/noum-linux-arm64.sha256
             artifacts/noum-windows-x86_64.exe/noum-windows-x86_64.exe
+            artifacts/noum-windows-x86_64.exe/noum-windows-x86_64.exe.sha256
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-rc') }}
           draft: ${{ contains(github.ref_name, '-rc') }}

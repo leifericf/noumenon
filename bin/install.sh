@@ -50,9 +50,35 @@ main() {
     exit 1
   fi
 
+  # Get SHA256 sidecar URL
+  local sha_url
+  sha_url=$(curl -sSL "https://api.github.com/repos/${REPO}/releases/latest" \
+    | grep "browser_download_url.*${binary}.sha256" \
+    | head -1 \
+    | cut -d '"' -f 4)
+
   echo "Downloading ${binary}..."
   mkdir -p "$INSTALL_DIR"
   curl -sSL "$url" -o "${INSTALL_DIR}/noum"
+
+  # Verify SHA256 integrity if sidecar is available
+  if [ -n "$sha_url" ]; then
+    local expected actual
+    expected=$(curl -sSL "$sha_url")
+    if command -v sha256sum >/dev/null 2>&1; then
+      actual=$(sha256sum "${INSTALL_DIR}/noum" | cut -d' ' -f1)
+    elif command -v shasum >/dev/null 2>&1; then
+      actual=$(shasum -a 256 "${INSTALL_DIR}/noum" | cut -d' ' -f1)
+    fi
+    if [ -n "$actual" ] && [ "$expected" != "$actual" ]; then
+      echo "Error: SHA256 mismatch! Expected ${expected}, got ${actual}"
+      echo "The downloaded binary may be corrupted or tampered with."
+      rm -f "${INSTALL_DIR}/noum"
+      exit 1
+    fi
+    echo "✓ SHA256 verified"
+  fi
+
   chmod +x "${INSTALL_DIR}/noum"
 
   echo ""
