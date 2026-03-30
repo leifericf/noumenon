@@ -168,6 +168,16 @@
   (let [f (java.io.File. path)]
     (if (.exists f) (.getCanonicalPath f) path)))
 
+(defn- path->db-name
+  "Derive a database name from a path or name. If it exists on disk,
+   take the last path component (matching server-side derive-db-name).
+   Otherwise return as-is (already a database name)."
+  [repo]
+  (let [f (java.io.File. repo)]
+    (if (.exists f)
+      (-> (.getCanonicalPath f) (str/replace #"/+$" "") (str/split #"/") last)
+      repo)))
+
 (defn- build-api-body
   "Build the API request body from flags and positional args."
   [flags positional cmd-def]
@@ -236,11 +246,12 @@
                             :get  (api-get! conn api-path)))))))
 
 (defn- do-db-get
-  "GET endpoint addressed by database name. Shared by status and schema."
+  "GET endpoint addressed by database name. Accepts a path or name."
   [{:keys [flags positional]} path-prefix cmd-name]
   (if-let [repo (first positional)]
-    (let [conn (ensure-backend! flags)]
-      (api-get! conn (str path-prefix repo)))
+    (let [conn    (ensure-backend! flags)
+          db-name (path->db-name repo)]
+      (api-get! conn (str path-prefix (url-encode db-name))))
     {:ok false :error (str "Usage: noum " cmd-name " <repo>. Use `noum databases` to see names.")}))
 
 (defn- do-status [parsed]
@@ -329,7 +340,7 @@
     (do (tui/eprintln "Usage: noum delete <name> [--force]")
         (tui/eprintln "Use `noum databases` to see available database names.")
         1)
-    (let [db-name (first positional)]
+    (let [db-name (path->db-name (first positional))]
       (if (and (not (:force flags))
                (not (confirm/ask (str "Delete database '" db-name "'? This cannot be undone.") false)))
         (do (tui/eprintln "Aborted.") 0)
