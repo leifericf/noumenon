@@ -35,9 +35,13 @@
 ;; --- HTTP client ---
 
 (defn- base-url
-  "Build base URL from connection info. Supports remote --host."
-  [{:keys [port host]}]
-  (or (when host (str "http://" host))
+  "Build base URL from connection info. Supports remote --host.
+   Remote hosts default to https:// unless --insecure is set."
+  [{:keys [port host insecure]}]
+  (or (when host
+        (if (or insecure (re-find #"^(localhost|127\.0\.0\.1)(:|$)" host))
+          (str "http://" host)
+          (str "https://" host)))
       (str "http://127.0.0.1:" port)))
 
 (defn- auth-headers
@@ -138,7 +142,7 @@
   [flags]
   (let [effective (merge (load-config) flags)]
     (if-let [host (:host effective)]
-      {:host host :token (:token effective)}
+      {:host host :token (:token effective) :insecure (:insecure effective)}
       (let [jre-path (jre/ensure!)
             jar-path (jar/ensure!)]
         (daemon/ensure! (merge {:jre-path jre-path :jar-path jar-path}
