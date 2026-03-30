@@ -46,11 +46,13 @@
 (defn setup-code!
   "Write .mcp.json in the current directory for Claude Code."
   []
-  (let [path    ".mcp.json"
-        config  {"mcpServers"
-                 {"noumenon"
-                  {"command" (noum-bin-path)
-                   "args"    ["serve"]}}}]
+  (let [path     ".mcp.json"
+        abs-path (str (fs/absolutize path))
+        config   {"mcpServers"
+                  {"noumenon"
+                   {"command" (noum-bin-path)
+                    "args"    ["serve"]}}}]
     (spit path (json/generate-string config {:pretty true}))
-    (tui/eprintln (str (style/green "✓") " Wrote " path))
-    (tui/eprintln "  Noumenon MCP server is ready.")))
+    (tui/eprintln (str (style/green "✓") " Wrote " abs-path
+                       " (Claude Code reads this from your project root)."))
+    (tui/eprintln "  Run this command from your project directory.")))
