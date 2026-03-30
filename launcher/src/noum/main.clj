@@ -259,7 +259,8 @@
         args     (cond-> [java-bin "-jar" jar-path "serve"]
                    (:db-dir flags)   (into ["--db-dir" (:db-dir flags)])
                    (:provider flags) (into ["--provider" (:provider flags)])
-                   (:model flags)    (into ["--model" (:model flags)]))]
+                   (:model flags)    (into ["--model" (:model flags)])
+                   (:token flags)    (into ["--token" (:token flags)]))]
     (:exit @(proc/process {:cmd args :inherit true}))))
 
 (defn- do-watch [{:keys [flags positional]}]
