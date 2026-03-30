@@ -151,7 +151,7 @@
 
 (def ^:private positional-maps
   "How positional args map to API body keys, keyed by :positional-map."
-  {:ask   (fn [pos] {:repo_path (first pos) :question (second pos)})
+  {:ask   (fn [pos] {:repo_path (first pos) :question (str/join " " (rest pos))})
    :query (fn [pos] {:query_name (first pos) :repo_path (second pos)})})
 
 (defn- build-api-body
