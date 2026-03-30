@@ -37,11 +37,14 @@
   (let [path     (claude-desktop-config-path)
         existing (when (fs/exists? path)
                    (json/parse-string (slurp path)))
-        updated  (merge-mcp-config existing)]
-    (fs/create-dirs (fs/parent path))
-    (spit path (json/generate-string updated {:pretty true}))
-    (tui/eprintln (str (style/green "✓") " Wrote MCP config to " path))
-    (tui/eprintln "  Restart Claude Desktop to activate.")))
+        updated  (merge-mcp-config existing)
+        content  (json/generate-string updated {:pretty true})]
+    (if (and (fs/exists? path) (= (slurp path) content))
+      (tui/eprintln (str (style/green "✓") " " path " already configured."))
+      (do (fs/create-dirs (fs/parent path))
+          (spit path content)
+          (tui/eprintln (str (style/green "✓") " Wrote MCP config to " path))
+          (tui/eprintln "  Restart Claude Desktop to activate.")))))
 
 (defn setup-code!
   "Write .mcp.json in the current directory for Claude Code."
@@ -51,8 +54,10 @@
         config   {"mcpServers"
                   {"noumenon"
                    {"command" (noum-bin-path)
-                    "args"    ["serve"]}}}]
-    (spit path (json/generate-string config {:pretty true}))
-    (tui/eprintln (str (style/green "✓") " Wrote " abs-path
-                       " (Claude Code reads this from your project root)."))
-    (tui/eprintln "  Run this command from your project directory.")))
+                    "args"    ["serve"]}}}
+        content  (json/generate-string config {:pretty true})]
+    (if (and (fs/exists? path) (= (slurp path) content))
+      (tui/eprintln (str (style/green "✓") " " abs-path " already configured."))
+      (do (spit path content)
+          (tui/eprintln (str (style/green "✓") " Wrote " abs-path))
+          (tui/eprintln "  Run this command from your project directory.")))))
