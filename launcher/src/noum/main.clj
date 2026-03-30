@@ -17,6 +17,7 @@
             [noum.tui.confirm :as confirm]
             [noum.tui.core :as tui]
             [noum.tui.progress :as progress]
+            [noum.tui.spinner :as spinner]
             [noum.tui.style :as style]))
 
 (def ^:private version
@@ -171,20 +172,38 @@
 
 (defn- make-progress-handler
   "Create an SSE on-progress callback that drives a TUI progress bar.
+   Uses a spinner for indeterminate (total=0) operations.
    Returns the callback fn (or nil if non-interactive)."
   [command]
   (when (and (tui/interactive?) (progress-commands command))
-    (let [bar-atom (atom nil)]
+    (let [bar-atom     (atom nil)
+          spinner-atom (atom nil)]
       (fn [{:keys [current total message]}]
-        (if (and (pos? total) (nil? @bar-atom))
-          (let [b (progress/bar command total)]
-            (reset! bar-atom b)
-            ((:update b) current))
-          (if-let [b @bar-atom]
-            (if (and (pos? total) (= current total))
+        (cond
+          ;; Indeterminate: use spinner, stop previous spinner on message change
+          (zero? total)
+          (let [prev @spinner-atom]
+            (when (and prev (not= (:message prev) message))
+              ((:stop (:spinner prev)) (:message prev)))
+            (when (or (nil? prev) (not= (:message prev) message))
+              (let [s (spinner/start message)]
+                (reset! spinner-atom {:spinner s :message message}))))
+
+          ;; Start determinate bar
+          (nil? @bar-atom)
+          (do (when-let [prev @spinner-atom]
+                ((:stop (:spinner prev)) (:message prev))
+                (reset! spinner-atom nil))
+              (let [b (progress/bar command total)]
+                (reset! bar-atom b)
+                ((:update b) current)))
+
+          ;; Update / finish determinate bar
+          :else
+          (let [b @bar-atom]
+            (if (= current total)
               ((:done b))
-              ((:update b) current))
-            (tui/eprintln (str "  " message))))))))
+              ((:update b) current))))))))
 
 (defn- do-api-command [{:keys [command flags positional]}]
   (let [{:keys [api-path api-method min-args usage] :as cmd-def} (cli/commands command)]
