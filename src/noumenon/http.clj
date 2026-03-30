@@ -429,7 +429,8 @@
             (not run-b) (error-response 404 (str "Run not found: " (:run_id_b params)))
             :else       (ok (bench/compare-runs run-a run-b))))))))
 
-(defn- run-introspect [{:keys [db meta-conn db-name repo-path]} params config progress-fn]
+(defn- build-introspect-opts [{:keys [db meta-conn db-name repo-path]} params config
+                              {:keys [stop-flag run-id progress-fn]}]
   (let [{:keys [provider model]} (resolve-provider params config)
         {:keys [invoke-fn]}
         (llm/make-messages-fn-from-opts
@@ -439,29 +440,66 @@
           (:invoke-fn
            (llm/make-messages-fn-from-opts
             {:provider provider :model model :temperature 0.0 :max-tokens 4096})))]
-    (introspect/run-loop!
-     (cond-> {:db db :repo-name db-name :repo-path repo-path
-              :meta-conn meta-conn
-              :invoke-fn-factory invoke-fn-factory
-              :optimizer-invoke-fn invoke-fn
-              :max-iterations (or (:max_iterations params) 10)
-              :max-hours (:max_hours params)
-              :max-cost (:max_cost params)
-              :eval-runs (or (:eval_runs params) 1)
-              :git-commit? (:git_commit params)
-              :model-config {:provider provider :model model}
-              :progress-fn progress-fn}
-       (:target params)
-       (assoc :allowed-targets
-              (set (map keyword (str/split (:target params) #","))))))))
+    (cond-> {:db db :repo-name db-name :repo-path repo-path
+             :meta-conn meta-conn
+             :invoke-fn-factory invoke-fn-factory
+             :optimizer-invoke-fn invoke-fn
+             :max-iterations (or (:max_iterations params) 10)
+             :max-hours (:max_hours params)
+             :max-cost (:max_cost params)
+             :eval-runs (or (:eval_runs params) 1)
+             :git-commit? (:git_commit params)
+             :model-config {:provider provider :model model}
+             :progress-fn progress-fn}
+      stop-flag     (assoc :stop-flag stop-flag)
+      run-id        (assoc :run-id run-id)
+      (:target params)
+      (assoc :allowed-targets
+             (set (map keyword (str/split (:target params) #",")))))))
 
 (defn- handle-introspect [request config]
   (let [params (parse-json-body request)]
+    (sessions/evict-stale!)
+    (when (>= (sessions/running-count) sessions/max-sessions)
+      (throw (ex-info "Too many active introspect sessions"
+                      {:status 429
+                       :message (str "Maximum " sessions/max-sessions
+                                     " concurrent sessions. Stop one first.")})))
     (with-repo params (:db-dir config)
       (fn [ctx]
-        (if (wants-sse? request)
-          (with-sse request (partial run-introspect ctx params config))
-          (ok (run-introspect ctx params config nil)))))))
+        (let [stop-flag (atom false)
+              run-id    (str (System/currentTimeMillis) "-" (java.util.UUID/randomUUID))
+              now       (System/currentTimeMillis)
+              run-opts  (build-introspect-opts ctx params config
+                                               {:stop-flag stop-flag :run-id run-id})]
+          (sessions/register! run-id {:status :running :stop-flag stop-flag :started-at now})
+          (if (wants-sse? request)
+            (with-sse request
+              (fn [progress-fn]
+                (try
+                  (let [result (introspect/run-loop! (assoc run-opts :progress-fn progress-fn))
+                        final  (if @stop-flag :stopped :completed)]
+                    (sessions/update-session!
+                     run-id #(merge % {:status final :result result
+                                       :completed-at (System/currentTimeMillis)}))
+                    (assoc result :run-id run-id))
+                  (catch Exception e
+                    (sessions/update-session!
+                     run-id #(merge % {:status :error :error (.getMessage e)
+                                       :completed-at (System/currentTimeMillis)}))
+                    (throw e)))))
+            (try
+              (let [result (introspect/run-loop! run-opts)
+                    final  (if @stop-flag :stopped :completed)]
+                (sessions/update-session!
+                 run-id #(merge % {:status final :result result
+                                   :completed-at (System/currentTimeMillis)}))
+                (ok (assoc result :run-id run-id)))
+              (catch Exception e
+                (sessions/update-session!
+                 run-id #(merge % {:status :error :error (.getMessage e)
+                                   :completed-at (System/currentTimeMillis)}))
+                (throw e)))))))))
 
 (defn- handle-introspect-status [request _config]
   (let [params (merge (parse-json-body request) (:query-params request))
