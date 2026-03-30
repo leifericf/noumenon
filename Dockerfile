@@ -32,9 +32,14 @@ COPY --from=build /build/target/noumenon-*.jar noumenon.jar
 RUN chown noumenon:noumenon noumenon.jar
 
 ENV PATH="/opt/java/bin:$PATH"
+# Set NOUMENON_TOKEN when binding to non-localhost (e.g. 0.0.0.0):
+#   docker run -e NOUMENON_TOKEN=<secret> ... --bind 0.0.0.0
+ENV NOUMENON_TOKEN=""
 USER noumenon
 VOLUME /data
 EXPOSE 7891
 
 ENTRYPOINT ["java", "-jar", "noumenon.jar"]
-CMD ["daemon", "--port", "7891", "--bind", "0.0.0.0", "--db-dir", "/data"]
+# Default: localhost-only (no token required). For external access, override
+# CMD with --bind 0.0.0.0 and supply NOUMENON_TOKEN (see above).
+CMD ["daemon", "--port", "7891", "--bind", "127.0.0.1", "--db-dir", "/data"]
