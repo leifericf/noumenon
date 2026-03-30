@@ -244,7 +244,7 @@
       (tui/eprintln (str (style/green "✓") " Daemon running on port " (:port conn)))
       (print-result (:data resp))
       0)
-    (do (tui/eprintln (str (style/red "✗") " Daemon not running.")) 1)))
+    (do (tui/eprintln (str (style/red "✗") " Daemon not running. Run 'noum start' to start it.")) 1)))
 
 (defn- do-upgrade [_]
   (tui/eprintln "Checking for updates...")
