@@ -308,10 +308,22 @@
                                   :inputs      (mapv name (:inputs q []))}))))]
     (ok queries)))
 
+(defn- validate-db-name!
+  "Reject db-name values that could escape the database directory.
+   Throws ExceptionInfo with status 400 on invalid names."
+  [db-name]
+  (when (or (str/blank? db-name)
+            (str/includes? db-name "/")
+            (str/includes? db-name "\\")
+            (re-matches #"\.+" db-name))
+    (throw (ex-info "Invalid database name"
+                    {:status 400 :message "Invalid database name"}))))
+
 (defn- with-db-name
   "Connect by database name (not repo path). For GET endpoints where
    we only need the database, not a filesystem path."
   [db-name db-dir f]
+  (validate-db-name! db-name)
   (let [db-path (io/file db-dir "noumenon" db-name)]
     (when-not (.isDirectory db-path)
       (throw (ex-info (str "Database not found: " db-name
@@ -348,6 +360,7 @@
 
 (defn- handle-delete-database [request config]
   (let [db-name (get-in request [:params :name])
+        _       (validate-db-name! db-name)
         db-dir  (:db-dir config)
         db-path (io/file db-dir "noumenon" db-name)]
     (if (.isDirectory db-path)
