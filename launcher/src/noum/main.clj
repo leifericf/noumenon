@@ -236,7 +236,9 @@
   (ensure-backend! flags) 0)
 
 (defn- do-stop [_]
-  (daemon/stop!) 0)
+  (if (daemon/running?)
+    (do (daemon/stop!) 0)
+    (do (tui/eprintln "Daemon not running.") 0)))
 
 (defn- do-ping [_]
   (if-let [conn (daemon/connection)]
