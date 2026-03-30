@@ -5,6 +5,7 @@
             [babashka.process :as proc]
             [clojure.string :as str]
             [noum.paths :as paths]
+            [noum.tui.core :as tui]
             [noum.tui.spinner :as spinner]))
 
 (def ^:private jre-version "21")
@@ -94,4 +95,5 @@
   []
   (if (installed?)
     paths/jre-dir
-    (download!)))
+    (do (tui/eprintln "First run: downloading JRE (~200MB) to ~/.noumenon/")
+        (download!))))

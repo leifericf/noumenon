@@ -4,6 +4,7 @@
             [babashka.http-client :as http]
             [cheshire.core :as json]
             [noum.paths :as paths]
+            [noum.tui.core :as tui]
             [noum.tui.spinner :as spinner]))
 
 (def ^:private github-repo "leifericf/noumenon")
@@ -53,4 +54,5 @@
   []
   (if (installed?)
     paths/jar-path
-    (download!)))
+    (do (tui/eprintln "First run: downloading noumenon.jar (~50MB) to ~/.noumenon/")
+        (download!))))
