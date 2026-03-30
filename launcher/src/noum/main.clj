@@ -162,14 +162,7 @@
 (defn- url-encode [s]
   (java.net.URLEncoder/encode (str s) "UTF-8"))
 
-;; --- Command handlers (return exit codes, never call System/exit) ---
-
-(def ^:private positional-maps
-  "How positional args map to API body keys, keyed by :positional-map."
-  {:ask   (fn [pos] {:repo_path (canonicalize-path (first pos))
-                     :question (str/join " " (rest pos))})
-   :query (fn [pos] {:query_name (first pos)
-                     :repo_path (canonicalize-path (second pos))})})
+;; --- Path resolution ---
 
 (defn- canonicalize-path
   "Resolve a path to absolute/canonical if it exists on disk.
@@ -187,6 +180,15 @@
     (if (.exists f)
       (-> (.getCanonicalPath f) (str/replace #"/+$" "") (str/split #"/") last)
       repo)))
+
+;; --- Command handlers (return exit codes, never call System/exit) ---
+
+(def ^:private positional-maps
+  "How positional args map to API body keys, keyed by :positional-map."
+  {:ask   (fn [pos] {:repo_path (canonicalize-path (first pos))
+                     :question (str/join " " (rest pos))})
+   :query (fn [pos] {:query_name (first pos)
+                     :repo_path (canonicalize-path (second pos))})})
 
 (defn- build-api-body
   "Build the API request body from flags and positional args."
