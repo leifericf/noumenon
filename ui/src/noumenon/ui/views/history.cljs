@@ -56,9 +56,11 @@
 
        (empty? commits)
        (card/card {}
-                  [:p {:style {:color (:text-secondary styles/tokens)
-                               :text-align "center" :padding "20px"}}
-                   "No commit history. Import a repository first."])
+                  [:div {:style {:text-align "center" :padding "20px"}}
+                   [:p {:style {:color (:text-secondary styles/tokens)}}
+                    "No commit history found for this database."]
+                   [:div {:style {:margin-top "10px"}}
+                    (button/secondary {:on {:click [:action/history-refresh]}} "Refresh")]])
 
        :else
        [:table {:style {:width "100%" :border-collapse "collapse" :font-size "13px"}}

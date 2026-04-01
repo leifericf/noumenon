@@ -419,10 +419,13 @@
                                  :message   "Composing final answer..."
                                  :elapsed   (- (System/currentTimeMillis) start-ms)}))
                 done)
-            (do
+            (let [elapsed (- (System/currentTimeMillis) step-start)
+                  nxt     (update nxt :steps
+                                  (fn [ss] (if (seq ss)
+                                             (update ss (dec (count ss)) assoc :elapsed-ms elapsed)
+                                             ss)))]
               (when on-iteration
-                (let [step    (peek (:steps nxt))
-                      elapsed (- (System/currentTimeMillis) step-start)]
+                (let [step    (peek (:steps nxt))]
                   (when step
                     (let [parsed  (:parsed step)
                           tools   (when (sequential? parsed) (mapv :tool parsed))

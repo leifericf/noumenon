@@ -54,10 +54,36 @@
   (when compare-data
     (card/card {:style {:margin-top "16px"}}
                (card/card-header "Comparison")
-               [:div {:style {:font-family (:font-mono styles/tokens)
-                              :font-size "13px"
-                              :white-space "pre-wrap"}}
-                (pr-str compare-data)])))
+               (if (and (map? compare-data) (seq compare-data))
+                 [:table {:style {:width "100%" :border-collapse "collapse" :font-size "13px"}}
+                  [:thead
+                   [:tr {:style {:border-bottom (str "1px solid " (:border styles/tokens))}}
+                    (for [label ["Question/Layer" "Run A" "Run B" "Delta"]]
+                      [:th {:key label
+                            :style {:text-align "left" :padding "8px 12px"
+                                    :color (:text-secondary styles/tokens) :font-weight 500
+                                    :font-size "12px" :text-transform "uppercase"}}
+                       label])]]
+                  [:tbody
+                   (for [[k v] (sort-by key compare-data)]
+                     (let [score-a (:score-a v)
+                           score-b (:score-b v)
+                           delta   (or (:delta v) (when (and score-a score-b) (- score-b score-a)))]
+                       [:tr {:key (str k)
+                             :style {:border-bottom (str "1px solid " (:border styles/tokens))}}
+                        [:td {:style {:padding "8px 12px"}} (str k)]
+                        [:td {:style {:padding "8px 12px"}} (format-score score-a)]
+                        [:td {:style {:padding "8px 12px"}} (format-score score-b)]
+                        [:td {:style {:padding "8px 12px"
+                                      :color (cond (and delta (pos? delta)) (:success styles/tokens)
+                                                   (and delta (neg? delta)) (:danger styles/tokens)
+                                                   :else (:text-muted styles/tokens))}}
+                         (when delta
+                           (str (when (pos? delta) "+") (format-score delta)))]]))]]
+                 [:div {:style {:font-family (:font-mono styles/tokens)
+                                :font-size "13px"
+                                :white-space "pre-wrap"}}
+                  (pr-str compare-data)]))))
 
 (defn benchmark-view [state]
   (let [{:keys [bench/runs bench/loading? bench/running?

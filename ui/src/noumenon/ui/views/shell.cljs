@@ -178,12 +178,12 @@
                     :align-items "center"
                     :gap "5px"
                     :font-size "10px"
-                    :color "rgba(255,255,255,0.3)"}}
+                    :color (:text-muted styles/tokens)}}
       [:div {:style {:width "5px" :height "5px" :border-radius "50%"
                      :background (case status
                                    :connected "#3fb950"
                                    :error     "#f85149"
-                                   "rgba(255,255,255,0.2)")}}]
+                                   (:text-muted styles/tokens))}}]
       (case status
         :connected "Connected"
         :error     "Disconnected"

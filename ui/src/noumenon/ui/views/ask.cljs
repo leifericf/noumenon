@@ -88,15 +88,19 @@
         (str results " results")])
      (when (and (seq samples) (= type "step"))
        [:button {:on {:click [:action/ask-show-step-on-graph samples]}
-                 :style {:background "none" :border "none" :cursor "pointer"
-                         :font-size "11px" :color "rgba(96,165,250,0.7)"
-                         :padding "0"}}
+                 :style {:background (str (:accent styles/tokens) "15")
+                         :border "none" :cursor "pointer"
+                         :border-radius "8px"
+                         :font-size "11px" :color (:accent styles/tokens)
+                         :padding "1px 6px"}}
         "graph"])
      (when (and results (> results 5) (seq samples) (= type "step"))
        [:button {:on {:click [:action/ask-download-csv message samples]}
-                 :style {:background "none" :border "none" :cursor "pointer"
-                         :font-size "11px" :color "rgba(255,255,255,0.3)"
-                         :padding "0"}}
+                 :style {:background (str (:text-muted styles/tokens) "15")
+                         :border "none" :cursor "pointer"
+                         :border-radius "8px"
+                         :font-size "11px" :color (:text-secondary styles/tokens)
+                         :padding "1px 6px"}}
         "\u2193 csv"])]
     ;; LLM reasoning (italic, lighter)
     (when (and reasoning (= type "step"))
@@ -126,11 +130,9 @@
 (defn- reasoning-trace [steps progress expanded?]
   (let [n          (count steps)
         show-all?  (or expanded? (<= n 3))
-        ;; In rolling mode: show all steps but only the container is capped
-        ;; The top fade gradient hides the overflow naturally
         visible    (if show-all?
                      (map-indexed vector steps)
-                     (map-indexed vector steps))]
+                     (map-indexed vector (take-last 3 steps)))]
     [:div {:style {:width "100%"
                    :margin-top "20px"
                    :padding "16px 20px"
@@ -146,6 +148,9 @@
                       :text-transform "uppercase" :letter-spacing "0.5px"
                       :color (:text-muted styles/tokens)}}
        "Reasoning"]
+      [:span {:style {:font-size "10px" :color (:text-muted styles/tokens)
+                      :margin-left "4px"}}
+       "(latest first)"]
       (when (> n 3)
         [:button {:on {:click [:action/ask-toggle-reasoning]}
                   :style {:background "none" :border "none" :cursor "pointer"
@@ -360,12 +365,19 @@
      [:div {:style {:width "100%"
                     :position "relative"}}
       [:input {:type "text"
+               :id "ask-input"
                :placeholder "Ask anything about your codebase..."
                :value (or query "")
                :on {:input [:action/ask-input]
                     :keydown [:action/ask-keydown]}
+               :role "combobox"
+               :aria-expanded (boolean (seq completions))
+               :aria-autocomplete "list"
+               :aria-haspopup "listbox"
+               :aria-controls "ask-completions"
                :style {:width "100%"
                        :padding "14px 18px"
+                       :padding-right "44px"
                        :background "rgba(15,20,30,0.8)"
                        :backdrop-filter "blur(12px)"
                        :-webkit-backdrop-filter "blur(12px)"
@@ -373,9 +385,30 @@
                        :border-radius "12px"
                        :color "#e6edf3"
                        :font-size "15px"}}]
+      ;; Submit / Stop button
+      (if loading?
+        [:button {:on {:click [:action/ask-cancel]}
+                  :style {:position "absolute" :right "12px" :top "50%"
+                          :transform "translateY(-50%)"
+                          :background "none" :border "none" :cursor "pointer"
+                          :color (:danger styles/tokens) :font-size "13px"
+                          :padding "4px 8px"
+                          :z-index 2}}
+         "Stop"]
+        (when (seq query)
+          [:button {:on {:click [:action/ask-submit]}
+                    :style {:position "absolute" :right "10px" :top "50%"
+                            :transform "translateY(-50%)"
+                            :background "none" :border "none" :cursor "pointer"
+                            :color (:accent styles/tokens) :font-size "16px"
+                            :padding "4px 8px"
+                            :z-index 2}}
+           "\u2192"]))
       ;; @-mention autocomplete dropdown
       (when (seq completions)
-        [:div {:style {:position "absolute"
+        [:div {:id "ask-completions"
+               :role "listbox"
+               :style {:position "absolute"
                        :top "100%"
                        :left 0
                        :right 0
@@ -389,6 +422,8 @@
                        :z-index 100}}
          (for [[i item] (map-indexed vector completions)]
            [:div {:key (:value item)
+                  :role "option"
+                  :aria-selected (= i (or completion-idx 0))
                   :on {:click [:action/ask-complete (:value item)]}
                   :style {:padding "8px 14px"
                           :cursor "pointer"
@@ -415,14 +450,7 @@
                               :overflow "hidden"
                               :text-overflow "ellipsis"
                               :white-space "nowrap"}}
-               label])])])
-      (when loading?
-        [:div {:style {:position "absolute" :right "12px" :top "50%"
-                       :transform "translateY(-50%)"
-                       :width "14px" :height "14px" :border-radius "50%"
-                       :border (str "2px solid " (:accent styles/tokens))
-                       :border-top-color "transparent"
-                       :animation "spin 0.8s linear infinite"}}])]
+               label])])])]
      ;; Hint
      [:div {:style {:width "100%" :margin-top "6px"
                     :font-size "11px" :color (:text-muted styles/tokens)}}
@@ -456,9 +484,9 @@
         [:div {:style {:margin-top "12px" :text-align "center"}}
          [:button {:on {:click [:action/ask-clear]}
                    :style {:background "none" :border "none" :cursor "pointer"
-                           :font-size "13px" :color (:accent styles/tokens)
+                           :font-size "13px" :color (:text-muted styles/tokens)
                            :padding "4px 12px"}}
-          "Ask another question"]]])
+          "New question"]]])
      ;; Past questions — collapsible
      (when (seq past-sessions)
        (let [expanded-list? (:ask/history-open? state)]

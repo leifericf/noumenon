@@ -74,7 +74,7 @@
                         ;; Also check last step for reflection
                         (some :reflection (reverse steps)))
         step-txs    (mapv (fn [step idx]
-                            (build-step-tx step idx nil))
+                            (build-step-tx step idx (:elapsed-ms step)))
                           steps (range))
         session-tx  (cond-> {:ask.session/id          session-id
                              :ask.session/question    question

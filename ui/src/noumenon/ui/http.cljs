@@ -1,9 +1,14 @@
 (ns noumenon.ui.http)
 
 ;; Active backend connection — set by state.cljs when backend changes
+(defn detect-port []
+  (or (when (and (exists? js/window) js/window.noumenon js/window.noumenon.getPort)
+        (js/window.noumenon.getPort))
+      (when (exists? js/window) js/window.__NOUMENON_PORT__)
+      9876))
+
 (defonce connection
-  (atom {:url   (str "http://localhost:"
-                     (or (when (exists? js/window) js/window.__NOUMENON_PORT__) 9876))
+  (atom {:url   (str "http://localhost:" (detect-port))
          :token nil}))
 
 (defn base-url [] (:url @connection))
@@ -106,7 +111,7 @@
                                  (case event
                                    "progress" (when on-progress (on-progress parsed))
                                    "result"   (when on-result (on-result parsed))
-                                   "error"    (when on-error (on-error (:error parsed)))
+                                   "error"    (when on-error (on-error (or (:message parsed) (:error parsed))))
                                    "done"     (fire-done!)
                                    nil))))
                            (reset! buffer (last parts)))))

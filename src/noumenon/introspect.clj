@@ -185,7 +185,7 @@
            ;; Agent-reported missing attributes
            (when (seq missing-attrs)
              (let [all-items (->> missing-attrs
-                                  (mapcat (fn [[s]] (try (edn/read-string s) (catch Exception _ []))))
+                                  (mapcat (fn [[s]] (when (<= (count (str s)) 10000) (try (edn/read-string s) (catch Exception _ [])))))
                                   frequencies
                                   (sort-by val >))]
                (when (seq all-items)
@@ -198,7 +198,7 @@
            ;; Agent-reported quality issues
            (when (seq quality-iss)
              (let [all-items (->> quality-iss
-                                  (mapcat (fn [[s]] (try (edn/read-string s) (catch Exception _ []))))
+                                  (mapcat (fn [[s]] (when (<= (count (str s)) 10000) (try (edn/read-string s) (catch Exception _ [])))))
                                   frequencies
                                   (sort-by val >))]
                (when (seq all-items)
@@ -210,7 +210,7 @@
            ;; Agent-suggested named queries
            (when (seq suggested-qs)
              (let [all-items (->> suggested-qs
-                                  (mapcat (fn [[s]] (try (edn/read-string s) (catch Exception _ []))))
+                                  (mapcat (fn [[s]] (when (<= (count (str s)) 10000) (try (edn/read-string s) (catch Exception _ [])))))
                                   frequencies
                                   (sort-by val >))]
                (when (seq all-items)

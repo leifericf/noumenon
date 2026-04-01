@@ -81,16 +81,28 @@ function isDev() {
 
 // --- IPC: save backends to config.edn ---
 
+let daemonPort = null;
+
+ipcMain.on('get-port', (event) => {
+  event.returnValue = daemonPort;
+});
+
+function escapeEdnString(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function backendToEdn(b) {
+  const name = escapeEdnString(b.name || 'Local');
+  const url = escapeEdnString(b.url || 'auto');
+  const token = b.token ? `"${escapeEdnString(b.token)}"` : 'nil';
+  return `{:name "${name}" :url "${url}" :token ${token}}`;
+}
+
 ipcMain.on('save-backends', (_event, data) => {
   try {
-    // Read existing config, update backends/active-backend
-    const existing = readConfigRaw();
-    // Write as EDN — simple serialization for the fields we manage
-    const backends = JSON.stringify(data.backends || []);
-    const active = data.activeBackend || data['active-backend'] || 'Local';
-    // For now, write the full config as a simple EDN map
-    // Preserve any existing keys we don't manage by doing a merge
-    const ednContent = `{:backends ${backends}\n :active-backend "${active}"}\n`;
+    const backends = (data.backends || []).map(backendToEdn).join('\n              ');
+    const active = escapeEdnString(data.activeBackend || data['active-backend'] || 'Local');
+    const ednContent = `{:backends [${backends}]\n :active-backend "${active}"}\n`;
     fs.mkdirSync(NOUMENON_DIR, { recursive: true });
     fs.writeFileSync(CONFIG_FILE, ednContent, { mode: 0o600 });
   } catch (err) {
@@ -103,6 +115,7 @@ async function createWindow() {
   const isLocal = config.activeBackend === 'Local';
   const envPort = process.env.NOUMENON_PORT ? parseInt(process.env.NOUMENON_PORT) : null;
   const port = envPort || (isLocal ? await ensureDaemon() : null);
+  daemonPort = port;
 
   const win = new BrowserWindow({
     width: 1280,
@@ -122,11 +135,7 @@ async function createWindow() {
     win.loadFile(path.join(__dirname, '..', 'resources', 'public', 'index.html'));
   }
 
-  win.webContents.on('did-finish-load', () => {
-    win.webContents.executeJavaScript(
-      `window.__NOUMENON_PORT__ = ${port || 'null'};`
-    );
-  });
+  // Port is now exposed via preload contextBridge (window.noumenon.getPort())
 }
 
 function setupAutoUpdate() {

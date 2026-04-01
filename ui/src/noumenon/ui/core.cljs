@@ -233,7 +233,7 @@
                               (= "k" (.-key e)))
                          (do (.preventDefault e)
                              (js/setTimeout
-                              #(some-> (.querySelector js/document "input[type=text]")
+                              #(some-> (.getElementById js/document "ask-input")
                                        .focus)
                               100))
 

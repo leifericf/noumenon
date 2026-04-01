@@ -77,6 +77,12 @@
 
 (defmethod handle-event :action/db-delete [state [_ db-name]]
   {:state state
+   :fx    [[:confirm/then
+            (str "Delete database \"" db-name "\"? This cannot be undone.")
+            [:action/db-delete-confirmed db-name]]]})
+
+(defmethod handle-event :action/db-delete-confirmed [state [_ db-name]]
+  {:state state
    :fx    [[:http/delete (str "/api/databases/" (js/encodeURIComponent db-name))
             {:on-ok :action/db-refresh :on-error :action/db-error}]]})
 
@@ -132,7 +138,7 @@
   {:state (update state :ask/show-post-reasoning? not)})
 
 (defmethod handle-event :action/ask-clear [state _]
-  {:state (assoc state :ask/history [] :ask/last-steps nil :ask/steps []
+  {:state (assoc state :ask/history [] :ask/last-steps nil :ask/steps [] :ask/result nil
                  :ask/show-post-reasoning? false :ask/reasoning-expanded? false
                  :graph/focused-ids nil)})
 
@@ -263,7 +269,7 @@
     {:state (cond-> (assoc state :ask/query value)
               (not has-at?) (dissoc :ask/completions :ask/completion-idx)
               has-at?       (assoc :ask/at-prefix prefix :ask/completion-idx 0))
-     :fx    (when (and has-at? db-name (>= (count prefix) 1))
+     :fx    (when (and has-at? db-name (>= (count prefix) 0))
               [[:dispatch-later 150
                 [:action/ask-fetch-completions db-name prefix]]])}))
 
@@ -275,11 +281,14 @@
        :fx    [[:http/get (str "/api/completions?repo_path="
                                (js/encodeURIComponent db-name)
                                "&prefix=" (js/encodeURIComponent prefix))
-                {:on-ok :action/ask-completions-loaded}]]}
+                {:on-ok [:action/ask-completions-loaded prefix]}]]}
       {:state state})))
 
-(defmethod handle-event :action/ask-completions-loaded [state [_ items]]
-  {:state (assoc state :ask/completions items :ask/completion-idx 0)})
+(defmethod handle-event :action/ask-completions-loaded [state [_ prefix items]]
+  ;; Only apply if prefix still matches (guards against stale HTTP responses)
+  (if (= prefix (:ask/at-prefix state))
+    {:state (assoc state :ask/completions items :ask/completion-idx 0)}
+    {:state state}))
 
 (defmethod handle-event :action/ask-complete [state [_ value]]
   ;; Replace the @prefix with the completed value
@@ -365,8 +374,18 @@
      :fx    (when (seq files)
               [[:dispatch [:action/graph-focus files]]])}))
 
+(defmethod handle-event :action/ask-cancel [state _]
+  {:state (assoc state :ask/loading? false :ask/progress nil
+                 :ask/steps [] :ask/last-steps nil)
+   :fx    [[:sse/cancel "/api/ask"]]})
+
 (defmethod handle-event :action/ask-error [state [_ error]]
-  {:state (assoc state :ask/loading? false :ask/result {:answer (str "Error: " error)})})
+  (let [query (:ask/query state)]
+    {:state (-> state
+                (assoc :ask/loading? false :ask/result nil)
+                (update :ask/history conj {:question query
+                                           :answer (str "**Error:** " error)}))
+     :fx    [[:dispatch [:action/toast {:message (str "Ask failed: " error) :type :error}]]]}))
 
 (defmethod handle-event :action/select-db-value [state [_ db-name]]
   {:state (assoc state :db-name db-name)})
@@ -530,14 +549,16 @@
                 {:repo_path db-name :query_name "file-history"
                  :params {:file-path id} :limit 3}
                 {:on-ok [:action/graph-node-history-loaded id]}]
-               ;; Summary + complexity via raw query
+               ;; Summary + complexity via raw query with parameterized input
                [:http/post "/api/query-raw"
                 {:repo_path db-name
-                 :query (str "[:find ?summary ?complexity"
-                             " :where"
-                             " [?f :file/path \"" id "\"]"
-                             " [(get-else $ ?f :sem/summary \"\") ?summary]"
-                             " [(get-else $ ?f :sem/complexity :unknown) ?complexity]]")}
+                 :query (pr-str '[:find ?summary ?complexity
+                                  :in $ ?path
+                                  :where
+                                  [?f :file/path ?path]
+                                  [(get-else $ ?f :sem/summary "") ?summary]
+                                  [(get-else $ ?f :sem/complexity :unknown) ?complexity]])
+                 :args [id]}
                 {:on-ok [:action/graph-node-meta-loaded id]}]])}))
 
 (defmethod handle-event :action/graph-node-imports-loaded [state [_ file-id data]]
@@ -726,19 +747,21 @@
 (defmethod handle-event :action/introspect-progress [state [_ progress]]
   {:state (assoc state :introspect/progress progress)})
 
-(defmethod handle-event :action/introspect-result [state [_ _result]]
-  {:state (assoc state :introspect/running? false :introspect/progress nil)})
+(defmethod handle-event :action/introspect-result [state [_ result]]
+  {:state (assoc state :introspect/running? false :introspect/progress nil
+                 :introspect/run-id (:run-id result))})
 
 (defmethod handle-event :action/introspect-done [state _]
   {:state (assoc state :introspect/running? false :introspect/progress nil)
    :fx    [[:dispatch [:action/introspect-refresh]]]})
 
 (defmethod handle-event :action/introspect-stop [state _]
-  (let [db-name (or (:db-name state) (-> state :databases/list first :name))]
+  (let [db-name (or (:db-name state) (-> state :databases/list first :name))
+        run-id  (:introspect/run-id state)]
     {:state state
-     :fx    (when db-name
+     :fx    (when (and db-name run-id)
               [[:http/post "/api/introspect/stop"
-                {:repo_path db-name}
+                {:repo_path db-name :run_id run-id}
                 {:on-ok :action/introspect-refresh}]])}))
 
 ;; --- Backend events (client-side only — managed via config.edn) ---
@@ -856,6 +879,17 @@
                                                         (when on-error (dispatch! [on-error %])))})]
           (swap! active-sse-cancels assoc path cancel)))
 
+      :sse/cancel
+      (let [[path] args]
+        (when-let [cancel-fn (get @active-sse-cancels path)]
+          (cancel-fn)
+          (swap! active-sse-cancels dissoc path)))
+
+      :confirm/then
+      (let [[message on-confirm] args]
+        (when (js/confirm message)
+          (dispatch! on-confirm)))
+
       :dispatch
       (let [[event] args]
         (dispatch! event))
@@ -886,7 +920,7 @@
       :connection/set
       (let [[backend] args
             url (if (= "auto" (:url backend))
-                  (str "http://localhost:" (or js/window.__NOUMENON_PORT__ 9876))
+                  (str "http://localhost:" (http/detect-port))
                   (:url backend))]
         (reset! http/connection {:url url :token (:token backend)}))
 

@@ -2,6 +2,7 @@
   "HTTP API for the Noumenon daemon. Serves REST-ish JSON endpoints
    on localhost for the `noum` CLI launcher and future Electron UI."
   (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [datomic.client.api :as d]
@@ -169,14 +170,29 @@
   (some-> (get-in request [:headers "accept"]) (str/includes? "text/event-stream")))
 
 (def ^:private cors-headers
-  {"Access-Control-Allow-Origin"  "*"
-   "Access-Control-Allow-Methods" "GET, POST, DELETE, OPTIONS"
+  {"Access-Control-Allow-Methods" "GET, POST, DELETE, OPTIONS"
    "Access-Control-Allow-Headers" "Content-Type, Accept, Authorization"})
 
+(defn- allowed-origin?
+  "Only allow localhost and file:// origins."
+  [origin]
+  (when origin
+    (or (re-matches #"https?://localhost(:\d+)?" origin)
+        (re-matches #"https?://127\.0\.0\.1(:\d+)?" origin)
+        (= "file://" origin)
+        (str/starts-with? origin "file://"))))
+
 (defn- with-cors
-  "Add CORS headers to a response."
-  [response]
-  (update response :headers merge cors-headers))
+  "Add CORS headers to a response, restricting origin to localhost."
+  ([response] (with-cors response nil))
+  ([response request]
+   (let [origin (some-> request (get-in [:headers "origin"]))
+         origin-header (if (allowed-origin? origin)
+                         origin
+                         "http://localhost")]
+     (update response :headers merge
+             (assoc cors-headers
+                    "Access-Control-Allow-Origin" origin-header)))))
 
 (defn- with-sse
   "Run body-fn in a future, streaming progress via SSE. body-fn receives a progress-fn.
@@ -185,21 +201,25 @@
   (server/as-channel request
                      {:on-open
                       (fn [ch]
-                        (server/send! ch {:status  200
-                                          :headers (merge cors-headers
-                                                          {"Content-Type"  "text/event-stream"
-                                                           "Cache-Control" "no-cache"
-                                                           "Connection"    "keep-alive"})}
-                                      false)
-                        (future
-                          (try
-                            (let [progress-fn (fn [evt]
-                                                (server/send! ch (sse-event "progress" evt) false))
-                                  result (body-fn progress-fn)]
-                              (server/send! ch (sse-event "result" result) false)
-                              (server/send! ch (sse-event "done" {}) true))
-                            (catch Exception e
-                              (server/send! ch (sse-event "error" {:message (.getMessage e)}) true)))))}))
+                        (let [origin   (get-in request [:headers "origin"])
+                              origin-h (if (allowed-origin? origin) origin "http://localhost")]
+                          (server/send! ch {:status  200
+                                            :headers (merge cors-headers
+                                                            {"Content-Type"  "text/event-stream"
+                                                             "Cache-Control" "no-cache"
+                                                             "Connection"    "keep-alive"
+                                                             "Access-Control-Allow-Origin" origin-h})}
+                                        false)
+                          (future
+                            (try
+                              (let [progress-fn (fn [evt]
+                                                  (server/send! ch (sse-event "progress" evt) false))
+                                    result (body-fn progress-fn)]
+                                (server/send! ch (sse-event "result" result) false)
+                                (server/send! ch (sse-event "done" {}) true))
+                              (catch Exception e
+                                (log! "sse/error" (.getMessage e))
+                                (server/send! ch (sse-event "error" {:message "Internal server error"}) true))))))}))
 
 ;; --- Shared helpers ---
 
@@ -395,11 +415,14 @@
               limit     (min (or (:limit params) 500) 10000)]
           (when-not query-edn
             (throw (ex-info "Missing query" {:status 400 :message "query is required (EDN string)"})))
-          (let [parsed (try (clojure.edn/read-string query-edn)
+          (validate-string-length! "query" query-edn max-param-value-len)
+          (let [parsed (try (edn/read-string query-edn)
                             (catch Exception e
                               (throw (ex-info "Invalid EDN"
                                               {:status 400 :message (str "Invalid EDN: " (.getMessage e))}))))
-                results (try (d/q parsed db)
+                _       (agent/validate-query parsed)
+                args    (or (:args params) [])
+                results (try (apply d/q parsed db args)
                              (catch Exception e
                                (throw (ex-info "Query failed"
                                                {:status 400 :message (str "Query error: " (.getMessage e))}))))]
@@ -671,6 +694,7 @@
   (let [params     (merge (parse-json-body request) (:query-params request))
         query-name (or (:query_name params)
                        (get-in request [:params :query]))]
+    (validate-string-length! "query_name" (str query-name) max-run-id-len)
     (when-not (or (str/starts-with? (str query-name) "introspect-")
                   (str/starts-with? (str query-name) "ask-"))
       (throw (ex-info "Only introspect-* and ask-* queries"
@@ -722,6 +746,8 @@
         comment    (or (:comment params) "")]
     (when-not session-id
       (throw (ex-info "Missing session_id" {:status 400 :message "session_id is required"})))
+    (validate-string-length! "session_id" session-id max-run-id-len)
+    (validate-string-length! "comment" comment max-param-value-len)
     (let [meta-conn (db/ensure-meta-db (:db-dir config))]
       (ask-store/set-feedback! meta-conn session-id comment)
       (ok {:session-id session-id}))))
@@ -814,9 +840,12 @@
         value     (:value params)]
     (when-not (and key (some? value))
       (throw (ex-info "Missing key or value" {:status 400 :message "key and value are required"})))
+    (validate-string-length! "key" key 256)
+    (when (string? value)
+      (validate-string-length! "value" value max-param-value-len))
     (let [meta-conn (db/ensure-meta-db (:db-dir config))
           edn-value (if (string? value)
-                      (try (clojure.edn/read-string value) (catch Exception _ value))
+                      (try (edn/read-string value) (catch Exception _ value))
                       value)]
       (artifacts/set-setting! meta-conn key edn-value)
       (ok {:key key}))))
@@ -912,7 +941,7 @@
           qp     (parse-query-params (:query-string request))]
       ;; Handle CORS preflight
       (if (= method :options)
-        (with-cors {:status 204 :headers {} :body nil})
+        (with-cors {:status 204 :headers {} :body nil} request)
         (with-cors
           (if-let [{:keys [handler params]} (match-route method path)]
             (let [request (assoc request
@@ -927,11 +956,14 @@
                         (when (>= status 500)
                           (log! "http/error" (.getMessage e)))
                         (error-response status
-                                        (or (:message data) "Internal server error"))))
+                                        (if (>= status 500)
+                                          "Internal server error"
+                                          (or (:message data) "Internal server error")))))
                     (catch Exception e
                       (log! "http/error" (.getMessage e))
                       (error-response 500 "Internal server error")))))
-            (error-response 404 "Not found")))))))
+            (error-response 404 "Not found"))
+          request)))))
 
 ;; --- Server lifecycle ---
 
@@ -949,11 +981,14 @@
                    :started-at (System/currentTimeMillis)}))
     ;; Owner-only read/write (600) — file may contain connection info
     (try
-      (.setReadable daemon-file false false)
-      (.setWritable daemon-file false false)
-      (.setReadable daemon-file true false)
-      (.setWritable daemon-file true false)
-      (catch Exception _))))
+      (let [ok? (and (.setReadable daemon-file false false)
+                     (.setWritable daemon-file false false)
+                     (.setReadable daemon-file true false)
+                     (.setWritable daemon-file true false))]
+        (when-not ok?
+          (log! "daemon/warn" "Could not set owner-only permissions on daemon.edn")))
+      (catch Exception _
+        (log! "daemon/warn" "Could not set permissions on daemon.edn")))))
 
 (defn- delete-daemon-file! []
   (let [f (io/file (System/getProperty "user.home") ".noumenon" "daemon.edn")]
