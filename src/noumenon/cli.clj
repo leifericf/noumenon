@@ -170,6 +170,13 @@
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
+(def ^:private synthesize-command-spec
+  {:flags [model-flag
+           (assoc provider-flag :valid all-valid-providers)
+           db-dir-flag]
+   :initial {}
+   :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
+
 (def ^:private query-command-spec
   {:flags [db-dir-flag
            {:flag "--param" :key :params :parse :kv-pair
@@ -274,6 +281,10 @@
                    :summary "Extract cross-file import graph deterministically"
                    :usage "enrich [options] <repo-path>"
                    :epilog "Parses source code imports and resolves them to repo files.\nFull support: Clojure. Import extraction: Elixir, Python, JS/TS, C/C++, Go, Rust, Java, Erlang.\nOther languages are skipped. External tools (elixir, python3, node, etc.) required on PATH.\nStdout: EDN result map (for scripting). Human output goes to stderr."}
+   "synthesize"   {:spec synthesize-command-spec
+                   :summary "Identify architectural components from analyzed codebase data"
+                   :usage "synthesize [options] <repo-path>"
+                   :epilog "Queries the knowledge graph for file summaries, import edges, and\ndirectory structure, then uses an LLM to identify logical components,\nclassify files architecturally (layer, category, patterns, purpose),\nand map component dependencies.\n\nRun after analyze — requires sem/summary on files.\nIdempotent: re-running retracts and recreates components.\nStdout: EDN result map (for scripting). Human output goes to stderr."}
    "update"    {:spec update-command-spec
                 :summary "Update knowledge graph with latest git state"
                 :usage "update [options] <repo-path>"
@@ -313,6 +324,8 @@
                                       :desc "Skip enrich (use both --skip-import --skip-enrich to skip combined step)"}
                                      {:flag "--skip-analyze" :key :skip-analyze :parse :bool
                                       :desc "Skip analyze step"}
+                                     {:flag "--skip-synthesize" :key :skip-synthesize :parse :bool
+                                      :desc "Skip synthesize step (component identification)"}
                                      {:flag "--skip-benchmark" :key :skip-benchmark :parse :bool
                                       :desc "Skip benchmark step"}
                                      {:flag "--layers" :key :layers :parse :string
@@ -322,7 +335,7 @@
                                       :desc "Generate Markdown benchmark report"}]))
                        :initial {:subcommand "digest"}
                        :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}}
-                :summary "Run full pipeline: import, enrich, analyze, benchmark"
+                :summary "Run full pipeline: import, enrich, analyze, synthesize, benchmark"
                 :usage "digest [options] <repo-path>"
                 :epilog "Runs the entire Noumenon pipeline in one go. Each step is idempotent.\nUse --skip-* flags to omit individual steps.\nRe-running digest picks up where a previous run left off."}
    "introspect" {:spec introspect-command-spec
@@ -393,7 +406,7 @@
                 :epilog "Starts an HTTP API server on 127.0.0.1 for the noum launcher\nand future Electron UI. Writes connection info to ~/.noumenon/daemon.edn.\nUse --port to specify a fixed port, or omit for auto-assignment.\nUse --token for remote access authentication."}})
 
 (def ^:private command-order
-  ["digest" "import" "analyze" "enrich" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "daemon" "benchmark" "introspect" "reseed" "artifact-history"])
+  ["digest" "import" "analyze" "enrich" "synthesize" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "daemon" "benchmark" "introspect" "reseed" "artifact-history"])
 
 ;; --- Help text generation ---
 

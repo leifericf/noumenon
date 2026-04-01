@@ -81,7 +81,7 @@
                                    :artifact.rules/edn rules-str}
                                   tx-meta]}))
     ;; Seed prompts
-    (doseq [pname ["agent-system" "agent-examples" "analyze-file" "introspect"]]
+    (doseq [pname ["agent-system" "agent-examples" "analyze-file" "introspect" "synthesize"]]
       (when-let [tx (prompt-seed-tx pname)]
         (d/transact conn {:tx-data [tx tx-meta]})))))
 

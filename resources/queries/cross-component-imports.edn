@@ -1,0 +1,10 @@
+{:name "cross-component-imports"
+ :description "Import edges that cross component boundaries — coupling between components"
+ :query [:find ?from-comp ?to-comp (count ?from-file)
+         :where
+         [?from-file :file/imports ?to-file]
+         [?from-file :arch/component ?fc]
+         [?to-file :arch/component ?tc]
+         [(!= ?fc ?tc)]
+         [?fc :component/name ?from-comp]
+         [?tc :component/name ?to-comp]]}

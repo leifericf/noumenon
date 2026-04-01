@@ -21,6 +21,7 @@
             [noumenon.query :as query]
             [noumenon.sessions :as sessions]
             [noumenon.sync :as sync]
+            [noumenon.synthesize :as synthesize]
             [noumenon.util :as util :refer [log!]])
   (:import [java.lang ProcessHandle]
            [java.security MessageDigest]))
@@ -305,6 +306,21 @@
               result (sync/update-repo! conn repo-path repo-path opts)]
           (ok result))))))
 
+(defn- run-synthesize [{:keys [conn meta-db db-name]} params config progress-fn]
+  (let [{:keys [prompt-fn model-id]}
+        (llm/wrap-as-prompt-fn-from-opts (resolve-provider params config))]
+    (when progress-fn (progress-fn {:message "Synthesizing architecture..."}))
+    (synthesize/synthesize-repo! conn prompt-fn
+                                 {:meta-db meta-db :model-id model-id :repo-name db-name})))
+
+(defn- handle-synthesize [request config]
+  (let [params (parse-json-body request)]
+    (with-repo params (:db-dir config)
+      (fn [ctx]
+        (if (wants-sse? request)
+          (with-sse request (partial run-synthesize ctx params config))
+          (ok (run-synthesize ctx params config nil)))))))
+
 (defn- run-digest [{:keys [conn meta-db repo-path]} params config progress-fn]
   (let [{:keys [prompt-fn model-id]}
         (llm/wrap-as-prompt-fn-from-opts (resolve-provider params config))
@@ -321,6 +337,12 @@
                                                                    {:meta-db meta-db :model-id model-id
                                                                     :concurrency 3 :progress-fn progress-fn})]
                                       (select-keys r [:files-analyzed :total-usage]))))
+        synth-r   (when-not (:skip_synthesize params)
+                    (step-progress "synthesize"
+                                   #(synthesize/synthesize-repo!
+                                     conn prompt-fn
+                                     {:meta-db meta-db :model-id model-id
+                                      :repo-name (last (str/split repo-path #"/"))})))
         bench-r   (when-not (:skip_benchmark params)
                     (step-progress "benchmark"
                                    #(let [db     (d/db conn)
@@ -336,6 +358,7 @@
     (cond-> {}
       update-r  (assoc :update update-r)
       analyze-r (assoc :analyze analyze-r)
+      synth-r   (assoc :synthesize synth-r)
       bench-r   (assoc :benchmark bench-r))))
 
 (defn- handle-digest [request config]
@@ -879,6 +902,7 @@
    [:post "/api/analyze"               handle-analyze]
    [:post "/api/enrich"                handle-enrich]
    [:post "/api/update"                handle-update]
+   [:post "/api/synthesize"            handle-synthesize]
    [:post "/api/digest"                handle-digest]
    [:post "/api/ask"                   handle-ask]
    [:post "/api/query"                 handle-query-exec]

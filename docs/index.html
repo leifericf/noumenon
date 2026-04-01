@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Noumenon — Precise Answers from Your Codebase</title>
-  <meta name="description" content="Open-source Datomic knowledge graph for codebase understanding. Immutable facts, temporal queries, iterative LLM reasoning. Runs locally.">
-  <meta property="og:title" content="Noumenon — Precise Answers from Your Codebase">
-  <meta property="og:description" content="Datomic knowledge graph for your codebase. Immutable facts, Datalog queries, iterative LLM reasoning. Runs locally — your code stays yours.">
+  <title>Noumenon — Precise, Grounded Answers About Your Codebase</title>
+  <meta name="description" content="Precise, grounded answers about your codebase. Pre-compiled knowledge graph means fewer tokens, fewer iterations, and facts instead of hallucinations.">
+  <meta property="og:title" content="Noumenon — Precise, Grounded Answers About Your Codebase">
+  <meta property="og:description" content="Compiles git repos into a multi-level Datomic knowledge graph so AI agents answer codebase questions more accurately, faster, and at lower cost than raw context windows.">
   <meta property="og:url" content="https://noumenon.leifericf.com">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary_large_image">
@@ -27,7 +27,7 @@
       </svg>
     </button>
     <ul class="nav-links">
-      <li><a href="#layers">Layers</a></li>
+      <li><a href="#layers">Knowledge Levels</a></li>
       <li><a href="#how-it-works">How It Works</a></li>
       <li><a href="#introspect">Introspect</a></li>
       <li><a href="#benchmarks">Benchmarks</a></li>
@@ -44,9 +44,9 @@
     <div class="hero-badge">
       <span>&#9679;</span> Open source &middot; Zero dependencies &middot; MIT License
     </div>
-    <h1>Ask your codebase precise questions.<br>Get grounded answers.</h1>
+    <h1>Precise, grounded answers<br>about your codebase.</h1>
     <p class="hero-sub">
-      Noumenon builds a <a href="https://www.datomic.com">Datomic</a> knowledge graph from your repository so agents query structured facts instead of raw context windows. Across 9 repos and 8 languages, graph-augmented answers scored <strong>2.8&times; higher</strong>.
+      Noumenon compiles your repository into a multi-level <a href="https://www.datomic.com">Datomic</a> knowledge graph &mdash; from git objects up through code segments, files, and architectural components &mdash; so AI agents can answer codebase questions more accurately, faster, and at lower cost than scanning raw source into context windows. Pre-compiled knowledge means fewer tokens, fewer iterations, and grounded facts instead of hallucinations. Across 9 repos and 8 languages, graph-augmented answers scored <strong>2.8&times; higher</strong>.
     </p>
     <div class="hero-actions">
       <a href="#get-started" class="btn btn-primary">Get Started</a>
@@ -76,28 +76,28 @@
   </div>
 </section>
 
-<!-- Three layers -->
+<!-- Knowledge levels -->
 <section id="layers" class="section-alt">
   <div class="container section-center">
-    <h2 class="section-title">Three complementary layers</h2>
+    <h2 class="section-title">Three levels of understanding</h2>
     <p class="section-sub">
-      The first two require no LLM. Use them independently or together.
+      The pipeline compiles raw git data into a multi-level semantic graph. Queries traverse naturally between levels.
     </p>
     <div class="layers-grid">
       <div class="card card-green">
-        <span class="tag tag-green">No LLM required</span>
-        <h3>Deterministic Facts</h3>
-        <p>Git history, file structure, authorship, change frequency, and cross-file import graphs. Immutable Datomic facts, fully reproducible.</p>
+        <span class="tag tag-green">Micro</span>
+        <h3>Code Segments</h3>
+        <p>Functions, classes, types &mdash; with complexity ratings, code smells, safety concerns, purity analysis, and call graphs. Extracted per-file by LLM analysis.</p>
       </div>
       <div class="card card-purple">
-        <span class="tag tag-purple">LLM-powered</span>
-        <h3>Semantic Annotations</h3>
-        <p>Complexity ratings, safety concerns, architectural roles, and function signatures. Up to 20 parallel workers with automatic retry.</p>
+        <span class="tag tag-purple">Mid</span>
+        <h3>Files &amp; Imports</h3>
+        <p>Git history, authorship, change frequency, cross-file import edges, and per-file semantic summaries. Deterministic facts plus LLM annotations.</p>
       </div>
       <div class="card card-blue">
-        <span class="tag tag-blue">Iterative reasoning</span>
-        <h3>Recursive LLM Querying</h3>
-        <p><code>ask</code> formulates Datalog queries, reads results, and iterates until it has a grounded answer from the graph.</p>
+        <span class="tag tag-blue">Macro</span>
+        <h3>Components &amp; Architecture</h3>
+        <p>Logical subsystems identified from the full codebase picture &mdash; directory structure, import graph, and file summaries. Component dependencies, layers, and categories.</p>
       </div>
     </div>
   </div>
@@ -110,7 +110,7 @@
   <div class="container section-center">
     <h2 class="section-title">How it works</h2>
     <p class="section-sub">
-      Independent, idempotent steps. Run individually or together.
+      A four-stage pipeline compiles raw git data into a queryable knowledge graph. Each stage builds on the last, adding a deeper level of understanding. The result is a multi-level semantic graph where queries naturally traverse from architecture down to individual functions &mdash; or from a code smell up to the component it belongs to.
     </p>
     <div class="pipeline">
       <div class="pipeline-step">
@@ -127,8 +127,14 @@
       <span class="pipeline-arrow">&rarr;</span>
       <div class="pipeline-step">
         <strong>Analyze</strong>
-        <span>LLM semantics</span>
-        <span class="step-note">concurrent</span>
+        <span>Per-file semantics</span>
+        <span class="step-note">micro / LLM</span>
+      </div>
+      <span class="pipeline-arrow">&rarr;</span>
+      <div class="pipeline-step" style="border-color: rgba(96, 165, 250, 0.3);">
+        <strong>Synthesize</strong>
+        <span>Components &amp; architecture</span>
+        <span class="step-note" style="color: #60a5fa;">macro / LLM</span>
       </div>
       <span class="pipeline-arrow">&rarr;</span>
       <div class="pipeline-step">
@@ -143,8 +149,22 @@
         <span class="step-note" style="color: #d2a8ff;">autonomous</span>
       </div>
     </div>
+    <div class="problem-grid" style="margin-top: 2.5rem;">
+      <div class="card">
+        <h3>Import &amp; Enrich</h3>
+        <p><strong>Deterministic foundation.</strong> Git commits, files, authors, diffs, and resolved cross-file import edges. No LLM &mdash; fully reproducible. This is the factual bedrock everything else builds on.</p>
+      </div>
+      <div class="card">
+        <h3>Analyze (micro)</h3>
+        <p><strong>Per-file deep understanding.</strong> An LLM reads each file and extracts code segments with complexity ratings, code smells, safety concerns, purity analysis, and architectural hints. Like a code reviewer examining each file in isolation.</p>
+      </div>
+      <div class="card">
+        <h3>Synthesize (macro)</h3>
+        <p><strong>Codebase-level architecture.</strong> Queries the knowledge graph itself &mdash; file summaries, import edges, directory structure &mdash; to identify logical components, classify files into architectural layers, and map component dependencies. Sees the forest, not just the trees.</p>
+      </div>
+    </div>
     <p class="section-sub" style="margin: 1.5rem auto 0;">
-      <code>update</code> processes only new commits. <code>watch</code> polls continuously.
+      <code>update</code> processes only new commits. <code>watch</code> polls continuously. <code>digest</code> runs the full pipeline in one command.
     </p>
   </div>
 </section>
@@ -268,6 +288,10 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
         <p><code>.env</code>, <code>*.pem</code>, credentials &mdash; tracked as entities but never read or sent to LLMs.</p>
       </div>
       <div class="card">
+        <h3>Architecture synthesis</h3>
+        <p>Identifies components, layers, and dependencies from the full codebase picture. Language-agnostic &mdash; works from structural signals.</p>
+      </div>
+      <div class="card">
         <h3>Concurrent &amp; incremental</h3>
         <p>Up to 20 parallel workers with automatic retry. Incremental sync picks up new commits only.</p>
       </div>
@@ -284,7 +308,7 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
       <div class="showcase-text">
         <h2 class="section-title">Named queries</h2>
         <p>
-          54 pre-built Datalog queries in EDN. Deterministic, reproducible, composable. Run from the CLI or MCP server.
+          65+ pre-built Datalog queries in EDN &mdash; from file-level hotspots to component-level architecture. Deterministic, reproducible, composable.
         </p>
         <ul>
           <li>Complexity and change hotspots</li>

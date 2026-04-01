@@ -19,6 +19,7 @@ Respond with ONLY a raw EDN map (no markdown fences, no explanation) with these 
  :category    :backend | :frontend | :infrastructure | :configuration | :data | :testing | :documentation | :tooling | :shared
  :confidence  0.0-1.0
  :dependencies [\"namespace.or.module.name\" \"another.dep\"]
+ :architectural-notes \"Free-text observations for the codebase-level synthesis pass\"
  :segments    [{:name       \"function-or-def-name\"
                 :kind       :function | :method | :class | :interface | :trait | :protocol | :macro | :multimethod | :record | :type | :struct | :enum | :union | :typedef | :constant | :property | :module | :namespace | :global | :include
                 :line-start 1
@@ -109,6 +110,14 @@ File-level field guidelines:
 
 :dependencies — list of namespace/module/package names this file imports, requires, or uses. Include only direct dependencies. Use the canonical import name (e.g. \"clojure.string\", \"react\", \"os\", \"datomic.client.api\"). Omit if none.
 
+:architectural-notes — free-text observations for the codebase-level synthesis pass. This field feeds a later pass that has the full codebase picture (all files, import graph, directory structure) and makes authoritative architectural decisions. Record anything architecturally notable that you observe:
+  - \\\"This appears to be the main entry point / API gateway\\\"
+  - \\\"Heavy coupling to X — imports 8 internal modules\\\"
+  - \\\"Looks like a driver/adapter for external service Y\\\"
+  - \\\"Contains shared utilities used across multiple subsystems\\\"
+  - \\\"Test file mirroring src/foo/bar.clj\\\"
+  Keep under 500 characters. Omit if nothing notable.
+
 Segment field guidelines:
 
 :kind definitions:
@@ -192,4 +201,4 @@ Segment field guidelines:
   :unknown — cannot determine (e.g., generated code, very short, or ambiguous).
   Do not omit — always provide your best assessment."
 
- :version "0.6.0"}
+ :version "0.7.0"}

@@ -70,12 +70,19 @@
 
 ;; --- Retraction ---
 
+(def ^:private analyze-file-attrs
+  "Attributes from file-level analyze (micro).
+   Note: sem/purpose is written by both analyze and synthesize (synthesize overrides)."
+  [:sem/summary :sem/purpose :sem/complexity :sem/tags :sem/dependencies
+   :sem/synthesis-hints :prov/confidence])
+
+(def ^:private synthesize-file-attrs
+  "Attributes from codebase-level synthesize (macro)."
+  [:arch/layer :sem/category :sem/patterns :arch/component])
+
 (def ^:private analysis-file-attrs
-  "Analysis attributes to retract when re-analyzing (not import/enrich attrs)."
-  [:sem/summary :sem/purpose :sem/tags :sem/complexity
-   :sem/patterns :sem/category :sem/dependencies
-   :arch/layer :arch/subsystem
-   :prov/confidence])
+  "All analysis attributes to retract — union of analyze + synthesize."
+  (into analyze-file-attrs synthesize-file-attrs))
 
 (def ^:private mutable-file-attrs
   "Attributes to retract on modified/deleted files so the pipeline re-processes them."

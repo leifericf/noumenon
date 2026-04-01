@@ -16,6 +16,7 @@
             [noumenon.query :as query]
             [noumenon.sessions :as sessions]
             [noumenon.sync :as sync]
+            [noumenon.synthesize :as synthesize]
             [noumenon.util :as util :refer [log!]])
   (:import [java.io BufferedReader PrintWriter]))
 
@@ -166,6 +167,15 @@
                   :properties (merge repo-path-prop
                                      {"concurrency" {:type "integer"
                                                      :description "Extraction concurrency (default: 8, max: 20)"}})
+                  :required ["repo_path"]}}
+   {:name "noumenon_synthesize"
+    :description "Identify architectural components from analyzed codebase data. Queries the knowledge graph for file summaries, import graph, and directory structure, then uses an LLM to identify components, classify files (layer, category, patterns, purpose), and map dependencies. Language-agnostic. Requires a prior analyze."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"provider" {:type "string"
+                                                  :description "LLM provider: glm, claude-api, or claude-cli"}
+                                      "model" {:type "string"
+                                               :description "Model alias (e.g. sonnet, haiku, opus)"}})
                   :required ["repo_path"]}}
    {:name "noumenon_list_databases"
     :description "List all noumenon databases with entity counts, pipeline stages, and cost."
@@ -498,13 +508,31 @@
                           (:files-processed result 0) " files processed, "
                           (:imports-resolved result 0) " imports resolved."))))))
 
+(defn- handle-synthesize [args defaults]
+  (validate-llm-inputs! args)
+  (with-conn args defaults
+    (fn [{:keys [conn meta-db db-name]}]
+      (let [{:keys [prompt-fn model-id]}
+            (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
+                                              :model    (or (args "model") (:model defaults))})
+            result (synthesize/synthesize-repo!
+                    conn prompt-fn
+                    {:meta-db meta-db :model-id model-id :repo-name db-name})]
+        (tool-result (str "Synthesis complete. "
+                          (:components result 0) " components identified, "
+                          (:files-classified result 0) " files classified"
+                          (when-let [u (:usage result)]
+                            (str " (" (:input-tokens u 0) " in / "
+                                 (:output-tokens u 0) " out tokens)"))
+                          "."))))))
+
 (defn- format-pipeline-stages
   "Format pipeline stages as [import:3 analyze:42 enrich:1], or nil."
   [ops]
   (let [stages (keep (fn [op]
                        (when-let [n (ops op)]
                          (str (name op) ":" n)))
-                     [:import :analyze :enrich])]
+                     [:import :enrich :analyze :synthesize])]
     (when (seq stages)
       (str " [" (str/join " " stages) "]"))))
 
@@ -863,6 +891,7 @@
    "noumenon_ask"               handle-ask
    "noumenon_analyze"           handle-analyze
    "noumenon_enrich"            handle-enrich
+   "noumenon_synthesize"        handle-synthesize
    "noumenon_list_databases"    handle-list-databases
    "noumenon_benchmark_run"     handle-benchmark-run
    "noumenon_benchmark_results" handle-benchmark-results

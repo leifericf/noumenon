@@ -1,6 +1,10 @@
 # Noumenon
 
-[Datomic](https://www.datomic.com)-backed knowledge graph for codebase understanding. See [noumenon.leifericf.com](https://noumenon.leifericf.com) for an overview.
+**Precise, grounded answers about your codebase.**
+
+Noumenon compiles git repositories into a multi-level [Datomic](https://www.datomic.com) knowledge graph — from git objects up through code segments, files, and architectural components — so that AI agents can answer codebase questions more accurately, faster, and at lower cost than scanning raw source files into context windows. Pre-compiled knowledge means fewer tokens, fewer iterations, and grounded facts instead of hallucinations.
+
+See [noumenon.leifericf.com](https://noumenon.leifericf.com) for an overview.
 
 ## Installation
 
@@ -60,11 +64,19 @@ noum import https://github.com/ring-clojure/ring.git
 noum analyze /path/to/repo --provider glm --model sonnet
 ```
 
-### 3) (Optional) Build deterministic import graph
+### 3) Build deterministic import graph
 
 ```bash
 noum enrich /path/to/repo
 ```
+
+### 4) Identify architectural components
+
+```bash
+noum synthesize /path/to/repo --provider glm
+```
+
+Or run the full pipeline at once: `noum digest /path/to/repo --provider glm`
 
 ### Keep the graph in sync
 
@@ -77,7 +89,7 @@ noum watch /path/to/repo
 
 `update` also works for first-time setup — it runs the full import if no database exists. On subsequent runs it detects HEAD changes and incrementally updates. The MCP server auto-syncs before queries.
 
-### 4) Inspect status, databases, and queries
+### 5) Inspect status, databases, and queries
 
 ```bash
 noum databases                              # list all imported repos
@@ -87,35 +99,73 @@ noum queries                                # list available queries
 noum query files-by-complexity /path/to/repo
 ```
 
-### 5) Ask the graph a natural-language question
+### 6) Ask the graph a natural-language question
 
 ```bash
 noum ask /path/to/repo "Which files are the biggest risk hotspots?"
 ```
 
-## Pipeline Overview
+## How It Works
+
+Noumenon compiles a codebase into a queryable knowledge graph through four pipeline stages, each building on the last:
 
 ```mermaid
 flowchart LR
-  A[Import\nGit history + file structure] --> B[Analyze\nLLM semantic annotations]
-  B --> C[Postprocess\nDeterministic import graph]
+  subgraph compile["Knowledge Compiler"]
+    direction LR
+    A["<b>Import</b><br/>Git history, files,<br/>authors, diffs"] --> B["<b>Enrich</b><br/>Cross-file import<br/>graph (deterministic)"]
+    B --> C["<b>Analyze</b> (micro)<br/>Per-file summaries,<br/>segments, smells"]
+    C --> D["<b>Synthesize</b> (macro)<br/>Components, layers,<br/>dependencies"]
+  end
 
-  S[Sync / Watch\nIncremental refresh] -.->|detects changes| A
+  subgraph use["Query Interfaces"]
+    direction TB
+    E["Named Datalog queries"]
+    F["Natural-language Ask"]
+    G["MCP tools for AI agents"]
+  end
 
-  C --> D[Query\nNamed Datalog queries]
-  C --> E[Ask\nIterative query + LLM reasoning]
-  C --> F[Serve\nMCP tools for external agents]
+  D --> E
+  D --> F
+  D --> G
 
-  D --> G[Decisions\nRisk, ownership, hotspots, impact]
-  E --> G
-  F --> G
+  subgraph improve["Self-Improvement"]
+    H["Benchmark"] --> I["Introspect"]
+  end
 
-  C --> H[Benchmark\nEvaluation workflows]
-  H --> I[Introspect\nAutonomous self-improvement]
-  I -.->|optimizes| E
+  D --> H
+  I -.->|optimizes| F
 ```
 
-`enrich` is optional but recommended for deterministic dependency and test-impact analysis. `update` replaces the manual `import` + `enrich` workflow. `introspect` uses benchmark results to autonomously improve the ask agent's prompts, examples, rules, and code.
+| Stage | Sees | Produces | LLM? |
+|-------|------|----------|------|
+| **Import** | Git repository | Commits, files, authors, diffs, directories | No |
+| **Enrich** | Source code | Resolved file-to-file import edges | No |
+| **Analyze** (micro) | One file at a time | Summaries, code segments, complexity, smells, safety concerns | Yes |
+| **Synthesize** (macro) | Entire knowledge graph | Components, architectural layers, dependencies between components | Yes |
+
+The pipeline builds understanding **bottom-up** — git objects, files, code segments, semantic metadata, architectural components — so that **top-down** questions ("what's the blast radius?", "describe the architecture") can be answered from pre-built knowledge rather than ad-hoc scanning.
+
+### Three levels of abstraction
+
+The knowledge graph has three entity levels. Queries naturally traverse up and down:
+
+```
+                     depends-on
+    Component  ←————————————————→  Component
+        ↕  arch/component
+      File  ←——— imports ———→  File
+        ↕  code/file
+    Code Segment  ←— calls —→  Code Segment
+```
+
+| Level | Entity | Identity | Example query |
+|-------|--------|----------|---------------|
+| **Macro** | Component | `component/name` | "What depends on the query engine?" |
+| **Mid** | File | `file/path` | "Which files have the most safety concerns?" |
+| **Micro** | Code Segment | `code/file+name` | "Which functions are complex and impure?" |
+
+`update` keeps the graph in sync incrementally. `watch` polls continuously. `introspect` uses benchmark results to autonomously improve the ask agent's prompts, examples, rules, and code.
 
 ## Command Reference
 
@@ -131,8 +181,9 @@ The `noum` CLI and [MCP](https://modelcontextprotocol.io) server expose the same
 | `import <repo>` | `noumenon_import` | Import git history and file structure |
 | `analyze <repo>` | `noumenon_analyze` | Enrich files with LLM semantic metadata |
 | `enrich <repo>` | `noumenon_enrich` | Extract cross-file import graph (no LLM) |
+| `synthesize <repo>` | `noumenon_synthesize` | Identify architectural components (macro analysis) |
 | `update <repo>` | `noumenon_update` | Sync knowledge graph with latest git state |
-| `digest <repo>` | `noumenon_digest` | Full pipeline: import, enrich, analyze, benchmark |
+| `digest <repo>` | `noumenon_digest` | Full pipeline: import, enrich, analyze, synthesize, benchmark |
 | `ask <repo> "question"` | `noumenon_ask` | Ask a question using iterative Datalog querying |
 | `query <name> <repo>` | `noumenon_query` | Run a named Datalog query |
 | `queries` | `noumenon_list_queries` | List available named queries |
@@ -156,30 +207,36 @@ The `noum` CLI and [MCP](https://modelcontextprotocol.io) server expose the same
 
 ## Named Queries
 
-56 named Datalog queries live in `resources/queries/` (EDN), covering hotspots, ownership, dependencies, complexity, churn, impact analysis, issue tracking, LLM cost tracking, benchmarks, and introspect history. Run `noum queries` to see them all.
+65+ named Datalog queries live in `resources/queries/` (EDN), covering hotspots, ownership, dependencies, complexity, churn, impact analysis, issue tracking, LLM cost tracking, benchmarks, introspect history, and architectural components. Run `noum queries` to see them all.
 
 ## Data Model
 
-Noumenon combines four sources:
+### Entity Hierarchy
 
-1. Git history (deterministic)
-2. File structure (deterministic)
-3. Semantic analysis (LLM)
-4. Import graph extraction (`enrich`, deterministic)
+```mermaid
+flowchart TB
+  subgraph macro["Macro (synthesize)"]
+    Component["<b>Component</b><br/>component/name<br/>summary, layer, category,<br/>patterns, complexity"]
+  end
 
-### Entity Types
+  subgraph mid["Mid (import + analyze)"]
+    File["<b>File</b><br/>file/path<br/>summary, complexity, tags,<br/>imports, layer, category"]
+    Commit["<b>Commit</b><br/>git/sha<br/>message, kind, author,<br/>additions, deletions"]
+    Person["<b>Person</b><br/>person/email"]
+  end
 
-| Entity | Identity | Key attributes |
-|---|---|---|
-| `repo` | `:repo/uri` | `:repo/commits`, `:repo/head-sha` |
-| `commit` | `:git/sha` (`:git/type :commit`) | `:commit/message`, `:commit/kind`, `:commit/issue-refs`, `:commit/authored-at`, `:commit/committed-at`, `:commit/additions`, `:commit/deletions` |
-| `person` | `:person/email` | `:person/name` |
-| `file` | `:file/path` | `:file/ext`, `:file/lang`, `:file/lines`, `:file/size`, `:file/imports`, `:sem/*` |
-| `directory` | `:dir/path` | `:dir/parent`, `:dir/repo` |
-| `code segment` | `:code/file+name` (tuple of `:code/file` + `:code/name`) | `:code/kind`, `:code/line-start`, `:code/line-end`, `:code/args`, `:code/returns`, `:code/visibility`, `:code/complexity`, `:code/smells`, `:code/call-names`, `:code/pure?`, `:code/ai-likelihood` |
-| `tx metadata` | tx entity | `:tx/op`, `:tx/source`, `:tx/analyzer`, `:tx/model`, `:tx/input-tokens`, `:tx/output-tokens`, `:tx/cost-usd` |
-| `provenance` | mixed (entity + tx metadata) | `:prov/confidence` on analyzed entities; `:prov/model-version`, `:prov/prompt-hash`, `:prov/analyzed-at` on analysis transactions |
-| `component` (schema-defined) | `:component/name` | `:component/depends-on`, `:component/files` |
+  subgraph micro["Micro (analyze)"]
+    Segment["<b>Code Segment</b><br/>code/file+name<br/>kind, complexity, smells,<br/>safety, calls, pure?"]
+  end
+
+  Component -->|"depends-on"| Component
+  Component ---|"arch/component"| File
+  File -->|"imports"| File
+  Commit -->|"changed-files"| File
+  Commit -->|"author"| Person
+  File ---|"code/file"| Segment
+  Segment -->|"calls"| Segment
+```
 
 ### Relationship Graph
 
@@ -187,23 +244,19 @@ Noumenon combines four sources:
 flowchart LR
   Repo[repo] -->|:repo/commits| Commit[commit]
   Commit -->|:commit/author| Author[person]
-  Commit -->|:commit/committer| Committer[person]
-  Commit -->|:commit/parents| Parent[commit]
   Commit -->|:commit/changed-files| File[file]
-  Commit -.->|:commit/issue-refs| IssueRef[("#123 / PROJ-456 / URL")]
+  Commit -.->|:commit/issue-refs| IssueRef[("#123 / PROJ-456")]
 
   File -->|:file/directory| Dir[directory]
-  Dir -->|:dir/parent| ParentDir[directory]
-  Dir -->|:dir/repo| Repo
-
   File -->|:file/imports| ImportedFile[file]
-  File -.->|:sem/dependencies| DependencyName[(module name)]
+  File -->|:arch/component| Comp[component]
+  Comp -->|:component/depends-on| DepComp[component]
 
   File -->|:code/_file| Code[code segment]
-  Code -.->|:code/call-names| CalledName[(symbol name)]
+  Code -->|:code/calls| CalledCode[code segment]
 ```
 
-`chunk` entities (`:chunk/parent`, `:chunk/index`, `:chunk/text`) handle long text values exceeding Datomic string limits. Component relationships (`:arch/component`, `:component/depends-on`) and resolved call edges (`:code/calls`) are schema-supported but not yet populated by the default pipeline.
+Every analysis transaction carries provenance: `:prov/model-version`, `:prov/prompt-hash`, `:prov/analyzed-at`, and token/cost tracking. This enables selective re-analysis when prompts or models change.
 
 ## Language Support
 

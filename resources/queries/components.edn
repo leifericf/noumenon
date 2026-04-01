@@ -1,0 +1,10 @@
+{:name "components"
+ :description "List all components with summary, layer, category, complexity, and file count"
+ :query [:find ?name ?summary ?layer ?category ?complexity (count ?f)
+         :where
+         [?c :component/name ?name]
+         [(get-else $ ?c :component/summary "") ?summary]
+         [(get-else $ ?c :component/layer :unknown) ?layer]
+         [(get-else $ ?c :component/category :unknown) ?category]
+         [(get-else $ ?c :component/complexity :unknown) ?complexity]
+         [?f :arch/component ?c]]}

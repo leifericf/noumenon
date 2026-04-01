@@ -177,6 +177,7 @@
    :category     #(when (valid-category %) %)
    :dependencies (fn [v] (when (and (coll? v) (seq v))
                            (vec (filter non-blank? v))))
+   :architectural-notes #(when (string? %) (subs % 0 (min 2000 (count %))))
    :segments     #(when (and (coll? %) (seq %))
                     (->> % (keep validate-segment) (take max-segments) vec))})
 
@@ -228,6 +229,17 @@
       (seq (:call-names seg))      (assoc :code/call-names (:call-names seg))
       (:pure seg)                  (assoc :code/pure? true))))
 
+(defn- build-synthesis-hints
+  "Bundle file-level architectural guesses into an EDN string for the synthesize step."
+  [{:keys [layer category patterns purpose architectural-notes]}]
+  (let [hints (cond-> {}
+                layer               (assoc :layer-guess layer)
+                category            (assoc :category-guess category)
+                (seq patterns)      (assoc :patterns-observed patterns)
+                purpose             (assoc :purpose-guess purpose)
+                architectural-notes (assoc :notes architectural-notes))]
+    (when (seq hints) (pr-str hints))))
+
 (defn analysis->tx-data
   "Convert a parsed analysis map into Datomic tx-data for a file.
    `file-path` is the repo-relative path. Returns tx-data vector (may be empty)."
@@ -235,6 +247,7 @@
   (when (and analysis (seq analysis))
     (let [{:keys [summary purpose tags complexity patterns layer
                   category confidence dependencies segments]} analysis
+          hints (build-synthesis-hints analysis)
           file-ref [:file/path file-path]
           file-tx  (cond-> {:file/path file-path}
                      summary          (assoc :sem/summary summary)
@@ -245,7 +258,8 @@
                      layer            (assoc :arch/layer layer)
                      category         (assoc :sem/category category)
                      confidence       (assoc :prov/confidence confidence)
-                     (seq dependencies) (assoc :sem/dependencies dependencies))
+                     (seq dependencies) (assoc :sem/dependencies dependencies)
+                     hints            (assoc :sem/synthesis-hints hints))
           seg-txs  (when (seq segments)
                      (->> segments
                           (reduce (fn [acc {:keys [name line-start] :as seg}]

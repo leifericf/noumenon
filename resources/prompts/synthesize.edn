@@ -1,0 +1,77 @@
+{:template
+ "You are analyzing the architecture of the \"{{repo-name}}\" codebase ({{file-count}} analyzed files). Your job is to identify logical components, classify every file architecturally, and map component dependencies — all based on structural signals, not language-specific constructs.
+
+## Directory Tree
+
+{{directory-tree}}
+
+## File Summaries (grouped by directory)
+
+Each file has: path, one-line summary, complexity rating, semantic tags, and architectural hints from per-file analysis.
+
+{{file-summaries}}
+
+## Import Graph (resolved file-to-file edges)
+
+{{import-graph}}
+
+## Tag Distribution
+
+{{tag-distribution}}
+
+## Your Task
+
+Analyze the directory structure, import graph, file summaries, and per-file hints to produce:
+
+1. **Per-file classifications** — For every file listed above, assign:
+   - `:layer` — architectural layer: `:core` (fundamental domain logic), `:subsystem` (cohesive internal module), `:driver` (adapter to external systems), `:api` (external-facing interface), `:util` (general-purpose helpers)
+   - `:category` — domain role: `:backend`, `:frontend`, `:infrastructure`, `:configuration`, `:data`, `:testing`, `:documentation`, `:tooling`, `:shared`
+   - `:patterns` — architectural patterns this file participates in (only if clearly applicable): `:state-machine`, `:producer-consumer`, `:builder`, `:factory`, `:decorator`, `:adapter`, `:pipeline`, `:ring-handler`, `:middleware-chain`
+   - `:purpose` — one sentence: why this file exists in the system (not what it does — the summary covers that)
+
+2. **Components** — Identify logical components (cohesive groups of files that form a subsystem):
+   - `:name` — short kebab-case identifier (e.g. \"query-engine\", \"git-import\", \"http-api\")
+   - `:summary` — what this component does (1-2 sentences)
+   - `:purpose` — why it exists — its role in the system
+   - `:layer` — predominant architectural layer
+   - `:category` — predominant domain role
+   - `:patterns` — architectural patterns spanning the component
+   - `:complexity` — aggregate: `:trivial`, `:simple`, `:moderate`, `:complex`, `:very-complex`
+   - `:subsystem` — coarser grouping if applicable (e.g. \"analysis-pipeline\", \"query-engine\", \"infrastructure\")
+   - `:files` — list of file paths belonging to this component
+   - `:depends-on` — list of other component names this depends on (based on import edges between member files)
+
+## Rules
+
+- Every file listed above MUST appear in exactly one component's `:files` list
+- Every file listed above MUST appear in the `:files` section with layer/category/purpose
+- Components should contain 2-30 files typically — not too granular, not too broad
+- Component dependencies must be based on actual import edges, not speculation
+- Directory structure is a strong signal for grouping, but not absolute — files in different directories can belong to the same component if tightly coupled
+- This is language-agnostic: identify components from structural signals (directories, imports, naming, summaries) not language-specific constructs
+- Use the per-file hints (layer-guess, category-guess, etc.) as input signals, but override them when the codebase-level view reveals a different picture
+- A component is to the codebase what a function is to a file: the fundamental named unit for architectural reasoning
+
+## Output Format
+
+Respond with ONLY a raw EDN map (no markdown fences, no explanation):
+
+{:files [{:path \"src/foo/bar.clj\"
+          :layer :subsystem
+          :category :backend
+          :patterns [:state-machine]
+          :purpose \"Orchestrates the iterative LLM query loop\"}
+         ...]
+ :components [{:name \"query-engine\"
+               :summary \"AI-powered iterative querying of the knowledge graph\"
+               :purpose \"Enables natural-language questions to be answered via Datalog\"
+               :layer :subsystem
+               :category :backend
+               :patterns [:state-machine :pipeline]
+               :complexity :complex
+               :subsystem \"analysis\"
+               :files [\"src/noumenon/agent.clj\" \"src/noumenon/query.clj\"]
+               :depends-on [\"database\" \"llm-client\"]}
+              ...]}"
+
+ :version "0.1.0"}

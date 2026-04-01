@@ -1,0 +1,41 @@
+[;; --- Synthesis hints (file-level, populated by analyze) ---
+ {:db/ident       :sem/synthesis-hints
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "EDN blob of architectural hints from file-level analysis — layer-guess, category-guess, patterns-observed, purpose-guess, architectural-notes"}
+
+ ;; --- Component-level attributes (populated by synthesize) ---
+ {:db/ident       :component/summary
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Plain-English summary of what this component does"}
+
+ {:db/ident       :component/purpose
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Why this component exists — its role in the system"}
+
+ {:db/ident       :component/layer
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Architectural layer — :core, :subsystem, :driver, :api, :util"}
+
+ {:db/ident       :component/category
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Domain role — :backend, :frontend, :infrastructure, :configuration, :data, :testing, :documentation, :tooling, :shared"}
+
+ {:db/ident       :component/patterns
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/many
+  :db/doc         "Architectural patterns spanning this component — :pipeline, :state-machine, :producer-consumer, etc."}
+
+ {:db/ident       :component/complexity
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Aggregate complexity — :trivial, :simple, :moderate, :complex, :very-complex"}
+
+ {:db/ident       :component/subsystem
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Subsystem grouping — coarser than component, e.g. 'analysis-pipeline', 'query-engine'"}]

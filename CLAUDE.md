@@ -24,8 +24,9 @@ This project has its own MCP server (`noumenon`) that provides a knowledge graph
 | `noumenon_update` | Sync knowledge graph with latest git state (import + enrich; pass `analyze=true` for LLM analysis) |
 | `noumenon_analyze` | Run LLM analysis on files — by default only unanalyzed; pass `reanalyze` for re-analysis (all, prompt-changed, model-changed, stale) |
 | `noumenon_enrich` | Extract cross-file import/dependency graph deterministically (no LLM calls) |
+| `noumenon_synthesize` | Identify architectural components from analyzed codebase data (macro analysis) |
 | `noumenon_list_databases` | List all noumenon databases with entity counts, pipeline stages, and cost |
-| `noumenon_digest` | Run the full pipeline: import, enrich, analyze, benchmark (each step idempotent, skippable) |
+| `noumenon_digest` | Run the full pipeline: import, enrich, analyze, synthesize, benchmark (each step idempotent, skippable) |
 | `noumenon_benchmark_run` | Run benchmark comparing LLM answers across knowledge graph layers (expensive) |
 | `noumenon_benchmark_results` | Get benchmark results (latest run or by ID) |
 | `noumenon_benchmark_compare` | Compare two benchmark runs by score differences per layer |
@@ -100,7 +101,7 @@ The `noum` Babashka launcher is the primary interface. Run `noum help` for all c
 
 | Command | Purpose |
 |---------|---------|
-| `clj -M:run` | JVM CLI — subcommands: digest, import, analyze, enrich, update, watch, query, ask, show-schema, status, list-databases, serve, daemon, benchmark |
+| `clj -M:run` | JVM CLI — subcommands: digest, import, analyze, enrich, synthesize, update, watch, query, ask, show-schema, status, list-databases, serve, daemon, benchmark |
 | `clj -M:test` | Run test suite (Cognitect test-runner) |
 | `clj -M:lint` | Lint with clj-kondo |
 | `clj -M:fmt check` | Check formatting with cljfmt |

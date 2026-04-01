@@ -2,6 +2,32 @@
 
 All notable changes to Noumenon are documented in this file.
 
+## 0.4.0
+
+Codebase-level architectural synthesis — the macro complement to per-file analysis.
+
+### New
+
+- **`synthesize` command** — Queries the knowledge graph for file summaries,
+  import edges, and directory structure, then uses an LLM to identify logical
+  components, classify files architecturally (layer, category, patterns, purpose),
+  and map component dependencies. Language-agnostic.
+- **Component entities** — `component/name`, `component/summary`, `component/purpose`,
+  `component/layer`, `component/category`, `component/patterns`, `component/complexity`,
+  `component/subsystem`, `component/depends-on`. Files link via `arch/component`.
+- **9 new named queries** — `components`, `component-files`, `component-dependencies`,
+  `component-dependents`, `component-authors`, `component-churn`, `component-bus-factor`,
+  `cross-component-imports`, `subsystems`.
+- **3 new Datalog rules** — `component-file`, `component-segment`, `component-commit`.
+- **Top-down query strategy** — Ask agent now starts at component level for
+  architectural questions, drilling to files and segments as needed.
+- **Architectural hints** — File-level analysis captures `architectural-notes`
+  and bundles hints as `sem/synthesis-hints` for the synthesize step.
+- **Introspect integration** — Optimizer sees component topology for better
+  self-improvement decisions.
+- **Pipeline integration** — `digest` runs synthesize between analyze and benchmark.
+  New `--skip-synthesize` flag.
+
 ## 0.3.1
 
 Security and UX hardening release following a full codebase audit.

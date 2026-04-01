@@ -41,9 +41,29 @@ These are selected named queries that demonstrate key Datalog patterns. Use them
 
 {{examples}}
 
+## Query Strategy — Top Down
+
+The knowledge graph has three levels of detail. Start broad, drill down:
+
+1. **Components** (macro) — Start here for architectural questions.
+   Query :component/name, :component/summary, :component/depends-on first.
+   \"What's the blast radius?\" → find the component, then its dependents.
+   \"Describe the architecture\" → query all components with summaries.
+
+2. **Files** (mid) — Drill into specific files within a component.
+   Query :arch/component to find files in a component, then file-level
+   attributes (:sem/summary, :sem/complexity, :file/imports).
+
+3. **Code segments** (micro) — Only when you need function-level detail.
+   Query :code/file to find segments in a file, then :code/complexity,
+   :code/smells, :code/safety-concerns.
+
+For most questions, components + files are sufficient. Only drill to
+segment level when asked about specific functions or code quality.
+
 ## Instructions
 
-1. Start by checking whether a pre-built query above already answers the question — or comes close. Use it as-is if sufficient, or as a starting point to augment with additional clauses or filters.
+1. Start by querying at the component level if the question is about architecture, dependencies, subsystems, or blast radius. For specific file questions, start at file level. Use segment-level only for function/code-quality questions. Check whether a pre-built query already answers the question — or comes close.
 2. If no pre-built query fits, use :schema or :rules to discover available attributes and relationships, then write your own Datalog query.
 3. All queries receive the database as the first input ($). If your query uses rules, they are automatically provided as the second input (%).
 4. You have full creative freedom to write any Datalog query the schema supports. The examples above are building blocks, not boundaries. Augment them with additional clauses, combine data from multiple queries, add temporal filters, compute aggregates, or invent entirely new queries as needed.

@@ -256,9 +256,50 @@
               (str "  " name " — " description)))
        (str/join "\n")))
 
+(defn- architecture-summary
+  "Summarize component topology for the introspect agent.
+   Components live in the repo db, not meta-db."
+  [db]
+  (let [components (d/q '[:find ?name ?summary ?layer ?category ?complexity
+                          :where
+                          [?c :component/name ?name]
+                          [(get-else $ ?c :component/summary "") ?summary]
+                          [(get-else $ ?c :component/layer :unknown) ?layer]
+                          [(get-else $ ?c :component/category :unknown) ?category]
+                          [(get-else $ ?c :component/complexity :unknown) ?complexity]]
+                        db)
+        deps       (d/q '[:find ?from ?to
+                          :where
+                          [?c :component/name ?from]
+                          [?c :component/depends-on ?d]
+                          [?d :component/name ?to]]
+                        db)
+        file-counts (d/q '[:find ?name (count ?f)
+                           :where
+                           [?c :component/name ?name]
+                           [?f :arch/component ?c]]
+                         db)
+        fc-map     (into {} file-counts)]
+    (if (empty? components)
+      "No components identified yet — run synthesize first."
+      (str (count components) " components identified:\n"
+           (->> components
+                (sort-by first)
+                (map (fn [[name summary layer category complexity]]
+                       (str "  " name " [" (clojure.core/name layer) "/" (clojure.core/name category)
+                            ", " (clojure.core/name complexity) ", " (get fc-map name 0) " files]"
+                            (when (seq summary) (str " — " (subs summary 0 (min 120 (count summary))))))))
+                (str/join "\n"))
+           (when (seq deps)
+             (str "\n\nDependency edges:\n"
+                  (->> deps
+                       (map (fn [[from to]] (str "  " from " → " to)))
+                       (str/join "\n"))))))))
+
 (defn build-meta-prompt
-  "Assemble the meta-prompt for the optimizer LLM."
-  [{:keys [meta-db system-prompt examples rules history baseline-results]}]
+  "Assemble the meta-prompt for the optimizer LLM.
+   `db` is the repo database (for component data); `meta-db` is the shared meta database."
+  [{:keys [db meta-db system-prompt examples rules history baseline-results]}]
   (let [template      (load-meta-prompt meta-db)
         total-queries (count (artifacts/list-active-query-names meta-db))
         base-mean     (if (seq baseline-results)
@@ -278,6 +319,7 @@
         (str/replace "{{baseline-scores}}" (format-scores baseline-results))
         (str/replace "{{gap-analysis}}" (gap-analysis baseline-results))
         (str/replace "{{ask-insights}}" (ask-session-insights meta-db))
+        (str/replace "{{architecture-summary}}" (architecture-summary (or db meta-db)))
         (str/replace "{{history}}" (format-history history)))))
 
 ;; --- Proposal parsing ---
@@ -731,7 +773,8 @@
   [{:keys [db meta-db meta-conn repo-name repo-path invoke-fn-factory optimizer-invoke-fn
            baseline history git-commit? allowed-targets eval-runs]}]
   (let [meta-prompt (build-meta-prompt
-                     {:meta-db          meta-db
+                     {:db               db
+                      :meta-db          meta-db
                       :system-prompt    (load-current-system-prompt meta-db)
                       :examples         (load-current-examples meta-db)
                       :rules            (load-current-rules meta-db)

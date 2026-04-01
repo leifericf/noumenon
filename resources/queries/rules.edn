@@ -55,4 +55,18 @@
  [(test-for-file ?test ?src)
   [?test :file/path ?tpath]
   [(clojure.string/includes? ?tpath "test")]
-  (transitive-import ?test ?src)]]
+  (transitive-import ?test ?src)]
+
+ ;; Files in a component
+ [(component-file ?comp ?file)
+  [?file :arch/component ?comp]]
+
+ ;; Segments in a component
+ [(component-segment ?comp ?seg)
+  [?seg :code/file ?file]
+  [?file :arch/component ?comp]]
+
+ ;; Commits that touched a component
+ [(component-commit ?comp ?commit)
+  [?commit :commit/changed-files ?file]
+  [?file :arch/component ?comp]]]

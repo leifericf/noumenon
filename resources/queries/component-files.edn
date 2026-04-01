@@ -1,0 +1,11 @@
+{:name "component-files"
+ :description "Files in a given component with layer and complexity [requires params: component-name]"
+ :query [:find ?path ?layer ?complexity
+         :in $ ?comp-name
+         :where
+         [?c :component/name ?comp-name]
+         [?f :arch/component ?c]
+         [?f :file/path ?path]
+         [(get-else $ ?f :arch/layer :unknown) ?layer]
+         [(get-else $ ?f :sem/complexity :unknown) ?complexity]]
+ :params [:component-name]}

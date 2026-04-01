@@ -1,0 +1,7 @@
+{:name "component-churn"
+ :description "Components ranked by total churn (commits touching their files)"
+ :query [:find ?name (count-distinct ?commit)
+         :where
+         [?c :component/name ?name]
+         [?f :arch/component ?c]
+         [?commit :commit/changed-files ?f]]}

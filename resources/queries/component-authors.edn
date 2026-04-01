@@ -1,0 +1,11 @@
+{:name "component-authors"
+ :description "Authors who contributed to a component, ranked by commits [requires params: component-name]"
+ :query [:find ?author-name (count ?commit)
+         :in $ ?comp-name
+         :where
+         [?c :component/name ?comp-name]
+         [?f :arch/component ?c]
+         [?commit :commit/changed-files ?f]
+         [?commit :commit/author ?a]
+         [?a :person/name ?author-name]]
+ :params [:component-name]}

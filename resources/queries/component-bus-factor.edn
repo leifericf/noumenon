@@ -1,0 +1,8 @@
+{:name "component-bus-factor"
+ :description "Components ranked by distinct author count — low count means high bus-factor risk"
+ :query [:find ?name (count-distinct ?author)
+         :where
+         [?c :component/name ?name]
+         [?f :arch/component ?c]
+         [?commit :commit/changed-files ?f]
+         [?commit :commit/author ?author]]}

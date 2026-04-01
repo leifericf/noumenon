@@ -18,6 +18,7 @@
             [noumenon.mcp :as mcp]
             [noumenon.query :as query]
             [noumenon.sync :as sync]
+            [noumenon.synthesize :as synthesize]
             [noumenon.util :as util :refer [log!]]))
 
 ;; --- Helpers ---
@@ -176,6 +177,33 @@
                        "' for semantic metadata, then '" cli/program-name
                        " query file-imports " repo-path "' to explore."))
             {:exit 0 :result result}))))))
+
+(defn do-synthesize
+  "Run the synthesize subcommand. Returns {:exit n :result map-or-nil}."
+  [{:keys [model provider] :as opts}]
+  (with-valid-repo
+    opts
+    (fn [ctx]
+      (try
+        (with-existing-db
+          ctx
+          (fn [{:keys [conn meta-db repo-path db-name]}]
+            (let [{:keys [prompt-fn model-id]}
+                  (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})
+                  result (synthesize/synthesize-repo!
+                          conn prompt-fn
+                          {:meta-db   meta-db
+                           :model-id  model-id
+                           :repo-name db-name})]
+              (log! (str "Next: run '" cli/program-name " query components " repo-path
+                         "' to explore the architecture."))
+              {:exit 0 :result result})))
+        (catch clojure.lang.ExceptionInfo e
+          (print-error! (.getMessage e))
+          (when-let [help (cli/format-subcommand-help "synthesize")]
+            (log!)
+            (log! help))
+          {:exit 1})))))
 
 (defn- build-sync-opts
   [{:keys [analyze model provider concurrency]}]
@@ -377,7 +405,7 @@
   (let [stages (keep (fn [op]
                        (when-let [n (ops op)]
                          (str (clojure.core/name op) ":" n)))
-                     [:import :analyze :enrich])]
+                     [:import :enrich :analyze :synthesize])]
     (when (seq stages)
       (str "  [" (str/join " " stages) "]"))))
 
@@ -562,9 +590,9 @@
     (swap! results assoc step-key r)))
 
 (defn do-digest
-  "Run the full pipeline: import → enrich → analyze → benchmark.
+  "Run the full pipeline: import → enrich → analyze → synthesize → benchmark.
    Each step is idempotent and can be skipped with --skip-* flags."
-  [{:keys [skip-import skip-enrich skip-analyze skip-benchmark
+  [{:keys [skip-import skip-enrich skip-analyze skip-synthesize skip-benchmark
            model provider concurrency max-questions layers report] :as opts}]
   (with-valid-repo
     (update opts :repo-path resolve-repo-path)
@@ -574,7 +602,7 @@
               meta-conn (db/ensure-meta-db db-dir)
               meta-db   (d/db meta-conn)
               repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
-              needs-llm (not (and skip-analyze skip-benchmark))
+              needs-llm (not (and skip-analyze skip-synthesize skip-benchmark))
               {:keys [prompt-fn model-id]}
               (when needs-llm
                 (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model}))
@@ -590,6 +618,13 @@
                                                       {:meta-db     meta-db
                                                        :model-id    model-id
                                                        :concurrency (or concurrency 3)})))
+          (when-not skip-synthesize
+            (run-digest-step! results :synthesize "synthesize"
+                              #(synthesize/synthesize-repo!
+                                conn prompt-fn
+                                {:meta-db   meta-db
+                                 :model-id  model-id
+                                 :repo-name db-name})))
           (when-not skip-benchmark
             (run-digest-step! results :benchmark "benchmark"
                               #(let [db   (d/db conn)
@@ -785,6 +820,7 @@
                      "import"         (do-import parsed)
                      "analyze"        (do-analyze parsed)
                      "enrich"         (do-enrich parsed)
+                     "synthesize"     (do-synthesize parsed)
                      "update"         (do-update parsed)
                      "watch"          (do-watch parsed)
                      "query"          (do-query parsed)

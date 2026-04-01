@@ -109,7 +109,7 @@
                  [(assert-exit (str "help " cmd " exits 0") r 0)
                   (assert-contains (str "help " cmd " shows usage") r "Usage:")]))
              ["import" "ask" "bench" "setup" "serve"
-              "start" "stop" "ping" "upgrade" "databases" "introspect" "open"]))))
+              "start" "stop" "ping" "upgrade" "databases" "introspect" "synthesize" "open"]))))
 
 (defn tests-arg-validation []
   (concat
@@ -117,7 +117,7 @@
              (let [r (noum cmd)]
                [(assert-exit (str cmd " no args exits 1") r 1)
                 (assert-contains (str cmd " no args shows usage") r "Usage:")]))
-           ["import" "analyze" "enrich" "update" "digest" "bench" "introspect"])
+           ["import" "analyze" "enrich" "synthesize" "update" "digest" "bench" "introspect"])
    (let [r (noum "ask" "/tmp")]
      [(assert-exit "ask missing question exits 1" r 1)
       (assert-contains "ask missing question shows usage" r "Usage:")])

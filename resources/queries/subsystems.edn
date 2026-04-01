@@ -1,0 +1,6 @@
+{:name "subsystems"
+ :description "Distinct subsystem groupings with component count and file count"
+ :query [:find ?subsystem (count-distinct ?c) (count-distinct ?f)
+         :where
+         [?c :component/subsystem ?subsystem]
+         [?f :arch/component ?c]]}
