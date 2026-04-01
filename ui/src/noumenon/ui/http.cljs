@@ -2,9 +2,16 @@
 
 ;; Active backend connection — set by state.cljs when backend changes
 (defn detect-port []
-  (or (when (and (exists? js/window) js/window.noumenon js/window.noumenon.getPort)
-        (js/window.noumenon.getPort))
+  (or (when (and (exists? js/window) js/window.__noumenon__ js/window.__noumenon__.getPort)
+        (js/window.__noumenon__.getPort))
       (when (exists? js/window) js/window.__NOUMENON_PORT__)
+      ;; Check URL query param for browser dev: ?port=51645
+      (when (exists? js/window)
+        (some-> js/window.location.search
+                (js/URLSearchParams.)
+                (.get "port")
+                js/parseInt
+                (#(when (pos? %) %))))
       9876))
 
 (defonce connection

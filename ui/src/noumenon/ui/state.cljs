@@ -154,6 +154,7 @@
 (defmethod handle-event :action/ask-clear [state _]
   {:state (assoc state :ask/history [] :ask/last-steps nil :ask/steps [] :ask/result nil
                  :ask/show-post-reasoning? false :ask/reasoning-expanded? false
+                 :ask/expanded-session nil :ask/expanded-detail nil
                  :graph/focused-ids nil)})
 
 (def ^:private suggestion-catalog
@@ -211,8 +212,7 @@
   {:state (assoc state :ask/ticker-paused? paused?)})
 
 (defmethod handle-event :action/ask-run-suggestion [state [_ question]]
-  {:state (assoc state :ask/query question)
-   :fx    [[:dispatch [:action/ask-submit]]]})
+  {:state (assoc state :ask/query question)})
 
 (defmethod handle-event :action/ask-init-suggestions [state _]
   (let [shuffled (sort-by (fn [_] (js/Math.random)) suggestion-catalog)]
@@ -338,7 +338,7 @@
         context  (extract-mentions query)
         full-q   (if context (str query context) query)
         db-name  (or (:db-name state) (-> state :databases/list first :name))]
-    (if (and (seq query) db-name)
+    (if (and (seq query) db-name (not (:ask/loading? state)))
       {:state (assoc state :ask/loading? true :ask/result nil :ask/progress nil :ask/steps []
                      :ask/completions nil :ask/reasoning-expanded? false
                      :ask/show-post-reasoning? false
@@ -390,7 +390,10 @@
 
 (defmethod handle-event :action/ask-cancel [state _]
   {:state (assoc state :ask/loading? false :ask/progress nil
-                 :ask/steps [] :ask/last-steps nil)
+                 ;; Preserve partial steps so user can review what ran
+                 :ask/last-steps (when (seq (:ask/steps state))
+                                   (:ask/steps state))
+                 :ask/steps [])
    :fx    [[:sse/cancel "/api/ask"]]})
 
 (defmethod handle-event :action/ask-error [state [_ error]]
@@ -507,21 +510,21 @@
                      :graph/expanded-file nil :graph/breadcrumb [])
        :fx [[:http/post "/api/query"
              {:repo_path db-name :query_name "components" :limit 100}
-             {:on-ok :action/graph-comp-data}]
+             {:on-ok :action/graph-comp-data :on-error :action/graph-load-error}]
             [:http/post "/api/query"
              {:repo_path db-name :query_name "cross-component-imports" :limit 500}
-             {:on-ok :action/graph-comp-edges-data}]
+             {:on-ok :action/graph-comp-edges-data :on-error :action/graph-load-error}]
             [:http/post "/api/query"
              {:repo_path db-name :query_name "component-churn" :limit 100}
-             {:on-ok :action/graph-comp-churn-data}]
-            ;; Cache all import edges for client-side filtering on expand
-            [:http/post "/api/query"
-             {:repo_path db-name :query_name "all-import-edges" :limit 5000}
-             {:on-ok :action/graph-all-edges-cached}]
+             {:on-ok :action/graph-comp-churn-data :on-error :action/graph-load-error}]
             ;; Hotspots for file-level churn sizing
             [:http/post "/api/query"
              {:repo_path db-name :query_name "hotspots" :limit 500}
              {:on-ok :action/graph-hotspots}]]})))
+
+(defmethod handle-event :action/graph-load-error [state [_ error]]
+  {:state (assoc state :graph/loading? false)
+   :fx [[:dispatch [:action/toast {:message (str "Graph load failed: " error) :type :error}]]]})
 
 (defmethod handle-event :action/graph-hotspots [state [_ data]]
   {:state (assoc state :graph/hotspots (:results data))})
@@ -583,14 +586,21 @@
                      :graph/expanded-file nil :graph/breadcrumb [comp-name]
                      :graph/selected nil :graph/node-card nil :graph/loading? true
                      :graph/expand-time (.now js/Date))
-       :fx [[:http/post "/api/query"
-             {:repo_path db-name :query_name "component-files"
-              :params {:component-name comp-name} :limit 200}
-             {:on-ok [:action/graph-comp-files-loaded comp-name]}]
-            [:http/post "/api/query"
-             {:repo_path db-name :query_name "component-authors"
-              :params {:component-name comp-name} :limit 20}
-             {:on-ok [:action/graph-comp-authors-loaded comp-name]}]]})))
+       :fx (cond-> [[:http/post "/api/query"
+                     {:repo_path db-name :query_name "component-files"
+                      :params {:component-name comp-name} :limit 200}
+                     {:on-ok [:action/graph-comp-files-loaded comp-name]
+                      :on-error :action/graph-load-error}]
+                    [:http/post "/api/query"
+                     {:repo_path db-name :query_name "component-authors"
+                      :params {:component-name comp-name} :limit 20}
+                     {:on-ok [:action/graph-comp-authors-loaded comp-name]}]]
+              ;; Lazy-load import edges on first expand
+             (nil? (:graph/all-import-edges state))
+             (conj [:http/post "/api/query"
+                    {:repo_path db-name :query_name "all-import-edges" :limit 5000}
+                    {:on-ok :action/graph-all-edges-cached
+                     :on-error :action/graph-load-error}]))})))
 
 (defmethod handle-event :action/graph-comp-files-loaded [state [_ comp-name data]]
   (let [parent    (->> (:graph/comp-nodes state)
@@ -642,19 +652,23 @@
        :fx [[:http/post "/api/query"
              {:repo_path db-name :query_name "file-segments"
               :params {:file-path file-path} :limit 500}
-             {:on-ok [:action/graph-segments-loaded file-path]}]
+             {:on-ok [:action/graph-segments-loaded file-path]
+              :on-error :action/graph-load-error}]
             [:http/post "/api/query"
              {:repo_path db-name :query_name "file-segment-issues"
               :params {:file-path file-path} :limit 500}
-             {:on-ok [:action/graph-segment-smells-loaded file-path]}]
+             {:on-ok [:action/graph-segment-smells-loaded file-path]
+              :on-error :action/graph-load-error}]
             [:http/post "/api/query"
              {:repo_path db-name :query_name "file-segment-safety"
               :params {:file-path file-path} :limit 500}
-             {:on-ok [:action/graph-segment-safety-loaded file-path]}]
+             {:on-ok [:action/graph-segment-safety-loaded file-path]
+              :on-error :action/graph-load-error}]
             [:http/post "/api/query"
              {:repo_path db-name :query_name "file-segment-calls"
               :params {:file-path file-path} :limit 500}
-             {:on-ok [:action/graph-segment-calls-loaded file-path]}]]})))
+             {:on-ok [:action/graph-segment-calls-loaded file-path]
+              :on-error :action/graph-load-error}]]})))
 
 ;; --- Segment data accumulation ---
 
@@ -718,7 +732,8 @@
     :segments
     {:state (assoc state :graph/depth :files :graph/expanded-file nil
                    :graph/breadcrumb [(first (:graph/breadcrumb state))]
-                   :graph/selected nil :graph/node-card nil)
+                   :graph/selected nil :graph/node-card nil
+                   :graph/expand-time (.now js/Date))
      :fx [[:dispatch [:action/graph-file-cluster-ready (:graph/expanded-comp state)]]]}
 
     :files
@@ -726,7 +741,8 @@
                    :graph/expanded-file nil :graph/breadcrumb []
                    :graph/nodes (:graph/comp-nodes state)
                    :graph/edges (:graph/comp-edges state)
-                   :graph/selected nil :graph/node-card nil)}
+                   :graph/selected nil :graph/node-card nil
+                   :graph/expand-time nil)}
 
     {:state state}))
 
@@ -814,9 +830,19 @@
                      :graph/node-card-pos {:x x :y y})
        :fx (when db-name (file-card-effects db-name id))})))
 
+(defn- maybe-cache-file-card
+  "Cache file card when both summary and imports are populated."
+  [state file-id]
+  (let [card (:graph/node-card state)]
+    (if (and card (contains? card :summary) (contains? card :imports))
+      (assoc-in state [:graph/card-cache file-id] card)
+      state)))
+
 (defmethod handle-event :action/graph-node-imports-loaded [state [_ file-id data]]
   (if (= file-id (:graph/selected state))
-    {:state (assoc-in state [:graph/node-card :imports] (:results data))}
+    {:state (-> state
+                (assoc-in [:graph/node-card :imports] (:results data))
+                (maybe-cache-file-card file-id))}
     {:state state}))
 
 (defmethod handle-event :action/graph-node-importers-loaded [state [_ file-id data]]
@@ -839,11 +865,8 @@
     (let [row   (first (:results data))
           state (cond-> state
                   (seq (first row))  (assoc-in [:graph/node-card :summary] (first row))
-                  (second row)       (assoc-in [:graph/node-card :complexity] (second row)))
-          ;; Cache completed card for re-use
-          card  (:graph/node-card state)]
-      {:state (cond-> state
-                card (assoc-in [:graph/card-cache file-id] card))})
+                  (second row)       (assoc-in [:graph/node-card :complexity] (second row)))]
+      {:state (maybe-cache-file-card state file-id)})
     {:state state}))
 
 (defmethod handle-event :action/graph-built [state [_ {:keys [nodes edges]}]]
@@ -1197,8 +1220,8 @@
         ;; Save to localStorage (Electron preload can also write config.edn)
         (.setItem js/localStorage "noumenon-backends" (js/JSON.stringify (clj->js data)))
         ;; If Electron IPC is available, also persist to config.edn
-        (when (and (exists? js/window) js/window.noumenon js/window.noumenon.saveBackends)
-          (js/window.noumenon.saveBackends (clj->js data))))
+        (when (and (exists? js/window) js/window.__noumenon__ js/window.__noumenon__.saveBackends)
+          (js/window.__noumenon__.saveBackends (clj->js data))))
 
       :storage/get
       (let [[key on-ok] args

@@ -48,7 +48,7 @@
                       :bottom "40px"
                       :left "16px"
                       :font-size "11px"
-                      :color "rgba(255,255,255,0.2)"}}
+                      :color "rgba(255,255,255,0.35)"}}
         (case depth
           :components (str (count (filter #(= :component (:type %)) nodes))
                            " components, "
@@ -70,16 +70,23 @@
                       :gap "4px"
                       :z-index 5}}
         [:span {:style {:cursor "pointer" :color "rgba(96,165,250,0.7)"}
-                :on {:click [:action/graph-collapse-to-top]}}
+                :on {:click [:action/graph-collapse-to-top]}
+                :role "button"
+                :tabindex 0}
          "Components"]
         (for [[i crumb] (map-indexed vector breadcrumb)]
-          [:<>
-           [:span {:key (str "sep-" i) :style {:color "rgba(255,255,255,0.2)"}} " > "]
-           [:span {:key (str "bc-" i)
-                   :style {:color (if (= i (dec (count breadcrumb)))
-                                    "rgba(255,255,255,0.6)"
-                                    "rgba(96,165,250,0.7)")
-                           :cursor (when (< i (dec (count breadcrumb))) "pointer")}
-                   :on (when (< i (dec (count breadcrumb)))
-                         {:click [:action/graph-collapse]})}
-            (last (.split (str crumb) "/"))]])])]))
+          [:span {:key (str "bc-" i)
+                  :style {:display "inline-flex" :align-items "center" :gap "4px"}}
+           [:span {:style {:color "rgba(255,255,255,0.2)"}} " > "]
+           [:span (cond-> {:style {:color (if (= i (dec (count breadcrumb)))
+                                            "rgba(255,255,255,0.6)"
+                                            "rgba(96,165,250,0.7)")
+                                   :cursor (when (< i (dec (count breadcrumb))) "pointer")}}
+                    (< i (dec (count breadcrumb)))
+                    (merge {:on {:click [:action/graph-collapse]}
+                            :role "button"
+                            :tabindex 0}))
+            (let [parts (.split (str crumb) "/")]
+              (if (> (count parts) 2)
+                (str (.join (.slice parts -2) "/"))
+                (str crumb)))]])])]))

@@ -88,36 +88,42 @@
                                       (let [[gx gy] (mouse->graph e)
                                             node    (controls/find-nearest-node
                                                      (.nodes sim) gx gy 35)
-                                            depth   (:graph/depth @state/app-state)]
+                                            s       @state/app-state
+                                            depth   (:graph/depth s)]
                                         (if node
                                           (let [id    (.-id node)
                                                 ntype (keyword (or (.-type node) "file"))
                                                 sx    (.-clientX e)
                                                 sy    (.-clientY e)]
-                                            (case [depth ntype]
-                                              ;; Component level — expand into files
-                                              [:components :component]
-                                              (state/dispatch! [:action/graph-expand-component id])
-                                              ;; File level — click file → expand to segments
-                                              [:files :file]
-                                              (state/dispatch! [:action/graph-expand-file id])
-                                              ;; File level — click another component → expand it
-                                              [:files :component]
-                                              (state/dispatch! [:action/graph-expand-component id])
-                                              ;; Segment level — show card
-                                              [:segments :segment]
-                                              (state/dispatch! [:action/graph-select-node {:id id :x sx :y sy}])
-                                              ;; Default — show card
-                                              (state/dispatch! [:action/graph-select-node {:id id :x sx :y sy}])))
-                                          ;; Click background → collapse or deselect
-                                          (if (= depth :components)
+                                            ;; Guard: ignore expand clicks while loading
+                                            (when-not (:graph/loading? s)
+                                              (case [depth ntype]
+                                                [:components :component]
+                                                (state/dispatch! [:action/graph-expand-component id])
+                                                [:files :file]
+                                                (state/dispatch! [:action/graph-expand-file id])
+                                                [:files :component]
+                                                (state/dispatch! [:action/graph-expand-component id])
+                                                [:segments :segment]
+                                                (state/dispatch! [:action/graph-select-node {:id id :x sx :y sy}])
+                                                (state/dispatch! [:action/graph-select-node {:id id :x sx :y sy}]))))
+                                          ;; Click background → clear focus, collapse, or deselect
+                                          (cond
+                                            (seq (:graph/focused-ids s))
+                                            (state/dispatch! [:action/graph-clear-focus])
+                                            (= depth :components)
                                             (state/dispatch! [:action/graph-select nil])
+                                            :else
                                             (state/dispatch! [:action/graph-collapse]))))))
                  (.addEventListener fresh "mousemove"
                                     (fn [e]
                                       (let [[gx gy] (mouse->graph e)
+                                            ;; Scale hit distance by inverse zoom so it stays
+                                            ;; consistent in screen pixels
+                                            zoom-k  (if-let [t @transform-atom] (.-k t) 1)
+                                            hit-dist (/ 20 (max 0.1 zoom-k))
                                             node    (controls/find-nearest-node
-                                                     (.nodes sim) gx gy 20)
+                                                     (.nodes sim) gx gy hit-dist)
                                             new-id  (when node (.-id node))]
                                         ;; Pointer cursor when hovering a node
                                         (set! (.. fresh -style -cursor)

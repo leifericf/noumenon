@@ -16,25 +16,20 @@
    :smelly "#fbbf24"
    :unsafe "#f87171"})
 
-;; --- Memoized lookup-map builders ---
+;; --- Lookup-map builders (pure, no caching — inputs are fresh each call) ---
 
-(def ^:private ->churn-map
-  (memoize (fn [rows] (into {} (map (juxt first second)) rows))))
+(defn- ->churn-map [rows]
+  (into {} (map (juxt first second)) rows))
 
-(def ^:private ->layer-map
-  (memoize (fn [rows] (into {} (map (fn [[p l]] [p (keyword l)])) rows))))
+(defn- ->smells-map [rows]
+  (reduce (fn [m [name smell]]
+            (update m name (fnil conj #{}) (keyword smell)))
+          {} rows))
 
-(def ^:private ->smells-map
-  (memoize (fn [rows]
-             (reduce (fn [m [name smell]]
-                       (update m name (fnil conj #{}) (keyword smell)))
-                     {} rows))))
-
-(def ^:private ->safety-map
-  (memoize (fn [rows]
-             (reduce (fn [m [name concern]]
-                       (update m name (fnil conj #{}) (keyword concern)))
-                     {} rows))))
+(defn- ->safety-map [rows]
+  (reduce (fn [m [name concern]]
+            (update m name (fnil conj #{}) (keyword concern)))
+          {} rows))
 
 ;; --- File-level builders (existing, unchanged) ---
 

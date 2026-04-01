@@ -241,13 +241,15 @@
                         (when (not= ntype :component)
                           (draw-label ctx (.-x node) (.-y node)
                                       (last (.split (.-id node) "/")) 0.8)))))))
-      ;; High zoom labels (file/segment only)
+      ;; High zoom labels (file/segment only, skip already-labeled nodes)
       (when (> zoom-k 2.5)
         (.forEach nodes
                   (fn [node]
                     (let [id    (.-id node)
                           ntype (keyword (or (.-type node) "file"))]
                       (when (and (not= ntype :component)
+                                 (not= id selected-id)
+                                 (not= id hover-id)
                                  (or (not has-focus?) (focused-ids id)))
                         (draw-label ctx (.-x node) (.-y node)
                                     (last (.split id "/")) 0.4))))))

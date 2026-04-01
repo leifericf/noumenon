@@ -34,7 +34,7 @@
              :on {:click [:action/graph-select nil]}
              :role "button"
              :aria-label "Close card"}
-       "x"]]
+       "\u00D7"]]
      children)))
 
 (defn- badge [text color bg]
@@ -73,7 +73,8 @@
                  (when (seq s)
                    [:div {:style {:font-size "11px" :color "rgba(255,255,255,0.5)"
                                   :line-height "1.4" :margin-bottom "10px" :font-style "italic"}}
-                    (subs s 0 (min 200 (count s)))]))
+                    (str (subs s 0 (min 200 (count s)))
+                         (when (> (count s) 200) "..."))]))
     ;; File count
                [:div {:style {:font-size "11px" :color "rgba(255,255,255,0.4)"
                               :margin-bottom "12px"}}
@@ -114,7 +115,8 @@
                  (when (seq p)
                    [:div {:style {:font-size "11px" :color "rgba(255,255,255,0.5)"
                                   :line-height "1.4" :margin-bottom "10px" :font-style "italic"}}
-                    (subs p 0 (min 200 (count p)))]))
+                    (str (subs p 0 (min 200 (count p)))
+                         (when (> (count p) 200) "..."))]))
     ;; Line range + args/returns
                [:div {:style {:font-size "11px" :color "rgba(255,255,255,0.35)" :margin-bottom "8px"}}
                 (when (and (:line-start card) (pos? (:line-start card)))
@@ -161,7 +163,9 @@
         summary    (:summary card)
         complexity (:complexity card)
         history    (:history card)
-        loading?   (and (nil? summary) (nil? imports) (nil? history))]
+        ;; nil = not loaded yet; [] = loaded but empty
+        loading?   (and (not (contains? card :summary))
+                        (not (contains? card :imports)))]
     (card-chrome pos
       ;; File path
                  [:div {:style {:font-family "'SF Mono', monospace"
@@ -304,6 +308,7 @@
        (if (> (count list) 1)
          [:select {:on {:change [:action/select-db]}
                    :value (or db-name "")
+                   :aria-label "Select database"
                    :style {:position "fixed"
                            :top "12px"
                            :right "16px"

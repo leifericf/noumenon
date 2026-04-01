@@ -153,6 +153,7 @@
        "(latest first)"]
       (when (> n 3)
         [:button {:on {:click [:action/ask-toggle-reasoning]}
+                  :aria-expanded (boolean show-all?)
                   :style {:background "none" :border "none" :cursor "pointer"
                           :font-size "11px" :color (:accent styles/tokens)
                           :padding "0"}}
@@ -214,7 +215,8 @@
                       :color (case s
                                "budget-exhausted" (:warning styles/tokens)
                                "error" (:danger styles/tokens)
-                               (:text-muted styles/tokens))}}
+                               (:text-muted styles/tokens))}
+              :title s}
        (case s "budget-exhausted" "incomplete" "error" "error" s)])))
 
 (defn- feedback-link [session-id current-feedback feedback-open?]
@@ -229,6 +231,7 @@
      [:div {:style {:display "flex" :gap "8px" :align-items "flex-end"}}
       [:textarea {:on {:input [:action/ask-feedback-text-input]}
                   :placeholder "What was wrong with this answer?"
+                  :aria-label "Feedback on answer quality"
                   :rows 2
                   :style {:flex 1
                           :padding "8px 10px"
@@ -277,9 +280,12 @@
                           expanded? detail state]
   [:div {:style {:padding "10px 0"
                  :border-bottom (str "1px solid " (str (:border styles/tokens) "60"))}}
-   [:div {:on {:click [:action/ask-expand-session id]}
-          :style {:display "flex" :align-items "baseline" :gap "12px"
-                  :cursor "pointer"}}
+   [:button {:on {:click [:action/ask-expand-session id]}
+             :aria-expanded (boolean expanded?)
+             :style {:display "flex" :align-items "baseline" :gap "12px"
+                     :cursor "pointer" :width "100%"
+                     :background "none" :border "none" :padding 0
+                     :text-align "left" :color "inherit" :font "inherit"}}
     [:div {:style {:flex 1 :min-width 0}}
      [:div {:style {:font-size "13px"
                     :color (:text-primary styles/tokens)
@@ -325,7 +331,7 @@
               :style {:display "flex"
                       :gap "16px"
                       :white-space "nowrap"
-                      :animation (str "tickerScroll " (* (count visible-set) 5) "s linear infinite")
+                      :animation (str "tickerScroll " (* (count visible-set) 10) "s linear infinite")
                       :width "max-content"}}
         (for [[i q] (map-indexed vector items)]
           [:button {:key (str i "-" q)
@@ -422,7 +428,9 @@
                        :z-index 100}}
          (for [[i item] (map-indexed vector completions)]
            [:div {:key (:value item)
+                  :id (str "ask-completion-" i)
                   :role "option"
+                  :aria-label (str (:type item) " " (:value item))
                   :aria-selected (= i (or completion-idx 0))
                   :on {:click [:action/ask-complete (:value item)]}
                   :style {:padding "8px 14px"
@@ -454,7 +462,8 @@
      ;; Hint
      [:div {:style {:width "100%" :margin-top "6px"
                     :font-size "11px" :color (:text-muted styles/tokens)}}
-      "Type @ to reference a file or author. Press Enter to ask."]
+      "Type @ to reference a file or author. Press Enter to ask. "
+      [:span {:style {:color "rgba(255,255,255,0.2)"}} "\u2318K to focus"]]
      ;; Suggestion chips on empty state
      (when (and (not has-results?) (not loading?))
        (suggestion-ticker visible-suggestions (:ask/ticker-paused? state)))
