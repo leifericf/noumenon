@@ -4,10 +4,17 @@ All notable changes to Noumenon are documented in this file.
 
 ## 0.4.0
 
-Codebase-level architectural synthesis — the macro complement to per-file analysis.
+Codebase-level architectural synthesis and a visual desktop UI.
 
 ### New
 
+- **Visual desktop UI** — Electron + ClojureScript app with a force-directed
+  "deep space" graph visualization. Three-level drill-down (components → files →
+  segments), floating Ask overlay with SSE-streamed reasoning traces, markdown
+  rendering, copy-to-clipboard, @-mention autocomplete, conversation history,
+  agent self-reflection feedback loop, and keyboard shortcuts (Cmd+K / Ctrl+K).
+  Canvas rendering with d3-force for smooth 60fps at 500+ nodes. Launch with
+  `noum open`. See [reports/visual-ui-development-2026-03-30.md](reports/visual-ui-development-2026-03-30.md).
 - **`synthesize` command** — Queries the knowledge graph for file summaries,
   import edges, and directory structure, then uses an LLM to identify logical
   components, classify files architecturally (layer, category, patterns, purpose),
@@ -30,6 +37,23 @@ Codebase-level architectural synthesis — the macro complement to per-file anal
 - **`noum demo`** — Downloads a pre-built knowledge graph of the Noumenon repo for
   instant querying. No LLM credentials needed. Try `noum ask noumenon "Describe the
   architecture"` right after install.
+
+### Security (UI)
+
+- Electron renderer uses contextBridge for daemon port (no executeJavaScript)
+- CORS headers restricted to Electron origin
+- Parameterized queries for raw Datalog endpoint
+- Bounded `edn/read-string` on LLM-sourced stored strings
+- SSE error messages sanitized before display
+
+### Fixes (UI)
+
+- Rewrite inline markdown parser to fix duplication bugs
+- Guard concurrent SSE submissions during loading
+- Fix Electron namespace collision with Replicant fragments
+- Autocomplete dropdown no longer clipped by frosted card overlay
+- Remove unbounded memoize from graph data builders (memory leak)
+- Comprehensive keyboard accessibility and ARIA labels
 
 ## 0.3.1
 

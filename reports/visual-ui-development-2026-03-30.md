@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-30
 **Operator:** Claude Opus 4.6 (automated)
-**Branch:** `feat/visual-ui` (103 commits → squashed to ~15, ~8,530 lines added across 86 files)
+**Branch:** `feat/visual-ui` (119 commits → squashed to 8, ~8,530 lines added across 86 files)
 **Test suite:** 475 backend tests + 50 CLJS unit tests (78 assertions) + E2E browser tests
 **Frontend:** ClojureScript via shadow-cljs, 263 compiled files (including d3)
 
@@ -230,39 +230,18 @@ Commit timeline view showing SHA, commit type badges, message, author, date, and
 
 ---
 
-## 10. Commit Log
+## 10. Commit Log (squashed)
 
 | Commit | Description |
 |--------|-------------|
-| `e083c81` | Scaffold Electron + ClojureScript visual UI |
-| `fd2cf2e` | HTTP client, routing, database management view |
-| `734ad6c` | Ask/Search view with markdown rendering |
-| `719a28a` | Schema/Entity Browser with Query Workbench |
-| `ec0e66c` | Graph Star Map with d3-force and Canvas rendering |
-| `1996253` | `noum open` command and toast component |
-| `6a703f8` | Development log |
-| `6c24d31` | Smoke tests for UI and query-raw |
-| `f247c79` | CI job for ClojureScript compilation |
-| `cdf737d` | Graph filters and dependency edge mode |
-| `015e98d` | Loading skeletons and auto-dismissing error toasts |
-| `2d04d8c` | Keyboard shortcuts (Cmd+K search, Escape dismiss) |
-| `901968e` | Benchmark view with run/compare and SSE progress |
-| `29c6400` | Production build config with electron-builder |
-| `70890c7` | History view with commit timeline |
-| `ea60b67` | Pure state handlers + unit and E2E tests (50 tests, 78 assertions) |
-| `094a084` | Graph zoom transform, hover labels, high-zoom labels |
-| `716ee84` | Collapsible sidebar with icon-only mode |
-| `0dc6e0e` | Dark/light theme toggle |
-| `136ea9a` | Add repo import flow in databases view |
-| `689128a` | Query workbench history persisted to localStorage |
-| `cc639e8` | Introspect view with start/stop and progress |
-| `4146198` | `/api/query-as-of` endpoint for Datomic time travel |
-| `dc608b5` | Portfolio scenes for all components |
-| `02806f3` | Electron auto-update via electron-updater |
-| `d9884ac` | Electron build and publish in release workflow |
-| `7f28473` | Fix: dead graph code, theme-aware canvas, SSE chunk buffer |
-| `1d3bac1` | Fix: stuck loading states, no-op handler, graph selection clear |
-| `32c1721` | Fix: toast dismiss, focus indicators, theme persistence, placeholders |
+| `4428af6` | Electron + ClojureScript visual UI foundation (14 original commits) |
+| `626db59` | Security hardening and UX polish (15 original commits) |
+| `098992f` | Synthesize: codebase-level architectural analysis (16 original commits) |
+| `b4aa7f5` | noum demo: pre-built demo database download (13 original commits) |
+| `331fed7` | Three-level drill-down graph with component cards (11 original commits) |
+| `fca07b6` | Accessibility, keyboard nav, and interaction polish (24 original commits) |
+| `f1557df` | Graph node styling, layout, and visual refinement (17 original commits) |
+| `0757422` | Markdown parser, clipboard, and agent step display (9 original commits) |
 
 ### UX Review (30 issues found and fixed)
 

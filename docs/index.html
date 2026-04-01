@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Noumenon — Precise, Grounded Answers About Your Codebase</title>
-  <meta name="description" content="Precise, grounded answers about your codebase. Pre-compiled knowledge graph means fewer tokens, fewer iterations, and facts instead of hallucinations.">
-  <meta property="og:title" content="Noumenon — Precise, Grounded Answers About Your Codebase">
-  <meta property="og:description" content="Compiles git repos into a multi-level Datomic knowledge graph so AI agents answer codebase questions more accurately, faster, and at lower cost than raw context windows.">
+  <title>Noumenon - Precise, Grounded Answers About Your Codebase</title>
+  <meta name="description" content="Compile your repo into a knowledge graph. Get grounded answers instead of hallucinations.">
+  <meta property="og:title" content="Noumenon - Precise, Grounded Answers About Your Codebase">
+  <meta property="og:description" content="Compiles git repos into a Datomic knowledge graph so AI agents answer codebase questions more accurately, faster, and cheaper than raw context windows.">
   <meta property="og:url" content="https://noumenon.leifericf.com">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary_large_image">
@@ -46,7 +46,7 @@
     </div>
     <h1>Precise, grounded answers<br>about your codebase.</h1>
     <p class="hero-sub">
-      Noumenon compiles your repository into a multi-level <a href="https://www.datomic.com">Datomic</a> knowledge graph &mdash; from git objects up through code segments, files, and architectural components &mdash; so AI agents can answer codebase questions more accurately, faster, and at lower cost than scanning raw source into context windows. Pre-compiled knowledge means fewer tokens, fewer iterations, and grounded facts instead of hallucinations. Across 9 repos and 8 languages, graph-augmented answers scored <strong>2.8&times; higher</strong>.
+      Noumenon compiles your repository into a <a href="https://www.datomic.com">Datomic</a> knowledge graph: git objects, code segments, files, and architectural components. AI agents query the graph instead of scanning raw source into context windows. Pre-compiled knowledge means fewer tokens, fewer iterations, and facts instead of hallucinations. Across 9 repos and 8 languages, graph-augmented answers scored <strong>2.8&times; higher</strong>.
     </p>
     <div class="hero-actions">
       <a href="#get-started" class="btn btn-primary">Get Started</a>
@@ -81,23 +81,23 @@
   <div class="container section-center">
     <h2 class="section-title">Three levels of understanding</h2>
     <p class="section-sub">
-      The pipeline compiles raw git data into a multi-level semantic graph. Queries traverse naturally between levels.
+      The pipeline builds a multi-level graph. Queries traverse between levels naturally.
     </p>
     <div class="layers-grid">
       <div class="card card-green">
         <span class="tag tag-green">Micro</span>
         <h3>Code Segments</h3>
-        <p>Functions, classes, types &mdash; with complexity ratings, code smells, safety concerns, purity analysis, and call graphs. Extracted per-file by LLM analysis.</p>
+        <p>Functions, classes, and types with complexity ratings, code smells, safety concerns, purity analysis, and call graphs.</p>
       </div>
       <div class="card card-purple">
         <span class="tag tag-purple">Mid</span>
         <h3>Files &amp; Imports</h3>
-        <p>Git history, authorship, change frequency, cross-file import edges, and per-file semantic summaries. Deterministic facts plus LLM annotations.</p>
+        <p>Git history, authorship, change frequency, cross-file import edges, and per-file semantic summaries.</p>
       </div>
       <div class="card card-blue">
         <span class="tag tag-blue">Macro</span>
         <h3>Components &amp; Architecture</h3>
-        <p>Logical subsystems identified from the full codebase picture &mdash; directory structure, import graph, and file summaries. Component dependencies, layers, and categories.</p>
+        <p>Logical subsystems identified from directory structure, import graphs, and file summaries. Component dependencies, layers, and categories.</p>
       </div>
     </div>
   </div>
@@ -110,7 +110,7 @@
   <div class="container section-center">
     <h2 class="section-title">How it works</h2>
     <p class="section-sub">
-      A four-stage pipeline compiles raw git data into a queryable knowledge graph. Each stage builds on the last, adding a deeper level of understanding. The result is a multi-level semantic graph where queries naturally traverse from architecture down to individual functions &mdash; or from a code smell up to the component it belongs to.
+      Four stages compile raw git data into a queryable knowledge graph. Each stage builds on the last.
     </p>
     <div class="pipeline">
       <div class="pipeline-step">
@@ -152,20 +152,17 @@
     <div class="problem-grid" style="margin-top: 2.5rem;">
       <div class="card">
         <h3>Import &amp; Enrich</h3>
-        <p><strong>Deterministic foundation.</strong> Git commits, files, authors, diffs, and resolved cross-file import edges. No LLM &mdash; fully reproducible. This is the factual bedrock everything else builds on.</p>
+        <p><strong>Deterministic foundation.</strong> Commits, files, authors, diffs, and resolved cross-file import edges. No LLM. Fully reproducible.</p>
       </div>
       <div class="card">
         <h3>Analyze (micro)</h3>
-        <p><strong>Per-file deep understanding.</strong> An LLM reads each file and extracts code segments with complexity ratings, code smells, safety concerns, purity analysis, and architectural hints. Like a code reviewer examining each file in isolation.</p>
+        <p><strong>Per-file understanding.</strong> An LLM reads each file and extracts code segments with complexity, smells, safety concerns, and architectural hints.</p>
       </div>
       <div class="card">
         <h3>Synthesize (macro)</h3>
-        <p><strong>Codebase-level architecture.</strong> Queries the knowledge graph itself &mdash; file summaries, import edges, directory structure &mdash; to identify logical components, classify files into architectural layers, and map component dependencies. Sees the forest, not just the trees.</p>
+        <p><strong>Codebase-level architecture.</strong> Queries the knowledge graph to identify logical components, classify files into layers, and map component dependencies.</p>
       </div>
     </div>
-    <p class="section-sub" style="margin: 1.5rem auto 0;">
-      <code>update</code> processes only new commits. <code>watch</code> polls continuously. <code>digest</code> runs the full pipeline in one command.
-    </p>
   </div>
 </section>
 
@@ -181,15 +178,15 @@
     <div class="problem-grid">
       <div class="card">
         <h3>Closed-loop optimization</h3>
-        <p>Propose a change, re-evaluate, keep or revert. Five targets: prompts, examples, rules, source code, and model config.</p>
+        <p>Propose a change, re-evaluate, keep or revert. Five targets: prompts, examples, rules, source code, and model config. Evaluates across multiple repos to prevent overfitting.</p>
       </div>
       <div class="card">
         <h3>Budget-controlled</h3>
-        <p>Cap by iterations, wall-clock hours, or dollar cost. Run <code>--max-hours 8</code> for an overnight session with automatic stopping.</p>
+        <p>Cap by iterations, hours, or dollar cost. Run <code>--max-hours 8</code> for an overnight session that stops automatically.</p>
       </div>
       <div class="card">
         <h3>On-device ML model</h3>
-        <p>A pure-Clojure neural network learns which Datalog queries to try first. Trains locally with zero token cost.</p>
+        <p>A pure-Clojure neural network learns which Datalog queries to try first. Trains locally at zero token cost.</p>
       </div>
     </div>
     <div class="terminal" style="margin-top: 2.5rem;">
@@ -227,7 +224,7 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
   <div class="container section-center">
     <h2 class="section-title">Measured on real codebases</h2>
     <p class="section-sub">
-      40 questions per repo, two conditions: <strong>Raw</strong> (source file listings only) vs. <strong>Full</strong> (knowledge graph context). Sonnet via GLM, March 2026.
+      40 questions per repo, two conditions: <strong>Raw</strong> (source listings only) vs. <strong>Full</strong> (knowledge graph). Sonnet via GLM, March 2026.
     </p>
     <table class="benchmark-table">
       <thead>
@@ -268,12 +265,12 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
     <h2 class="section-title">Features</h2>
     <div class="features-grid">
       <div class="card">
-        <h3>Git history as a first-class citizen</h3>
-        <p>Commits, authorship, change frequency, co-changed files, and fix-commit ratios are all queryable.</p>
+        <h3>Git history as first-class data</h3>
+        <p>Commits, authorship, change frequency, co-changed files, and fix-commit ratios. All queryable.</p>
       </div>
       <div class="card">
         <h3>MCP server</h3>
-        <p>Expose the full knowledge graph as MCP tools for Claude Desktop, Claude Code, or any MCP client.</p>
+        <p>The full knowledge graph as MCP tools for Claude Desktop, Claude Code, or any MCP client.</p>
       </div>
       <div class="card">
         <h3>Multi-language imports</h3>
@@ -281,19 +278,27 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
       </div>
       <div class="card">
         <h3>Cost transparency</h3>
-        <p>Token estimates before you start, per-file telemetry as it runs, and aggregate totals when done.</p>
+        <p>Token estimates before you start, per-file telemetry as it runs, totals when done.</p>
       </div>
       <div class="card">
         <h3>Sensitive file protection</h3>
-        <p><code>.env</code>, <code>*.pem</code>, credentials &mdash; tracked as entities but never read or sent to LLMs.</p>
+        <p><code>.env</code>, <code>*.pem</code>, credentials: tracked as entities but never read or sent to LLMs.</p>
       </div>
       <div class="card">
         <h3>Architecture synthesis</h3>
-        <p>Identifies components, layers, and dependencies from the full codebase picture. Language-agnostic &mdash; works from structural signals.</p>
+        <p>Identifies components, layers, and dependencies from the full codebase. Language-agnostic.</p>
       </div>
       <div class="card">
-        <h3>Concurrent &amp; incremental</h3>
+        <h3>Visual desktop UI</h3>
+        <p>Electron app with a force-directed graph, three-level drill-down, floating Ask overlay, and Canvas rendering at 60fps. <code>noum open</code></p>
+      </div>
+      <div class="card">
+        <h3>Concurrent and incremental</h3>
         <p>Up to 20 parallel workers with automatic retry. Incremental sync picks up new commits only.</p>
+      </div>
+      <div class="card">
+        <h3>Self-improving</h3>
+        <p>Autonomous introspect loop proposes changes to prompts, rules, and code, then benchmarks them. Keeps what works, reverts what doesn't.</p>
       </div>
     </div>
   </div>
@@ -308,7 +313,7 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
       <div class="showcase-text">
         <h2 class="section-title">Named queries</h2>
         <p>
-          65+ pre-built Datalog queries in EDN &mdash; from file-level hotspots to component-level architecture. Deterministic, reproducible, composable.
+          65+ pre-built Datalog queries in EDN, from file-level hotspots to component-level architecture. Deterministic, reproducible, composable.
         </p>
         <ul>
           <li>Complexity and change hotspots</li>
@@ -363,7 +368,7 @@ src/auth/session.ts       28       complex</span></pre>
         <div class="step-number">1</div>
         <div class="step-content">
           <h3>Install</h3>
-          <p>Single binary, auto-downloads everything it needs on first use.</p>
+          <p>Single binary. Auto-downloads everything it needs on first use.</p>
           <code>curl -sSL https://noumenon.leifericf.com/install | bash</code>
         </div>
       </div>
@@ -371,7 +376,7 @@ src/auth/session.ts       28       complex</span></pre>
         <div class="step-number">2</div>
         <div class="step-content">
           <h3>Try the demo</h3>
-          <p>Downloads a pre-built knowledge graph. No LLM credentials needed &mdash; start querying immediately.</p>
+          <p>Downloads a pre-built knowledge graph. No LLM credentials needed.</p>
           <code>noum demo</code>
         </div>
       </div>
@@ -379,7 +384,7 @@ src/auth/session.ts       28       complex</span></pre>
         <div class="step-number">3</div>
         <div class="step-content">
           <h3>Ask a question</h3>
-          <p>Natural-language questions with iterative LLM reasoning, grounded in the knowledge graph.</p>
+          <p>Natural-language questions answered by iterative Datalog queries against the knowledge graph.</p>
           <code>noum ask noumenon "Which files are the biggest risk hotspots?"</code>
         </div>
       </div>

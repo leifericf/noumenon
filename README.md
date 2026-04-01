@@ -204,6 +204,7 @@ The `noum` CLI and [MCP](https://modelcontextprotocol.io) server expose the same
 | `introspect <repo>` | `noumenon_introspect_start` | Autonomous self-improvement loop |
 | `reseed` | `noumenon_reseed` | Reload prompts, queries, and rules |
 | `history --type <t>` | `noumenon_artifact_history` | Show artifact change history |
+| `open` | -- | Launch visual desktop UI (Electron) |
 | `watch <repo>` | -- | Auto-sync on new commits |
 | `serve` | -- | Start MCP server (stdin/stdout) |
 | `setup desktop` | -- | Configure MCP for Claude Desktop |
@@ -408,7 +409,7 @@ cd launcher && bb -cp src:resources -m noum.main help  # run launcher from sourc
 flowchart TB
   noum["noum CLI\n(Babashka TUI)"]
   mcp["noum serve\n(MCP)"]
-  gui["GUI app\n(future)"]
+  gui["noum open\n(Electron UI)"]
   daemon["JVM Daemon\nDatomic + LLM engine"]
 
   noum -->|HTTP| daemon
@@ -421,6 +422,7 @@ flowchart TB
 - `src/noumenon/` - JVM backend (Datomic, LLM, MCP, HTTP daemon)
 - `launcher/` - Babashka CLI launcher (`noum` binary)
 - `launcher/src/noum/tui/` - custom TUI library (JLine3)
+- `ui/` - Electron + ClojureScript visual UI (Replicant, d3-force, Garden)
 - `resources/schema/` - Datomic schema (EDN)
 - `resources/queries/` - named Datalog queries and rules
 - `resources/prompts/` - prompt templates
