@@ -120,16 +120,16 @@ Noumenon compiles a codebase into a queryable knowledge graph through four pipel
 flowchart LR
   subgraph compile["Knowledge Compiler"]
     direction LR
-    A["<b>Import</b><br/>Git history, files,<br/>authors, diffs"] --> B["<b>Enrich</b><br/>Cross-file import<br/>graph (deterministic)"]
-    B --> C["<b>Analyze</b> (micro)<br/>Per-file summaries,<br/>segments, smells"]
-    C --> D["<b>Synthesize</b> (macro)<br/>Components, layers,<br/>dependencies"]
+    A[Import] --> B[Enrich]
+    B --> C[Analyze]
+    C --> D[Synthesize]
   end
 
   subgraph use["Query Interfaces"]
     direction TB
-    E["Named Datalog queries"]
-    F["Natural-language Ask"]
-    G["MCP tools for AI agents"]
+    E[Datalog queries]
+    F[Ask]
+    G[MCP tools]
   end
 
   D --> E
@@ -137,7 +137,7 @@ flowchart LR
   D --> G
 
   subgraph improve["Self-Improvement"]
-    H["Benchmark"] --> I["Introspect"]
+    H[Benchmark] --> I[Introspect]
   end
 
   D --> H
@@ -157,13 +157,13 @@ The pipeline builds understanding **bottom-up** — git objects, files, code seg
 
 The knowledge graph has three entity levels. Queries naturally traverse up and down:
 
-```
-                     depends-on
-    Component  ←————————————————→  Component
-        ↕  arch/component
-      File  ←——— imports ———→  File
-        ↕  code/file
-    Code Segment  ←— calls —→  Code Segment
+```mermaid
+flowchart TB
+  C1[Component] <-->|depends-on| C2[Component]
+  C1 ---|arch/component| F1[File]
+  F1 <-->|imports| F2[File]
+  F1 ---|code/file| S1[Code Segment]
+  S1 <-->|calls| S2[Code Segment]
 ```
 
 | Level | Entity | Identity | Example query |
@@ -224,26 +224,26 @@ The `noum` CLI and [MCP](https://modelcontextprotocol.io) server expose the same
 ```mermaid
 flowchart TB
   subgraph macro["Macro (synthesize)"]
-    Component["<b>Component</b><br/>component/name<br/>summary, layer, category,<br/>patterns, complexity"]
+    Component[Component]
   end
 
   subgraph mid["Mid (import + analyze)"]
-    File["<b>File</b><br/>file/path<br/>summary, complexity, tags,<br/>imports, layer, category"]
-    Commit["<b>Commit</b><br/>git/sha<br/>message, kind, author,<br/>additions, deletions"]
-    Person["<b>Person</b><br/>person/email"]
+    File[File]
+    Commit[Commit]
+    Person[Person]
   end
 
   subgraph micro["Micro (analyze)"]
-    Segment["<b>Code Segment</b><br/>code/file+name<br/>kind, complexity, smells,<br/>safety, calls, pure?"]
+    Segment[Code Segment]
   end
 
-  Component -->|"depends-on"| Component
-  Component ---|"arch/component"| File
-  File -->|"imports"| File
-  Commit -->|"changed-files"| File
-  Commit -->|"author"| Person
-  File ---|"code/file"| Segment
-  Segment -->|"calls"| Segment
+  Component -->|depends-on| Component
+  Component ---|arch/component| File
+  File -->|imports| File
+  Commit -->|changed-files| File
+  Commit -->|author| Person
+  File ---|code/file| Segment
+  Segment -->|calls| Segment
 ```
 
 ### Relationship Graph
@@ -253,7 +253,7 @@ flowchart LR
   Repo[repo] -->|:repo/commits| Commit[commit]
   Commit -->|:commit/author| Author[person]
   Commit -->|:commit/changed-files| File[file]
-  Commit -.->|:commit/issue-refs| IssueRef[("#123 / PROJ-456")]
+  Commit -.->|:commit/issue-refs| IssueRef["issue ref"]
 
   File -->|:file/directory| Dir[directory]
   File -->|:file/imports| ImportedFile[file]
