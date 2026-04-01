@@ -1,0 +1,10 @@
+{:name "ask-negative-feedback"
+ :description "Sessions rated negatively by users — highest priority for improvement"
+ :query [:find ?question ?comment ?answer ?repo ?iters
+         :where
+         [?e :ask.session/feedback :negative]
+         [?e :ask.session/question ?question]
+         [(get-else $ ?e :ask.session/feedback-comment "") ?comment]
+         [(get-else $ ?e :ask.session/answer "") ?answer]
+         [(get-else $ ?e :ask.session/repo "") ?repo]
+         [(get-else $ ?e :ask.session/iterations 0) ?iters]]}

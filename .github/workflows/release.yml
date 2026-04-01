@@ -313,6 +313,33 @@ jobs:
           git commit -m "Update to v${VERSION}"
           git push
 
+  build-electron:
+    if: ${{ !inputs.dry-run }}
+    needs: release
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: DeLaGuardo/setup-clojure@13.0
+        with: { cli: latest }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install dependencies
+        working-directory: ui
+        run: npm ci
+      - name: Build ClojureScript
+        working-directory: ui
+        run: npx shadow-cljs release app
+      - name: Package Electron app
+        working-directory: ui
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder build --publish always
+
   deploy-pages:
     if: ${{ !inputs.dry-run && !contains(github.ref_name, '-rc') }}
     needs: release

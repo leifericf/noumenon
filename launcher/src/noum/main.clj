@@ -430,6 +430,18 @@
       (catch Exception _)))
   0)
 
+(defn- do-open [{:keys [flags]}]
+  (let [conn (ensure-backend! flags)
+        port (:port conn)]
+    (tui/eprintln (str "Opening Noumenon UI (daemon on port " port ")..."))
+    (let [result @(proc/process
+                   {:cmd ["npx" "electron" "ui/"]
+                    :dir (or (System/getenv "NOUMENON_ROOT") ".")
+                    :env (assoc (into {} (System/getenv))
+                                "NOUMENON_PORT" (str port))
+                    :inherit true})]
+      (:exit result))))
+
 ;; --- Dispatch ---
 
 (def ^:private dispatch
@@ -447,7 +459,8 @@
    "delete"     do-delete
    "results"    do-results
    "compare"    do-compare
-   "history"    do-history})
+   "history"    do-history
+   "open"       do-open})
 
 (defn -main [& args]
   (let [parsed (cli/parse-args args)]

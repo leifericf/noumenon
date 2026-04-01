@@ -1,0 +1,134 @@
+[;; --- Ask Sessions ---
+ {:db/ident       :ask.session/id
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Unique session identifier (UUID)"}
+
+ {:db/ident       :ask.session/question
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "The original question text"}
+
+ {:db/ident       :ask.session/answer
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Final answer text returned to the user"}
+
+ {:db/ident       :ask.session/status
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Outcome: :answered, :budget-exhausted, :error"}
+
+ {:db/ident       :ask.session/channel
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "How the question was asked: :cli, :ui, :mcp"}
+
+ {:db/ident       :ask.session/caller
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Who asked: :human or :ai-agent"}
+
+ {:db/ident       :ask.session/repo
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Database name the question was asked against"}
+
+ {:db/ident       :ask.session/started-at
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "When the session began"}
+
+ {:db/ident       :ask.session/duration-ms
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Total wall-clock time in milliseconds"}
+
+ {:db/ident       :ask.session/input-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Total LLM input tokens consumed"}
+
+ {:db/ident       :ask.session/output-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Total LLM output tokens consumed"}
+
+ {:db/ident       :ask.session/iterations
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Number of agent loop iterations"}
+
+ {:db/ident       :ask.session/feedback
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "User feedback: :positive, :negative, or nil (no feedback yet)"}
+
+ {:db/ident       :ask.session/feedback-comment
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Optional free-text comment from the user about the answer quality"}
+
+ {:db/ident       :ask.session/steps
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/many
+  :db/isComponent true
+  :db/doc         "Ordered step entities for this session"}
+
+ ;; --- Ask Steps ---
+ {:db/ident       :ask.step/ordinal
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Zero-based step index within the session"}
+
+ {:db/ident       :ask.step/type
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Step type: :query, :schema, :rules, :answer, :error"}
+
+ {:db/ident       :ask.step/query-edn
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Datalog query as pr-str EDN (when type is :query)"}
+
+ {:db/ident       :ask.step/result-count
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Number of result rows returned"}
+
+ {:db/ident       :ask.step/result-sample
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "First few result rows as pr-str EDN (up to 4KB)"}
+
+ {:db/ident       :ask.step/reasoning
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "LLM reasoning text before the tool call"}
+
+ {:db/ident       :ask.step/elapsed-ms
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Wall-clock time for this step in milliseconds"}
+
+ ;; --- Agent Reflection (self-reported data quality observations) ---
+ {:db/ident       :ask.session/missing-attributes
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "EDN vector of attributes/relationships the agent needed but couldn't find"}
+
+ {:db/ident       :ask.session/quality-issues
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "EDN vector of data quality problems the agent observed"}
+
+ {:db/ident       :ask.session/suggested-queries
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "EDN vector of named query descriptions the agent wished existed"}
+
+ {:db/ident       :ask.session/agent-notes
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Free-text observations from the agent about the data"}]

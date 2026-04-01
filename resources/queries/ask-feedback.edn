@@ -1,0 +1,9 @@
+{:name "ask-feedback"
+ :description "Sessions with user feedback — positive and negative ratings with optional comments"
+ :query [:find ?question ?feedback ?comment ?repo ?date
+         :where
+         [?e :ask.session/question ?question]
+         [?e :ask.session/feedback ?feedback]
+         [?e :ask.session/started-at ?date]
+         [(get-else $ ?e :ask.session/feedback-comment "") ?comment]
+         [(get-else $ ?e :ask.session/repo "") ?repo]]}

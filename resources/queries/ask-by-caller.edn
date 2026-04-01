@@ -1,0 +1,7 @@
+{:name "ask-by-caller"
+ :description "Question count grouped by caller type (human vs ai-agent)"
+ :query [:find ?caller (count ?e) (avg ?dur) (sum ?tokens)
+         :where
+         [?e :ask.session/caller ?caller]
+         [?e :ask.session/duration-ms ?dur]
+         [?e :ask.session/input-tokens ?tokens]]}

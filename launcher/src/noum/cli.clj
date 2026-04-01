@@ -76,6 +76,8 @@
                  :usage   "noum ping"}
    "upgrade"    {:summary "Update noumenon.jar (re-run installer to update noum)"
                  :usage   "noum upgrade"}
+   "open"       {:summary "Open the visual UI"
+                 :usage   "noum open"}
    "help"       {:summary "Show help"
                  :usage   "noum help [command]"}
    "version"    {:summary "Show version"
@@ -89,6 +91,7 @@
    ["Admin"      ["databases" "delete" "reseed" "history"]]
    ["Setup"      ["setup" "serve"]]
    ["Daemon"     ["start" "stop" "ping" "upgrade"]]
+   ["UI"         ["open"]]
    ["Other"      ["help" "version"]]])
 
 (defn format-help

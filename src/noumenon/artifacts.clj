@@ -275,3 +275,25 @@
   "Load a named query as it existed at a specific point in time."
   [meta-conn query-name ^java.util.Date as-of]
   (load-named-query (d/as-of (d/db meta-conn) as-of) query-name))
+
+;; --- Settings ---
+
+(defn get-all-settings
+  "Return all settings as a map of {key-string value-edn}."
+  [meta-db]
+  (->> (d/q '[:find ?k ?v :where [?e :setting/key ?k] [?e :setting/value ?v]] meta-db)
+       (into {} (map (fn [[k v]] [k (edn/read-string v)])))))
+
+(defn get-setting
+  "Get a single setting value by key. Returns nil if not found."
+  [meta-db key]
+  (some-> (d/q '[:find ?v :in $ ?k :where [?e :setting/key ?k] [?e :setting/value ?v]]
+               meta-db key)
+          ffirst
+          edn/read-string))
+
+(defn set-setting!
+  "Upsert a setting. Value is stored as pr-str EDN."
+  [meta-conn key value]
+  (d/transact meta-conn
+              {:tx-data [{:setting/key key :setting/value (pr-str value)}]}))

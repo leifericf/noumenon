@@ -102,13 +102,14 @@
      [(assert-exit "help exits 0" r 0)
       (assert-contains "help shows Pipeline" r "Pipeline")
       (assert-contains "help shows Query" r "Query")
-      (assert-contains "help shows Daemon" r "Daemon")]
+      (assert-contains "help shows Daemon" r "Daemon")
+      (assert-contains "help shows UI" r "UI")]
      (mapcat (fn [cmd]
                (let [r (noum "help" cmd)]
                  [(assert-exit (str "help " cmd " exits 0") r 0)
                   (assert-contains (str "help " cmd " shows usage") r "Usage:")]))
              ["import" "ask" "bench" "setup" "serve"
-              "start" "stop" "ping" "upgrade" "databases" "introspect"]))))
+              "start" "stop" "ping" "upgrade" "databases" "introspect" "open"]))))
 
 (defn tests-arg-validation []
   (concat
@@ -282,6 +283,8 @@
         ;; POST endpoints
         query-r   (json-post (str base "/api/query") auth {:repo_path "/repo" :query_name "top-contributors"})
         ask-r     (json-post (str base "/api/ask") auth {:repo_path "/repo"})
+        raw-q-r   (json-post (str base "/api/query-raw") auth
+                             {:repo_path "/repo" :query "[:find (count ?e) :where [?e :file/path _]]"})
         reseed-r  (json-post (str base "/api/reseed") auth {})
         ;; Error cases
         notfound  (json-get (str base "/nonexistent") auth)
@@ -305,6 +308,8 @@
      (assert-true "POST /api/query ok" (get-in query-r [:body :ok]))
      (assert-true "POST /api/query has results" (some? (get-in query-r [:body :data :total])))
      (assert-true "POST /api/ask rejects missing question" (not (get-in ask-r [:body :ok])))
+     (assert-true "POST /api/query-raw ok" (get-in raw-q-r [:body :ok]))
+     (assert-true "POST /api/query-raw has results" (some? (get-in raw-q-r [:body :data :total])))
      (assert-true "POST /api/reseed ok" (get-in reseed-r [:body :ok]))
      (assert-true "GET /nonexistent returns 404" (= 404 (:status notfound)))
      (assert-true "POST to GET route returns 404" (and bad-method (= 404 (:status bad-method))))

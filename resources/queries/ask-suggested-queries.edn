@@ -1,0 +1,7 @@
+{:name "ask-suggested-queries"
+ :description "Named queries that ask agents wished existed — candidates for new pre-built queries"
+ :query [:find ?queries ?question ?repo
+         :where
+         [?e :ask.session/suggested-queries ?queries]
+         [?e :ask.session/question ?question]
+         [(get-else $ ?e :ask.session/repo "") ?repo]]}

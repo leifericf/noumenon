@@ -30,3 +30,22 @@ jobs:
       - name: Verify help output
         working-directory: launcher
         run: bb -cp src:resources -m noum.main help
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: DeLaGuardo/setup-clojure@13.0
+        with: { cli: latest }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install npm dependencies
+        working-directory: ui
+        run: npm ci
+      - name: Compile ClojureScript
+        working-directory: ui
+        run: npx shadow-cljs compile app
+      - name: Verify output exists
+        run: test -f ui/resources/public/js/main.js

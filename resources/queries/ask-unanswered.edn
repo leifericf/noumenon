@@ -1,0 +1,10 @@
+{:name "ask-unanswered"
+ :description "Questions that exhausted the iteration budget without a final answer"
+ :query [:find ?question ?repo ?date ?iters ?dur
+         :where
+         [?e :ask.session/question ?question]
+         [?e :ask.session/status :budget-exhausted]
+         [?e :ask.session/started-at ?date]
+         [(get-else $ ?e :ask.session/repo "") ?repo]
+         [(get-else $ ?e :ask.session/iterations 0) ?iters]
+         [(get-else $ ?e :ask.session/duration-ms 0) ?dur]]}

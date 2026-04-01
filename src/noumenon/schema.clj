@@ -9,7 +9,9 @@
    "schema/provenance.edn"
    "schema/benchmark.edn"
    "schema/introspect.edn"
-   "schema/artifacts.edn"])
+   "schema/artifacts.edn"
+   "schema/settings.edn"
+   "schema/ask.edn"])
 
 (defn load-schema
   "Read a schema EDN file from the classpath. Throws if file not found."

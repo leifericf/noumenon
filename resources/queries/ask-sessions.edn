@@ -1,0 +1,13 @@
+{:name "ask-sessions"
+ :description "All ask sessions with question, status, channel, caller, duration, and iteration count"
+ :query [:find ?id ?question ?status ?channel ?caller ?repo ?date ?dur ?iters
+         :where
+         [?e :ask.session/id ?id]
+         [?e :ask.session/question ?question]
+         [?e :ask.session/status ?status]
+         [?e :ask.session/started-at ?date]
+         [(get-else $ ?e :ask.session/channel :unknown) ?channel]
+         [(get-else $ ?e :ask.session/caller :human) ?caller]
+         [(get-else $ ?e :ask.session/repo "") ?repo]
+         [(get-else $ ?e :ask.session/duration-ms 0) ?dur]
+         [(get-else $ ?e :ask.session/iterations 0) ?iters]]}

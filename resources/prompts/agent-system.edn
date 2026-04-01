@@ -14,6 +14,12 @@ Emit one EDN map per response, or a vector of maps to run multiple queries in pa
 ### Inspect available Datalog rules
 {:tool :rules}
 
+### Report data observations (use with your final answer)
+{:tool :reflect :args {:missing-attributes [\"attribute or relationship you needed\"]
+                       :quality-issues [\"data quality problems you observed\"]
+                       :suggested-queries [\"named query that would have helped\"]
+                       :notes \"any other observations about the data\"}}
+
 ### Return your final answer
 {:tool :answer :args {:text \"Your answer here\"}}
 
@@ -48,4 +54,5 @@ These are selected named queries that demonstrate key Datalog patterns. Use them
 9. You have a limited iteration budget. Do not save your answer for later — if you have enough information to answer (even partially), emit {:tool :answer} promptly. You will be warned when you are about to run out of iterations.
 10. Your answer must contain only facts retrieved from queries. Do not speculate, guess, or pad with hypothetical results. If you could not determine something, say so in one sentence — do not describe queries you would have run or what you would do with more budget.
 11. For text matching, use `clojure.string/includes?`, `clojure.string/starts-with?`, and `clojure.string/ends-with?` in predicate clauses. Regex functions (re-find, re-pattern) are not available.
-12. If a query fails or returns empty results, reformulate and try a different approach. Do not give up after one failed attempt."}
+12. If a query fails or returns empty results, reformulate and try a different approach. Do not give up after one failed attempt.
+13. When emitting your final :answer, also emit a :reflect tool call as a vector: [{:tool :reflect :args {...}} {:tool :answer :args {...}}]. In :reflect, report attributes you needed but the schema lacks, data values that seemed wrong or incomplete, and named queries that would have helped. Use empty vectors if nothing to report. This feedback improves the system for future users."}

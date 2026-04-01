@@ -1,0 +1,16 @@
+{:name "ask-agent-reflections"
+ :description "Full agent reflection data from recent sessions — missing attributes, quality issues, notes"
+ :query [:find ?question ?attrs ?issues ?queries ?notes ?repo ?date
+         :where
+         [?e :ask.session/question ?question]
+         [?e :ask.session/started-at ?date]
+         [(get-else $ ?e :ask.session/missing-attributes "") ?attrs]
+         [(get-else $ ?e :ask.session/quality-issues "") ?issues]
+         [(get-else $ ?e :ask.session/suggested-queries "") ?queries]
+         [(get-else $ ?e :ask.session/agent-notes "") ?notes]
+         [(get-else $ ?e :ask.session/repo "") ?repo]
+         ;; Only sessions that have at least one reflection field
+         (or [?e :ask.session/missing-attributes _]
+             [?e :ask.session/quality-issues _]
+             [?e :ask.session/suggested-queries _]
+             [?e :ask.session/agent-notes _])]}

@@ -1,0 +1,7 @@
+{:name "all-import-edges"
+ :description "All file-to-file import edges"
+ :query [:find ?from-path ?to-path
+         :where
+         [?from :file/imports ?to]
+         [?from :file/path ?from-path]
+         [?to :file/path ?to-path]]}

@@ -1,0 +1,10 @@
+{:name "ask-high-iteration"
+ :description "Sessions that used many iterations — complex or poorly-served questions"
+ :query [:find ?question ?iters ?status ?dur ?repo
+         :where
+         [?e :ask.session/question ?question]
+         [?e :ask.session/iterations ?iters]
+         [?e :ask.session/status ?status]
+         [(> ?iters 5)]
+         [(get-else $ ?e :ask.session/duration-ms 0) ?dur]
+         [(get-else $ ?e :ask.session/repo "") ?repo]]}

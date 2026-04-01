@@ -1,0 +1,9 @@
+{:name "ask-schema-gaps"
+ :description "Attributes queried by the agent that returned no results — likely missing data or wrong attributes"
+ :query [:find ?query-edn ?question (count ?step)
+         :where
+         [?e :ask.session/question ?question]
+         [?e :ask.session/steps ?step]
+         [?step :ask.step/type :query]
+         [?step :ask.step/query-edn ?query-edn]
+         [?step :ask.step/result-count 0]]}

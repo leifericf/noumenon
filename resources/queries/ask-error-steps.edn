@@ -1,0 +1,10 @@
+{:name "ask-error-steps"
+ :description "Steps where the agent hit parse errors — indicates query patterns that confuse the LLM"
+ :query [:find ?question ?ordinal ?repo ?date
+         :where
+         [?e :ask.session/question ?question]
+         [?e :ask.session/steps ?step]
+         [?step :ask.step/type :error]
+         [?step :ask.step/ordinal ?ordinal]
+         [?e :ask.session/started-at ?date]
+         [(get-else $ ?e :ask.session/repo "") ?repo]]}

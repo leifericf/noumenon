@@ -1,0 +1,7 @@
+{:name "ask-quality-issues"
+ :description "Data quality problems observed by ask agents — wrong, stale, or incomplete values"
+ :query [:find ?issues ?question ?repo
+         :where
+         [?e :ask.session/quality-issues ?issues]
+         [?e :ask.session/question ?question]
+         [(get-else $ ?e :ask.session/repo "") ?repo]]}

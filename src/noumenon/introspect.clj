@@ -10,6 +10,7 @@
             [noumenon.benchmark :as bench]
             [noumenon.git :as git]
             [noumenon.model :as model]
+            [noumenon.ask-store :as ask-store]
             [noumenon.training-data :as td]
             [noumenon.util :as util :refer [log!]]))
 
@@ -77,6 +78,149 @@
            (section "WRONG answers (highest priority)" :wrong)
            (section "PARTIAL answers (medium priority)" :partial)))))
 
+(defn- ask-session-insights
+  "Summarize ask session data for the introspect agent.
+   Surfaces unanswered questions, empty-result queries, popular patterns,
+   and error-prone sessions."
+  [meta-db]
+  (let [sessions    (ask-store/list-sessions meta-db :limit 200)
+        total       (count sessions)
+        unanswered  (->> sessions (filter #(= :budget-exhausted (:status %))))
+        errors      (d/q '[:find ?question
+                           :where
+                           [?e :ask.session/question ?question]
+                           [?e :ask.session/steps ?step]
+                           [?step :ask.step/type :error]]
+                         meta-db)
+        empty-qs    (d/q '[:find ?question ?query-edn
+                           :where
+                           [?e :ask.session/question ?question]
+                           [?e :ask.session/steps ?step]
+                           [?step :ask.step/type :query]
+                           [?step :ask.step/query-edn ?query-edn]
+                           [?step :ask.step/result-count 0]]
+                         meta-db)
+        popular     (d/q '[:find ?query-edn (count ?step)
+                           :where
+                           [?step :ask.step/type :query]
+                           [?step :ask.step/query-edn ?query-edn]]
+                         meta-db)
+        neg-fb      (d/q '[:find ?question ?comment ?answer ?missing ?quality ?notes
+                           :where
+                           [?e :ask.session/feedback :negative]
+                           [?e :ask.session/question ?question]
+                           [(get-else $ ?e :ask.session/feedback-comment "") ?comment]
+                           [(get-else $ ?e :ask.session/answer "") ?answer]
+                           [(get-else $ ?e :ask.session/missing-attributes "") ?missing]
+                           [(get-else $ ?e :ask.session/quality-issues "") ?quality]
+                           [(get-else $ ?e :ask.session/agent-notes "") ?notes]]
+                         meta-db)
+        ;; Agent reflections
+        missing-attrs (d/q '[:find ?attrs
+                             :where [?e :ask.session/missing-attributes ?attrs]]
+                           meta-db)
+        quality-iss   (d/q '[:find ?issues
+                             :where [?e :ask.session/quality-issues ?issues]]
+                           meta-db)
+        suggested-qs  (d/q '[:find ?qs
+                             :where [?e :ask.session/suggested-queries ?qs]]
+                           meta-db)]
+    (if (zero? total)
+      "No ask sessions recorded yet."
+      (str "## Ask Session Insights (" total " sessions)\n\n"
+           ;; Unanswered questions
+           (when (seq unanswered)
+             (str "### Unanswered questions (" (count unanswered) " sessions hit budget limit)\n"
+                  "These questions could not be answered — they represent gaps:\n"
+                  (->> unanswered
+                       (take 10)
+                       (map #(str "  - \"" (:question %) "\" (" (:iterations %) " iterations)"))
+                       (str/join "\n"))
+                  "\n\n"))
+           ;; Zero-result queries
+           (when (seq empty-qs)
+             (str "### Queries that returned zero results (" (count empty-qs) " occurrences)\n"
+                  "The agent wrote these Datalog queries but got no data back — likely wrong attributes or missing data:\n"
+                  (->> empty-qs
+                       (take 10)
+                       (map (fn [[question query-edn]]
+                              (str "  - Q: \"" (subs question 0 (min 60 (count question)))
+                                   "\" → " (subs query-edn 0 (min 80 (count query-edn))))))
+                       (str/join "\n"))
+                  "\n\n"))
+           ;; Error steps
+           (when (seq errors)
+             (str "### Parse errors (" (count errors) " occurrences)\n"
+                  "The LLM produced unparseable responses for these questions:\n"
+                  (->> errors (take 5)
+                       (map (fn [[question _]] (str "  - \"" question "\"")))
+                       (str/join "\n"))
+                  "\n\n"))
+           ;; Negative user feedback cross-referenced with agent reflection
+           (when (seq neg-fb)
+             (str "### Negatively rated answers (" (count neg-fb) " — HIGHEST PRIORITY)\n"
+                  "Users rated these answers unhelpful. The agent's own reflection on each session is included — use both signals to diagnose the root cause.\n"
+                  (->> neg-fb
+                       (take 10)
+                       (map (fn [[question comment answer missing quality notes]]
+                              (str "  - Q: \"" question "\"\n"
+                                   "    Answer: " (subs answer 0 (min 100 (count answer)))
+                                   (when (seq comment) (str "\n    User comment: \"" comment "\""))
+                                   (when (seq missing) (str "\n    Agent said was MISSING: " missing))
+                                   (when (seq quality) (str "\n    Agent flagged QUALITY issues: " quality))
+                                   (when (seq notes)   (str "\n    Agent notes: " notes)))))
+                       (str/join "\n"))
+                  "\n\n"))
+           ;; Popular query patterns
+           (when (seq popular)
+             (str "### Most common Datalog patterns (top 10)\n"
+                  "These queries are written most often — consider making them named queries:\n"
+                  (->> popular
+                       (sort-by second >)
+                       (take 10)
+                       (map (fn [[qedn cnt]]
+                              (str "  - (" cnt "x) " (subs qedn 0 (min 80 (count qedn))))))
+                       (str/join "\n"))
+                  "\n\n"))
+           ;; Agent-reported missing attributes
+           (when (seq missing-attrs)
+             (let [all-items (->> missing-attrs
+                                  (mapcat (fn [[s]] (try (edn/read-string s) (catch Exception _ []))))
+                                  frequencies
+                                  (sort-by val >))]
+               (when (seq all-items)
+                 (str "### Data Gaps Reported by Ask Agents (" (count all-items) " distinct)\n"
+                      "Attributes or relationships agents needed but couldn't find:\n"
+                      (->> all-items (take 15)
+                           (map (fn [[attr cnt]] (str "  - " attr " (reported " cnt "x)")))
+                           (str/join "\n"))
+                      "\n\n"))))
+           ;; Agent-reported quality issues
+           (when (seq quality-iss)
+             (let [all-items (->> quality-iss
+                                  (mapcat (fn [[s]] (try (edn/read-string s) (catch Exception _ []))))
+                                  frequencies
+                                  (sort-by val >))]
+               (when (seq all-items)
+                 (str "### Data Quality Issues Reported by Agents (" (count all-items) " distinct)\n"
+                      (->> all-items (take 10)
+                           (map (fn [[issue cnt]] (str "  - " issue " (reported " cnt "x)")))
+                           (str/join "\n"))
+                      "\n\n"))))
+           ;; Agent-suggested named queries
+           (when (seq suggested-qs)
+             (let [all-items (->> suggested-qs
+                                  (mapcat (fn [[s]] (try (edn/read-string s) (catch Exception _ []))))
+                                  frequencies
+                                  (sort-by val >))]
+               (when (seq all-items)
+                 (str "### Named Queries Suggested by Agents (" (count all-items) " distinct)\n"
+                      "Queries agents wished existed — consider adding these:\n"
+                      (->> all-items (take 10)
+                           (map (fn [[q cnt]] (str "  - " q " (suggested " cnt "x)")))
+                           (str/join "\n"))
+                      "\n\n"))))))))
+
 ;; --- Meta-prompt assembly ---
 
 (defn- format-scores [results]
@@ -133,6 +277,7 @@
         (str/replace "{{baseline-mean}}" (format "%.1f%%" (* 100.0 base-mean)))
         (str/replace "{{baseline-scores}}" (format-scores baseline-results))
         (str/replace "{{gap-analysis}}" (gap-analysis baseline-results))
+        (str/replace "{{ask-insights}}" (ask-session-insights meta-db))
         (str/replace "{{history}}" (format-history history)))))
 
 ;; --- Proposal parsing ---

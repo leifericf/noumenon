@@ -15,6 +15,7 @@
             [noumenon.git :as git]
             [noumenon.imports :as imports]
             [noumenon.introspect :as introspect]
+            [noumenon.ask-store :as ask-store]
             [noumenon.llm :as llm]
             [noumenon.query :as query]
             [noumenon.sessions :as sessions]
@@ -113,28 +114,38 @@
 
 (defn- resolve-repo
   "Resolve repo-path from request params, return context map or throw.
-   Accepts a filesystem path or a database name (looks up :repo/uri)."
+   Accepts a filesystem path or a database name."
   [repo-path db-dir]
   (let [as-file   (io/file repo-path)
         valid?    (and (.exists as-file) (nil? (util/validate-repo-path (.getCanonicalPath as-file))))
-        canonical (if valid?
-                    (.getCanonicalPath as-file)
-                    ;; Try as database name — look up stored repo/uri
-                    (or (lookup-repo-uri db-dir repo-path)
-                        (throw (ex-info (str "Repository not found: " repo-path
-                                             ". Use a filesystem path or a database name from `noum databases`.")
-                                        {:status 400
-                                         :message (str "Repository not found: " repo-path
-                                                       ". Use a filesystem path or a database name.")}))))]
-    (when-let [reason (util/validate-repo-path canonical)]
-      (throw (ex-info (str "Invalid repository: " reason " (" canonical ")")
-                      {:status 400 :message (str "Invalid repository: " reason)})))
-    (let [db-name (util/derive-db-name canonical)]
-      {:repo-path canonical
-       :db-dir    db-dir
-       :db-name   db-name
-       :conn      (db/get-or-create-conn db-dir db-name)
-       :meta-conn (db/ensure-meta-db db-dir)})))
+        ;; Try as filesystem path first
+        canonical (when valid? (.getCanonicalPath as-file))
+        ;; If not a valid path, try as database name
+        db-name   (if canonical
+                    (util/derive-db-name canonical)
+                    repo-path)
+        ;; Check if the database directory exists for bare db names
+        db-path   (when-not canonical
+                    (io/file db-dir "noumenon" db-name))
+        repo-uri  (when-not canonical
+                    (or (lookup-repo-uri db-dir db-name)
+                        ;; Use a synthetic path for databases without stored URI
+                        (when (and db-path (.isDirectory db-path))
+                          (str "db://" db-name))))]
+    (when (and (not canonical) (not repo-uri))
+      (throw (ex-info (str "Repository not found: " repo-path)
+                      {:status 400
+                       :message (str "Repository not found: " repo-path
+                                     ". Use a filesystem path or a database name.")})))
+    (when canonical
+      (when-let [reason (util/validate-repo-path canonical)]
+        (throw (ex-info (str "Invalid repository: " reason)
+                        {:status 400 :message (str "Invalid repository: " reason)}))))
+    {:repo-path (or canonical repo-uri)
+     :db-dir    db-dir
+     :db-name   db-name
+     :conn      (db/get-or-create-conn db-dir db-name)
+     :meta-conn (db/ensure-meta-db db-dir)}))
 
 (defn- with-repo
   "Execute f with resolved repo context. Returns JSON response."
@@ -157,6 +168,16 @@
   [request]
   (some-> (get-in request [:headers "accept"]) (str/includes? "text/event-stream")))
 
+(def ^:private cors-headers
+  {"Access-Control-Allow-Origin"  "*"
+   "Access-Control-Allow-Methods" "GET, POST, DELETE, OPTIONS"
+   "Access-Control-Allow-Headers" "Content-Type, Accept, Authorization"})
+
+(defn- with-cors
+  "Add CORS headers to a response."
+  [response]
+  (update response :headers merge cors-headers))
+
 (defn- with-sse
   "Run body-fn in a future, streaming progress via SSE. body-fn receives a progress-fn.
    Sends the final result as an event and closes the channel."
@@ -165,9 +186,10 @@
                      {:on-open
                       (fn [ch]
                         (server/send! ch {:status  200
-                                          :headers {"Content-Type"  "text/event-stream"
-                                                    "Cache-Control" "no-cache"
-                                                    "Connection"    "keep-alive"}}
+                                          :headers (merge cors-headers
+                                                          {"Content-Type"  "text/event-stream"
+                                                           "Cache-Control" "no-cache"
+                                                           "Connection"    "keep-alive"})}
                                       false)
                         (future
                           (try
@@ -304,26 +326,49 @@
           (with-sse request (partial run-digest ctx params config))
           (ok (run-digest ctx params config nil)))))))
 
+(defn- run-ask [{:keys [db meta-db meta-conn db-name]} params config progress-fn]
+  (let [{:keys [invoke-fn]}
+        (llm/make-messages-fn-from-opts
+         (merge (resolve-provider params config)
+                {:temperature 0.3 :max-tokens 4096}))
+        max-iter   (min (or (:max_iterations params) 10) 50)
+        started-at (java.util.Date.)
+        start-ms   (System/currentTimeMillis)
+        channel    (keyword (or (:channel params) "unknown"))
+        caller     (keyword (or (:caller params) "human"))
+        result     (agent/ask meta-db db (:question params)
+                              {:invoke-fn      invoke-fn
+                               :repo-name      db-name
+                               :max-iterations max-iter
+                               :continue-from  (:continue_from params)
+                               :on-iteration   progress-fn})
+        duration   (- (System/currentTimeMillis) start-ms)
+        session-id (try
+                     (ask-store/save-session!
+                      meta-conn result
+                      {:channel     channel
+                       :caller      caller
+                       :repo        db-name
+                       :question    (:question params)
+                       :started-at  started-at
+                       :duration-ms duration})
+                     (catch Exception e
+                       (log! "ask-store/error" (.getMessage e))
+                       nil))]
+    {:answer     (:answer result)
+     :status     (:status result)
+     :session-id session-id
+     :usage      (:usage result)}))
+
 (defn- handle-ask [request config]
   (let [params (parse-json-body request)]
     (when-not (:question params)
       (throw (ex-info "Missing question" {:status 400 :message "question is required"})))
     (with-repo params (:db-dir config)
-      (fn [{:keys [db meta-db db-name]}]
-        (let [{:keys [invoke-fn]}
-              (llm/make-messages-fn-from-opts
-               (merge (resolve-provider params config)
-                      {:temperature 0.3 :max-tokens 4096}))
-              max-iter (min (or (:max_iterations params) 10) 50)
-              result   (agent/ask meta-db db (:question params)
-                                  {:invoke-fn      invoke-fn
-                                   :repo-name      db-name
-                                   :max-iterations max-iter
-                                   :continue-from  (:continue_from params)})]
-          (ok {:answer     (:answer result)
-               :status     (:status result)
-               :session-id (:session-id result)
-               :usage      (:usage result)}))))))
+      (fn [ctx]
+        (if (wants-sse? request)
+          (with-sse request (partial run-ask ctx params config))
+          (ok (run-ask ctx params config nil)))))))
 
 (defn- handle-query-exec [request config]
   (let [params (parse-json-body request)]
@@ -341,6 +386,54 @@
                    :total   (count rows)
                    :results (take limit rows)}))
             (error-response 400 (:error result))))))))
+
+(defn- handle-query-raw [request config]
+  (let [params (parse-json-body request)]
+    (with-repo params (:db-dir config)
+      (fn [{:keys [db]}]
+        (let [query-edn (:query params)
+              limit     (min (or (:limit params) 500) 10000)]
+          (when-not query-edn
+            (throw (ex-info "Missing query" {:status 400 :message "query is required (EDN string)"})))
+          (let [parsed (try (clojure.edn/read-string query-edn)
+                            (catch Exception e
+                              (throw (ex-info "Invalid EDN"
+                                              {:status 400 :message (str "Invalid EDN: " (.getMessage e))}))))
+                results (try (d/q parsed db)
+                             (catch Exception e
+                               (throw (ex-info "Query failed"
+                                               {:status 400 :message (str "Query error: " (.getMessage e))}))))]
+            (ok {:total   (count results)
+                 :results (take limit (vec results))})))))))
+
+(defn- handle-query-as-of [request config]
+  (let [params (parse-json-body request)]
+    (with-repo params (:db-dir config)
+      (fn [{:keys [conn meta-db]}]
+        (let [as-of-str  (:as_of params)
+              query-name (:query_name params)
+              raw-params (or (:params params) {})
+              kw-params  (into {} (map (fn [[k v]] [(keyword (name k)) v])) raw-params)
+              _          (validate-query-params! kw-params)
+              limit      (min (or (:limit params) 500) 10000)]
+          (when-not as-of-str
+            (throw (ex-info "Missing as_of" {:status 400 :message "as_of is required (ISO-8601 or epoch ms)"})))
+          (let [as-of-inst (try
+                             (if (string? as-of-str)
+                               (java.util.Date/from (java.time.Instant/parse as-of-str))
+                               (java.util.Date. (long as-of-str)))
+                             (catch Exception e
+                               (throw (ex-info "Invalid as_of"
+                                               {:status 400 :message (str "Invalid as_of: " (.getMessage e))}))))
+                db (d/as-of (d/db conn) as-of-inst)
+                result (query/run-named-query meta-db db query-name kw-params)]
+            (if (:ok result)
+              (let [rows (:ok result)]
+                (ok {:query   query-name
+                     :as-of   (str as-of-inst)
+                     :total   (count rows)
+                     :results (take limit rows)}))
+              (error-response 400 (:error result)))))))))
 
 (defn- handle-queries [_request config]
   (let [meta-conn (db/ensure-meta-db (:db-dir config))
@@ -578,8 +671,10 @@
   (let [params     (merge (parse-json-body request) (:query-params request))
         query-name (or (:query_name params)
                        (get-in request [:params :query]))]
-    (when-not (str/starts-with? (str query-name) "introspect-")
-      (throw (ex-info "Only introspect-* queries" {:status 400 :message "Only introspect-* queries"})))
+    (when-not (or (str/starts-with? (str query-name) "introspect-")
+                  (str/starts-with? (str query-name) "ask-"))
+      (throw (ex-info "Only introspect-* and ask-* queries"
+                      {:status 400 :message "Only introspect-* and ask-* queries"})))
     (let [meta-conn (db/ensure-meta-db (:db-dir config))
           meta-db   (d/db meta-conn)
           result    (query/run-named-query meta-db meta-db query-name)]
@@ -602,6 +697,129 @@
                     "rules"  (artifacts/rules-history meta-conn)
                     (throw (ex-info "Invalid type" {:status 400 :message "type must be 'prompt' or 'rules'"})))]
     (ok history)))
+
+;; --- Ask sessions ---
+
+(defn- handle-ask-sessions [_request config]
+  (let [meta-conn (db/ensure-meta-db (:db-dir config))
+        sessions  (ask-store/list-sessions (d/db meta-conn))]
+    (ok sessions)))
+
+(defn- handle-ask-session-detail [request config]
+  (let [params     (merge (parse-json-body request) (:query-params request))
+        session-id (or (:session_id params) (get-in request [:params :id]))]
+    (when-not session-id
+      (throw (ex-info "Missing session_id" {:status 400 :message "session_id is required"})))
+    (let [meta-conn (db/ensure-meta-db (:db-dir config))
+          session   (ask-store/get-session (d/db meta-conn) session-id)]
+      (if session
+        (ok session)
+        (error-response 404 "Session not found")))))
+
+(defn- handle-ask-session-feedback [request config]
+  (let [params     (parse-json-body request)
+        session-id (or (:session_id params) (get-in request [:params :id]))
+        comment    (or (:comment params) "")]
+    (when-not session-id
+      (throw (ex-info "Missing session_id" {:status 400 :message "session_id is required"})))
+    (let [meta-conn (db/ensure-meta-db (:db-dir config))]
+      (ask-store/set-feedback! meta-conn session-id comment)
+      (ok {:session-id session-id}))))
+
+;; Cache completion source data per db-name (invalidated on import/enrich)
+(defonce ^:private completion-cache (atom {}))
+
+(defn- get-completion-data
+  "Load or return cached completion source data for a repo."
+  [db meta-db db-name]
+  (let [cached (get @completion-cache db-name)]
+    (if (and cached (> (:ttl cached) (System/currentTimeMillis)))
+      (:data cached)
+      (let [data {:files   (->> (d/q '[:find ?path :where [?f :file/path ?path]] db)
+                                (mapv first))
+                  :dirs    (->> (d/q '[:find ?path :where [?d :dir/path ?path]] db)
+                                (mapv first))
+                  :authors (->> (d/q '[:find ?name :where [?p :person/name ?name]] db)
+                                (mapv first))
+                  :commits (->> (d/q '[:find ?sha ?msg
+                                       :where [?c :git/type :commit]
+                                       [?c :git/sha ?sha] [?c :commit/message ?msg]] db)
+                                vec)
+                  :segments (->> (d/q '[:find ?name ?kind
+                                        :where [?s :code/name ?name] [?s :code/kind ?kind]] db)
+                                 vec)
+                  :queries (vec (artifacts/list-active-query-names meta-db))}]
+        (swap! completion-cache assoc db-name
+               {:data data :ttl (+ (System/currentTimeMillis) 60000)}) ;; 60s TTL
+        data))))
+
+(defn- handle-completions [request config]
+  (let [params (:query-params request)
+        prefix (or (:prefix params) "")
+        repo   (:repo_path params)]
+    (when-not repo
+      (throw (ex-info "Missing repo_path" {:status 400 :message "repo_path is required"})))
+    (with-repo {:repo_path repo} (:db-dir config)
+      (fn [{:keys [db meta-db db-name]}]
+        (let [src       (get-completion-data db meta-db db-name)
+              lc-prefix (.toLowerCase ^String prefix)
+              ;; All filtering is in-memory against cached data
+              files    (->> (:files src)
+                            (filter #(.contains (.toLowerCase ^String %) lc-prefix))
+                            (sort)
+                            (take 10))
+              authors  (->> (:authors src)
+                            (filter #(.contains (.toLowerCase ^String %) lc-prefix))
+                            (sort)
+                            (take 5))
+              commits  (->> (:commits src)
+                            (filter (fn [[sha msg]]
+                                      (or (.startsWith ^String sha lc-prefix)
+                                          (.contains (.toLowerCase ^String msg) lc-prefix))))
+                            (take 5))
+              dirs     (->> (:dirs src)
+                            (filter #(.contains (.toLowerCase ^String %) lc-prefix))
+                            (sort)
+                            (take 5))
+              queries  (->> (:queries src)
+                            (filter #(.contains (.toLowerCase ^String %) lc-prefix))
+                            (take 5))
+              segments (->> (:segments src)
+                            (filter (fn [[n _]] (.contains (.toLowerCase ^String n) lc-prefix)))
+                            (take 5))
+              items   (concat
+                       ;; Most specific matches first
+                       (map (fn [[sha msg]]
+                              {:type "commit"
+                               :value (subs sha 0 (min 7 (count sha)))
+                               :label (subs msg 0 (min 60 (count msg)))})
+                            commits)
+                       (map (fn [[n kind]] {:type (name kind) :value n}) segments)
+                       (map (fn [q] {:type "query" :value q}) queries)
+                       (map (fn [a] {:type "author" :value a}) authors)
+                       (map (fn [p] {:type "file" :value p}) files)
+                       (map (fn [d] {:type "dir" :value d}) dirs))]
+          (ok (vec (take 15 items))))))))
+
+;; --- Settings ---
+
+(defn- handle-settings-get [_request config]
+  (let [meta-conn (db/ensure-meta-db (:db-dir config))
+        settings  (artifacts/get-all-settings (d/db meta-conn))]
+    (ok settings)))
+
+(defn- handle-settings-post [request config]
+  (let [params    (parse-json-body request)
+        key       (:key params)
+        value     (:value params)]
+    (when-not (and key (some? value))
+      (throw (ex-info "Missing key or value" {:status 400 :message "key and value are required"})))
+    (let [meta-conn (db/ensure-meta-db (:db-dir config))
+          edn-value (if (string? value)
+                      (try (clojure.edn/read-string value) (catch Exception _ value))
+                      value)]
+      (artifacts/set-setting! meta-conn key edn-value)
+      (ok {:key key}))))
 
 ;; --- Routing ---
 
@@ -635,6 +853,8 @@
    [:post "/api/digest"                handle-digest]
    [:post "/api/ask"                   handle-ask]
    [:post "/api/query"                 handle-query-exec]
+   [:post "/api/query-raw"             handle-query-raw]
+   [:post "/api/query-as-of"           handle-query-as-of]
    [:get  "/api/queries"               handle-queries]
    [:get  "/api/schema/:repo"          handle-schema]
    [:get  "/api/status/:repo"          handle-status]
@@ -648,7 +868,13 @@
    [:post "/api/introspect/stop"       handle-introspect-stop]
    [:get  "/api/introspect/history"    handle-introspect-history]
    [:post "/api/reseed"                handle-reseed]
-   [:get  "/api/artifacts/history"     handle-artifact-history]])
+   [:get  "/api/artifacts/history"     handle-artifact-history]
+   [:get  "/api/completions"           handle-completions]
+   [:get  "/api/settings"              handle-settings-get]
+   [:post "/api/settings"              handle-settings-post]
+   [:get  "/api/ask/sessions"          handle-ask-sessions]
+   [:get  "/api/ask/sessions/:id"      handle-ask-session-detail]
+   [:post "/api/ask/sessions/:id/feedback" handle-ask-session-feedback]])
 
 (defn- match-route [method path]
   (some (fn [[route-method pattern handler]]
@@ -684,24 +910,28 @@
     (let [method (keyword (str/lower-case (name (:request-method request))))
           path   (:uri request)
           qp     (parse-query-params (:query-string request))]
-      (if-let [{:keys [handler params]} (match-route method path)]
-        (let [request (assoc request
-                             :params (merge (:params request) params)
-                             :query-params qp)]
-          (or (check-auth request (:token config))
-              (try
-                (handler request config)
-                (catch clojure.lang.ExceptionInfo e
-                  (let [data (ex-data e)
-                        status (or (:status data) 500)]
-                    (when (>= status 500)
-                      (log! "http/error" (.getMessage e)))
-                    (error-response status
-                                    (or (:message data) "Internal server error"))))
-                (catch Exception e
-                  (log! "http/error" (.getMessage e))
-                  (error-response 500 "Internal server error")))))
-        (error-response 404 "Not found")))))
+      ;; Handle CORS preflight
+      (if (= method :options)
+        (with-cors {:status 204 :headers {} :body nil})
+        (with-cors
+          (if-let [{:keys [handler params]} (match-route method path)]
+            (let [request (assoc request
+                                 :params (merge (:params request) params)
+                                 :query-params qp)]
+              (or (check-auth request (:token config))
+                  (try
+                    (handler request config)
+                    (catch clojure.lang.ExceptionInfo e
+                      (let [data (ex-data e)
+                            status (or (:status data) 500)]
+                        (when (>= status 500)
+                          (log! "http/error" (.getMessage e)))
+                        (error-response status
+                                        (or (:message data) "Internal server error"))))
+                    (catch Exception e
+                      (log! "http/error" (.getMessage e))
+                      (error-response 500 "Internal server error")))))
+            (error-response 404 "Not found")))))))
 
 ;; --- Server lifecycle ---
 

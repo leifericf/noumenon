@@ -1,0 +1,10 @@
+[{:db/ident       :setting/key
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Setting identifier (e.g. \"theme\", \"sidebar-collapsed\")"}
+
+ {:db/ident       :setting/value
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Setting value as pr-str EDN"}]

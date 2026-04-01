@@ -215,14 +215,15 @@
 (defn dispatch-tool
   "Dispatch a parsed tool call. Returns {:result string} or {:answer string}."
   [meta-db db tool-call]
-  (let [handlers {:query  (fn [args] {:result (dispatch-query meta-db db args)})
-                  :schema (fn [_] {:result (dispatch-schema db)})
-                  :rules  (fn [_] {:result (dispatch-rules meta-db)})
-                  :answer (fn [args] {:answer (:text args "")})}]
+  (let [handlers {:query   (fn [args] {:result (dispatch-query meta-db db args)})
+                  :schema  (fn [_] {:result (dispatch-schema db)})
+                  :rules   (fn [_] {:result (dispatch-rules meta-db)})
+                  :answer  (fn [args] {:answer (:text args "")})
+                  :reflect (fn [args] {:reflect args})}]
     (if-let [handle (handlers (:tool tool-call))]
       (handle (:args tool-call))
       {:result (str "Unknown tool: " (:tool tool-call)
-                    ". Available: :query, :schema, :rules, :answer")})))
+                    ". Available: :query, :schema, :rules, :answer, :reflect")})))
 
 ;; --- Session storage (for resumable budget-exhausted runs) ---
 
@@ -260,10 +261,15 @@
 
 (def ^:private budget-nudge
   (str "You have reached your iteration budget. "
-       "You MUST respond with {:tool :answer :args {:text \"...\"}} NOW. "
-       "Synthesize the best answer you can from the information gathered so far. "
-       "If your answer is incomplete, state what is missing in one sentence. "
-       "Do not describe hypothetical queries or what you would do with more budget."))
+       "First, emit a :reflect tool call with your observations about the data, then emit your :answer. "
+       "Respond with a vector of two tool calls:\n"
+       "[{:tool :reflect :args {:missing-attributes [\"...\"] :quality-issues [\"...\"] "
+       ":suggested-queries [\"...\"] :notes \"...\"}}\n"
+       " {:tool :answer :args {:text \"...\"}}]\n"
+       "In :reflect, report: attributes you needed but couldn't find, data quality issues you observed, "
+       "named queries that would have helped. If none, use empty vectors. "
+       "In :answer, synthesize the best answer from what you gathered. "
+       "If incomplete, state what is missing."))
 
 (defn- iteration-prefix [iterations max-iterations]
   (str "[Iteration " (inc iterations) "/" max-iterations "] "))
@@ -327,30 +333,38 @@
          :iterations (inc iterations)
          :total-usage usage
          :max-iterations max-iterations}
-        ;; parsed is a vector of tool calls — check for :answer first
-        (if-let [answer-call (some #(when (= :answer (:tool %)) %) parsed)]
-          (let [{:keys [answer]} (dispatch-tool meta-db db answer-call)]
-            {:done {:answer answer
-                    :steps  (conj steps (assoc step :answer answer))
-                    :usage  (assoc usage :iterations (inc iterations))
-                    :status :answered}})
-          ;; Execute all tool calls (in parallel if >1)
-          (let [results (if (= 1 (count parsed))
-                          [(dispatch-tool meta-db db (first parsed))]
-                          (pmap #(dispatch-tool meta-db db %) parsed))
-                combined (if (= 1 (count results))
-                           (:result (first results))
-                           (->> results
-                                (map-indexed (fn [i r]
-                                               (str "Tool result (" (inc i) "/" (count results) "):\n"
-                                                    (:result r))))
-                                (str/join "\n\n")))]
-            {:messages (tool-result-transition messages (:text response) combined
-                                               iterations max-iterations)
-             :steps (conj steps (assoc step :tool-result combined))
-             :iterations (inc iterations)
-             :total-usage usage
-             :max-iterations max-iterations}))))))
+        ;; Check for :answer and :reflect tool calls
+        (let [answer-call  (some #(when (= :answer (:tool %)) %) parsed)
+              reflect-call (some #(when (= :reflect (:tool %)) %) parsed)
+              reflection   (when reflect-call
+                             (:args reflect-call))]
+          (if answer-call
+            (let [{:keys [answer]} (dispatch-tool meta-db db answer-call)]
+              {:done {:answer     answer
+                      :reflection reflection
+                      :steps      (conj steps (cond-> (assoc step :answer answer)
+                                                reflection (assoc :reflection reflection)))
+                      :usage      (assoc usage :iterations (inc iterations))
+                      :status     :answered}})
+            ;; Execute non-answer, non-reflect tool calls
+            (let [exec-calls (remove #(= :reflect (:tool %)) parsed)
+                  results    (if (<= (count exec-calls) 1)
+                               [(dispatch-tool meta-db db (first exec-calls))]
+                               (pmap #(dispatch-tool meta-db db %) exec-calls))
+                  combined   (if (= 1 (count results))
+                               (:result (first results))
+                               (->> results
+                                    (map-indexed (fn [i r]
+                                                   (str "Tool result (" (inc i) "/" (count results) "):\n"
+                                                        (:result r))))
+                                    (str/join "\n\n")))]
+              {:messages (tool-result-transition messages (:text response) combined
+                                                 iterations max-iterations)
+               :steps (conj steps (cond-> (assoc step :tool-result combined)
+                                    reflection (assoc :reflection reflection)))
+               :iterations (inc iterations)
+               :total-usage usage
+               :max-iterations max-iterations})))))))
 
 (defn- model-hint
   "If a trained model is available, generate a hint suggesting which
@@ -370,8 +384,9 @@
   "Run the agent loop: prompt → parse → dispatch → repeat.
    Returns {:answer string :steps vec :usage {:iterations n :input-tokens n :output-tokens n}
             :status :answered|:budget-exhausted :session-id string?}.
-   Pass :continue-from session-id to resume a budget-exhausted session."
-  [meta-db db question {:keys [invoke-fn repo-name max-iterations continue-from]
+   Pass :continue-from session-id to resume a budget-exhausted session.
+   Pass :on-iteration (fn [{:keys [iteration max-iterations message]}]) for progress."
+  [meta-db db question {:keys [invoke-fn repo-name max-iterations continue-from on-iteration]
                         :or   {max-iterations default-max-iterations}}]
   (let [sys-prompt (build-system-prompt meta-db db repo-name)
         context    {:meta-db meta-db :db db :invoke-fn invoke-fn :system-prompt sys-prompt}
@@ -384,8 +399,92 @@
                       :iterations 0
                       :total-usage llm/zero-usage
                       :max-iterations max-iterations})]
-    (loop [state initial]
-      (let [nxt (next-state context state)]
-        (if-let [done (:done nxt)]
-          done
-          (recur nxt))))))
+    (let [start-ms (System/currentTimeMillis)]
+      (loop [state initial]
+        ;; Pre-step: announce thinking
+        (when on-iteration
+          (on-iteration {:type    "thinking"
+                         :current (:iterations state)
+                         :total   (:max-iterations state)
+                         :message (if (zero? (:iterations state))
+                                    "Reading the question and planning approach..."
+                                    "Analyzing results and deciding next step...")}))
+        (let [step-start (System/currentTimeMillis)
+              nxt        (next-state context state)]
+          (if-let [done (:done nxt)]
+            (do (when on-iteration
+                  (on-iteration {:type      "done"
+                                 :current   (get-in done [:usage :iterations])
+                                 :total     (get-in done [:usage :iterations])
+                                 :message   "Composing final answer..."
+                                 :elapsed   (- (System/currentTimeMillis) start-ms)}))
+                done)
+            (do
+              (when on-iteration
+                (let [step    (peek (:steps nxt))
+                      elapsed (- (System/currentTimeMillis) step-start)]
+                  (when step
+                    (let [parsed  (:parsed step)
+                          tools   (when (sequential? parsed) (mapv :tool parsed))
+                          args    (when (sequential? parsed) (mapv :args parsed))
+                          result  (:tool-result step)
+                          raw     (:raw-text step)
+                          lines   (when result (str/split-lines result))
+                          n       (count (or lines []))
+                          ;; Extract 2-3 sample rows for display
+                          samples (when (> n 1)
+                                    (->> lines (remove str/blank?) (take 3)
+                                         (mapv #(subs % 0 (min 100 (count %))))))
+                          ;; Extract a one-line reasoning summary from the LLM's raw text
+                          ;; The LLM often starts with reasoning before the EDN tool call
+                          reasoning (when raw
+                                      (let [trimmed (str/trim raw)
+                                            ;; Text before the first { or [ is reasoning
+                                            idx (min (or (str/index-of trimmed "{") 9999)
+                                                     (or (str/index-of trimmed "[") 9999))]
+                                        (when (and (pos? idx) (< idx 9999))
+                                          (let [text (str/trim (subs trimmed 0 idx))]
+                                            (when (seq text)
+                                              (subs text 0 (min 150 (count text))))))))
+                          ;; Humanize attribute names from query
+                          humanize (fn [kw] (str/replace (name kw) #"[-_]" " "))
+                          attrs    (when (and (= 1 (count tools)) (= :query (first tools)))
+                                     (->> (when-let [q (:query (first args))]
+                                            (when (sequential? q) q))
+                                          (filter sequential?)
+                                          (keep (fn [clause]
+                                                  (some #(when (and (keyword? %)
+                                                                    (namespace %))
+                                                           %)
+                                                        clause)))
+                                          distinct
+                                          (take 3)))
+                          desc     (cond
+                                     (:error step)
+                                     "Adjusting approach after a parsing issue..."
+
+                                     (and (= 1 (count tools)) (= :query (first tools)))
+                                     (let [what (if (seq attrs)
+                                                  (str/join ", " (map humanize attrs))
+                                                  "the knowledge graph")]
+                                       (str "Queried " what))
+
+                                     (and (= 1 (count tools)) (= :schema (first tools)))
+                                     "Examined the database schema"
+
+                                     (and (= 1 (count tools)) (= :rules (first tools)))
+                                     "Looked up query rules"
+
+                                     (seq tools)
+                                     (str "Ran " (count tools) " queries in parallel")
+
+                                     :else "Processing...")]
+                      (on-iteration {:type      "step"
+                                     :current   (:iterations nxt)
+                                     :total     (:max-iterations nxt)
+                                     :message   desc
+                                     :reasoning reasoning
+                                     :results   n
+                                     :samples   samples
+                                     :elapsed   elapsed})))))
+              (recur nxt))))))))

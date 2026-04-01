@@ -1,0 +1,6 @@
+{:name "ask-token-cost"
+ :description "Total token usage and session count — track LLM cost of the ask feature"
+ :query [:find (count ?e) (sum ?in) (sum ?out)
+         :where
+         [?e :ask.session/input-tokens ?in]
+         [?e :ask.session/output-tokens ?out]]}

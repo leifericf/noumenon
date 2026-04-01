@@ -1,0 +1,6 @@
+{:name "ask-popular-queries"
+ :description "Most frequently written Datalog queries across all sessions — identifies common patterns"
+ :query [:find ?query-edn (count ?step)
+         :where
+         [?step :ask.step/type :query]
+         [?step :ask.step/query-edn ?query-edn]]}

@@ -1,0 +1,7 @@
+{:name "ask-by-repo"
+ :description "Question count and average iterations per repository"
+ :query [:find ?repo (count ?e) (avg ?iters) (avg ?dur)
+         :where
+         [?e :ask.session/repo ?repo]
+         [?e :ask.session/iterations ?iters]
+         [?e :ask.session/duration-ms ?dur]]}

@@ -1,0 +1,32 @@
+{:deps true
+
+ :dev-http {8281 ["resources/public" "classpath:public"]}
+
+ :builds
+ {:app
+  {:target    :browser
+   :output-dir "resources/public/js"
+   :asset-path "/js"
+   :modules   {:main {:init-fn noumenon.ui.core/init}}
+   :devtools  {:http-root "resources/public"
+               :http-port 8280
+               :repl-init-ns noumenon.ui.core}}
+
+  :portfolio
+  {:target    :browser
+   :output-dir "resources/public/js-portfolio"
+   :asset-path "/js-portfolio"
+   :modules   {:main {:init-fn noumenon.ui.portfolio/init}}}
+
+  :test
+  {:target     :node-test
+   :output-to  "test-out/unit.js"
+   :ns-regexp  "noumenon\\.ui\\.(state|graph-data)-test$"
+   :autorun    true}
+
+  :e2e
+  {:target    :browser-test
+   :test-dir  "test-out/e2e"
+   :ns-regexp "noumenon\\.ui\\.e2e\\."
+   :devtools  {:http-root "test-out/e2e"
+               :http-port 8282}}}}

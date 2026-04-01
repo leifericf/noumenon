@@ -1,0 +1,6 @@
+{:name "ask-by-channel"
+ :description "Question count and average duration grouped by channel (cli, ui, mcp)"
+ :query [:find ?channel (count ?e) (avg ?dur)
+         :where
+         [?e :ask.session/channel ?channel]
+         [?e :ask.session/duration-ms ?dur]]}

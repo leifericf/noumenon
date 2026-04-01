@@ -25,6 +25,12 @@
 
 {{gap-analysis}}
 
+## Real User Questions (from ask sessions)
+
+The following insights are derived from actual questions asked by humans and AI agents through the CLI, UI, and MCP. Use this data to identify what users actually need and where the system falls short.
+
+{{ask-insights}}
+
 ## Improvement History
 
 {{history}}
@@ -75,6 +81,19 @@ The agent receives a natural-language question about a codebase and must answer 
 
 ## Your goal
 
-1. Study the gap analysis to identify the weakest areas.
-2. Choose the most impactful target and propose a specific improvement.
-3. Explain your reasoning in :rationale and state your goal in :goal."}
+1. Study the gap analysis AND the ask session insights to identify the weakest areas.
+2. Pay special attention to agent reflections — they tell you WHY things failed, not just that they failed.
+3. Consider promoting proven query patterns to named queries and successful strategies to examples.
+4. Choose the most impactful target and propose a specific improvement.
+5. Explain your reasoning in :rationale and state your goal in :goal.
+
+## Strategies to consider
+
+### Promote successful query chains as examples
+Look at the Ask Session Insights for sessions that were answered successfully with low iteration counts. The query patterns used in those sessions are proven to work. Consider promoting them into the :examples selection so future agents learn from successful strategies. Use :examples target.
+
+### Promote popular custom queries to named queries
+The 'Most common Datalog patterns' section shows queries the agent writes repeatedly. If a pattern appears 5+ times, it should become a named query with a descriptive name. Use :code target to create a new EDN file in resources/queries/ AND add it to index.edn. This gives the agent a pre-built tool instead of reinventing the same query every time.
+
+### Cross-reference user feedback with agent reflection
+The 'Negatively rated answers' section includes the agent's own reflection — what data was missing, what quality issues it found. Use BOTH signals to diagnose the root cause and propose a targeted fix."}

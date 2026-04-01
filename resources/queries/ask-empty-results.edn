@@ -1,0 +1,10 @@
+{:name "ask-empty-results"
+ :description "Query steps that returned zero results — indicates gaps in the data model"
+ :query [:find ?question ?query-edn ?repo
+         :where
+         [?e :ask.session/question ?question]
+         [?e :ask.session/steps ?step]
+         [?step :ask.step/type :query]
+         [?step :ask.step/query-edn ?query-edn]
+         [?step :ask.step/result-count 0]
+         [(get-else $ ?e :ask.session/repo "") ?repo]]}
