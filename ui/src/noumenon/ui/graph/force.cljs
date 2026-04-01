@@ -30,8 +30,8 @@
     sim))
 
 (defn create-component-simulation
-  "Simulation tuned for 10-30 large component nodes.
-   Wider spacing, stronger repulsion, larger collision radius."
+  "Simulation tuned for 10-30 component nodes.
+   Moderate spacing, centered layout."
   [nodes edges {:keys [on-tick width height]}]
   (let [cx  (/ (or width 800) 2)
         cy  (/ (or height 600) 2)
@@ -39,17 +39,20 @@
                 (.force "link"
                         (-> (d3/forceLink (clj->js edges))
                             (.id (fn [d] (.-id d)))
-                            (.distance 140)
-                            (.strength 0.2)))
+                            (.distance 100)
+                            (.strength 0.25)))
                 (.force "charge"
                         (-> (d3/forceManyBody)
-                            (.strength -200)
-                            (.distanceMax 400)))
+                            (.strength -100)
+                            (.distanceMax 250)))
                 (.force "center"
                         (d3/forceCenter cx cy))
+                ;; Pull all nodes toward center — stronger to rein in outliers
+                (.force "x" (-> (d3/forceX cx) (.strength 0.1)))
+                (.force "y" (-> (d3/forceY cy) (.strength 0.1)))
                 (.force "collide"
                         (-> (d3/forceCollide)
-                            (.radius 30)))
+                            (.radius 25)))
                 (.alpha 0.8)
                 (.alphaDecay 0.03)
                 (.velocityDecay 0.4)
@@ -58,23 +61,23 @@
 
 (defn create-cluster-simulation
   "Localized simulation for a cluster of child nodes.
-   Anchored near (cx, cy), faster settling than main simulation."
+   Anchored near (cx, cy), compact layout."
   [nodes edges {:keys [cx cy on-tick]}]
   (-> (d3/forceSimulation (clj->js nodes))
       (.force "link"
               (-> (d3/forceLink (clj->js edges))
                   (.id (fn [d] (.-id d)))
-                  (.distance 40)
-                  (.strength 0.5)))
+                  (.distance 50)
+                  (.strength 0.4)))
       (.force "charge"
               (-> (d3/forceManyBody)
-                  (.strength -40)
-                  (.distanceMax 120)))
-      (.force "x" (-> (d3/forceX cx) (.strength 0.08)))
-      (.force "y" (-> (d3/forceY cy) (.strength 0.08)))
+                  (.strength -60)
+                  (.distanceMax 200)))
+      (.force "center"
+              (d3/forceCenter cx cy))
       (.force "collide"
               (-> (d3/forceCollide)
-                  (.radius 5)))
+                  (.radius 8)))
       (.alpha 0.6)
       (.alphaDecay 0.05)
       (.velocityDecay 0.5)

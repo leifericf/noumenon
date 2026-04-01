@@ -83,7 +83,7 @@
                [:div {:style {:font-size "11px" :color "rgba(96,165,250,0.8)"
                               :text-align "center" :cursor "pointer"
                               :padding "6px 0" :border-top "1px solid rgba(255,255,255,0.06)"}
-                      :on {:click [:action/graph-expand-component (:id node)]}
+                      :on {:click [:action/graph-expand-component {:id (:id node)}]}
                       :role "button"}
                 "Explore files"]))
 
@@ -273,7 +273,8 @@
 (defn app-shell [state]
   (let [{:keys [toasts daemon/status databases/list db-name
                 graph/selected graph/node-card graph/node-card-pos
-                graph/nodes]} state]
+                graph/nodes ask/panel-x ask/panel-y]} state
+        panel-centered? (nil? panel-x)]
     [:div {:style {:position "relative"
                    :width "100vw"
                    :height "100vh"
@@ -281,19 +282,36 @@
                    :background "#0a0e17"}}
      ;; Graph — full viewport background
      (graph/graph-canvas state)
-     ;; Ask — floating overlay
-     [:div {:style {:position "absolute"
-                    :top 0
-                    :left "50%"
-                    :transform "translateX(-50%)"
-                    :width "100%"
-                    :max-width "720px"
-                    :max-height "100vh"
-                    :overflow-y "auto"
-                    :padding "24px"
-                    :pointer-events "none"
-                    :z-index 10}}
-      [:div {:style {:pointer-events "auto"}}
+     ;; Ask — draggable floating panel
+     [:div {:id "ask-panel"
+            :style (merge
+                    {:position "absolute"
+                     :width "640px"
+                     :max-height "75vh"
+                     :overflow-y "auto"
+                     :z-index 10}
+                    (if panel-centered?
+                      {:top "12vh" :left "50%" :transform "translateX(-50%)"}
+                      {:top (str panel-y "px") :left (str panel-x "px")}))}
+      [:div {:style {:background "rgba(10,14,23,0.85)"
+                     :backdrop-filter "blur(12px)"
+                     :-webkit-backdrop-filter "blur(12px)"
+                     :border-radius "12px"
+                     :border "1px solid rgba(255,255,255,0.06)"
+                     :padding "16px 20px"}}
+       ;; Drag handle
+       [:div {:id "ask-drag-handle"
+              :style {:height "6px"
+                      :cursor "grab"
+                      :display "flex"
+                      :justify-content "center"
+                      :align-items "center"
+                      :margin "-8px -8px 8px"
+                      :padding "4px"
+                      :border-radius "4px"}}
+        [:div {:style {:width "32px" :height "3px"
+                       :background "rgba(255,255,255,0.15)"
+                       :border-radius "2px"}}]]
        (ask/ask-view state)]]
      ;; Node info card — type-aware
      (when (and selected node-card-pos)
@@ -332,6 +350,15 @@
                         :padding "4px 8px"
                         :font-size "11px"}}
           db-name]))
+     ;; Past questions — bottom left, discreet
+     [:div {:style {:position "fixed"
+                    :bottom "24px"
+                    :left "12px"
+                    :max-width "360px"
+                    :max-height "50vh"
+                    :overflow-y "auto"
+                    :z-index 10}}
+      (ask/past-questions-panel state)]
      ;; Toasts
      (toast/toast-container toasts)
      ;; Connection status

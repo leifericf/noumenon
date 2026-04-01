@@ -403,12 +403,26 @@
       (loop [state initial]
         ;; Pre-step: announce thinking
         (when on-iteration
-          (on-iteration {:type    "thinking"
-                         :current (:iterations state)
-                         :total   (:max-iterations state)
-                         :message (if (zero? (:iterations state))
-                                    "Reading the question and planning approach..."
-                                    "Analyzing results and deciding next step...")}))
+          (let [i (:iterations state)
+                thinking-msgs ["Thinking about what to look for..."
+                               "Considering which queries would help..."
+                               "Breaking down the question..."
+                               "Figuring out where to start..."]
+                refining-msgs ["Hmm, let me dig deeper..."
+                               "Interesting — following up on that..."
+                               "Not quite enough yet, trying another angle..."
+                               "Connecting the dots from what I found..."
+                               "Let me cross-reference that..."
+                               "Almost there, checking one more thing..."
+                               "Refining my understanding..."
+                               "That raised a new question..."]]
+            (on-iteration {:type    "thinking"
+                           :current i
+                           :total   (:max-iterations state)
+                           :message (if (zero? i)
+                                      (nth thinking-msgs (mod (hash (:question state)) (count thinking-msgs)))
+                                      (nth refining-msgs (mod (+ i (hash (:question state))) (count refining-msgs))))})))
+
         (let [step-start (System/currentTimeMillis)
               nxt        (next-state context state)]
           (if-let [done (:done nxt)]
@@ -416,7 +430,7 @@
                   (on-iteration {:type      "done"
                                  :current   (get-in done [:usage :iterations])
                                  :total     (get-in done [:usage :iterations])
-                                 :message   "Composing final answer..."
+                                 :message   "Putting it all together..."
                                  :elapsed   (- (System/currentTimeMillis) start-ms)}))
                 done)
             (let [elapsed (- (System/currentTimeMillis) step-start)
@@ -425,7 +439,8 @@
                                              (update ss (dec (count ss)) assoc :elapsed-ms elapsed)
                                              ss)))]
               (when on-iteration
-                (let [step    (peek (:steps nxt))]
+                (let [iteration (:iterations nxt)
+                      step    (peek (:steps nxt))]
                   (when step
                     (let [parsed  (:parsed step)
                           tools   (when (sequential? parsed) (mapv :tool parsed))
@@ -464,24 +479,29 @@
                                           (take 3)))
                           desc     (cond
                                      (:error step)
-                                     "Adjusting approach after a parsing issue..."
+                                     "Hmm, that didn't work — trying a different approach..."
 
                                      (and (= 1 (count tools)) (= :query (first tools)))
                                      (let [what (if (seq attrs)
                                                   (str/join ", " (map humanize attrs))
-                                                  "the knowledge graph")]
-                                       (str "Queried " what))
+                                                  nil)]
+                                       (if what
+                                         (str "Looked at " what)
+                                         (nth ["Searched the codebase"
+                                               "Checked the graph"
+                                               "Ran a query"]
+                                              (mod iteration 3))))
 
                                      (and (= 1 (count tools)) (= :schema (first tools)))
-                                     "Examined the database schema"
+                                     "Checking what data is available..."
 
                                      (and (= 1 (count tools)) (= :rules (first tools)))
-                                     "Looked up query rules"
+                                     "Looking up some patterns..."
 
                                      (seq tools)
-                                     (str "Ran " (count tools) " queries in parallel")
+                                     (str "Running " (count tools) " queries at once")
 
-                                     :else "Processing...")]
+                                     :else "Thinking...")]
                       (on-iteration {:type      "step"
                                      :current   (:iterations nxt)
                                      :total     (:max-iterations nxt)

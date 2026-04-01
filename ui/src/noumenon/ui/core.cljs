@@ -51,16 +51,15 @@
                                                  :expanded-file (:graph/expanded-file s)
                                                  :expand-time   (:graph/expand-time s)}))))
                    ;; Choose simulation type based on depth
+                   w (.-width fresh) h (.-height fresh)
                    sim (case (or depth :components)
                          :components (force/create-component-simulation
                                       nodes edges
-                                      {:width (.-width fresh) :height (.-height fresh)
-                                       :on-tick draw-fn})
-                         ;; For files/segments, use regular simulation
-                         (force/create-simulation
+                                      {:width w :height h :on-tick draw-fn})
+                         ;; Files/segments — tighter cluster centered on screen
+                         (force/create-cluster-simulation
                           nodes edges
-                          {:width (.-width fresh) :height (.-height fresh)
-                           :on-tick draw-fn}))]
+                          {:cx (/ w 2) :cy (/ h 2) :on-tick draw-fn}))]
                (reset! graph/simulation-atom sim)
                ;; Zoom
                (let [raf-pending (atom false)]
@@ -94,16 +93,22 @@
                                           (let [id    (.-id node)
                                                 ntype (keyword (or (.-type node) "file"))
                                                 sx    (.-clientX e)
-                                                sy    (.-clientY e)]
+                                                sy    (.-clientY e)
+                                                ;; Graph-space position from d3 simulation
+                                                gx    (.-x node)
+                                                gy    (.-y node)]
                                             ;; Guard: ignore expand clicks while loading
                                             (when-not (:graph/loading? s)
                                               (case [depth ntype]
                                                 [:components :component]
-                                                (state/dispatch! [:action/graph-expand-component id])
+                                                (state/dispatch! [:action/graph-expand-component
+                                                                  {:id id :cx gx :cy gy}])
                                                 [:files :file]
-                                                (state/dispatch! [:action/graph-expand-file id])
+                                                (state/dispatch! [:action/graph-expand-file
+                                                                  {:id id :cx gx :cy gy}])
                                                 [:files :component]
-                                                (state/dispatch! [:action/graph-expand-component id])
+                                                (state/dispatch! [:action/graph-expand-component
+                                                                  {:id id :cx gx :cy gy}])
                                                 [:segments :segment]
                                                 (state/dispatch! [:action/graph-select-node {:id id :x sx :y sy}])
                                                 (state/dispatch! [:action/graph-select-node {:id id :x sx :y sy}]))))
@@ -273,6 +278,24 @@
                              ;; Third: collapse level if deeper than components
                              (not= depth :components)
                              (state/dispatch! [:action/graph-collapse]))))))
+  ;; Draggable ask panel
+  (let [drag-state (atom nil)]
+    (.addEventListener js/document "mousedown"
+                       (fn [e]
+                         (when (some-> (.-target e) (.closest "#ask-drag-handle"))
+                           (let [panel (.getElementById js/document "ask-panel")
+                                 rect  (.getBoundingClientRect panel)]
+                             (reset! drag-state {:offset-x (- (.-clientX e) (.-left rect))
+                                                 :offset-y (- (.-clientY e) (.-top rect))})
+                             (.preventDefault e)))))
+    (.addEventListener js/document "mousemove"
+                       (fn [e]
+                         (when-let [{:keys [offset-x offset-y]} @drag-state]
+                           (state/dispatch! [:action/ask-panel-move
+                                             {:x (- (.-clientX e) offset-x)
+                                              :y (- (.-clientY e) offset-y)}]))))
+    (.addEventListener js/document "mouseup"
+                       (fn [_] (reset! drag-state nil))))
   ;; Initialize
   (state/dispatch! [:action/ask-init-suggestions])
   (add-watch state/app-state :render (fn [_ _ _ _] (render!)))

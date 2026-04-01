@@ -4,17 +4,17 @@
   (:require [clojure.string :as str]))
 
 (def layer-colors
-  {:core      "#60a5fa"
-   :subsystem "#34d399"
-   :driver    "#fbbf24"
-   :api       "#f472b6"
-   :util      "#94a3b8"
-   nil        "#334155"})
+  {:core      "#7b9abf"   ;; muted steel blue
+   :subsystem "#6b9e8a"   ;; muted sage
+   :driver    "#b8a46e"   ;; muted gold
+   :api       "#a87d9e"   ;; muted mauve
+   :util      "#7a8694"   ;; slate
+   nil        "#4a5568"}) ;; dark slate
 
 (def quality-colors
-  {:clean  "#34d399"
-   :smelly "#fbbf24"
-   :unsafe "#f87171"})
+  {:clean  "#6b9e8a"   ;; muted sage
+   :smelly "#b8a46e"   ;; muted gold
+   :unsafe "#b07070"}) ;; muted rose
 
 ;; --- Lookup-map builders (pure, no caching — inputs are fresh each call) ---
 

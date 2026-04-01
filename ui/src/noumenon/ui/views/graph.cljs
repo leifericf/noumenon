@@ -45,9 +45,9 @@
      ;; Status — depth-aware
      (when (seq nodes)
        [:div {:style {:position "absolute"
-                      :bottom "40px"
-                      :left "16px"
-                      :font-size "11px"
+                      :bottom "8px"
+                      :left "12px"
+                      :font-size "10px"
                       :color "rgba(255,255,255,0.35)"}}
         (case depth
           :components (str (count (filter #(= :component (:type %)) nodes))

@@ -36,7 +36,10 @@
          :graph/breadcrumb      []
          :graph/all-import-edges nil
          :graph/comp-authors    {}
-         :graph/expand-time     nil}))
+         :graph/expand-time     nil
+         ;; Ask panel position (draggable)
+         :ask/panel-x           nil    ;; nil = centered
+         :ask/panel-y           nil}))
 
 ;; --- Pure event handlers ---
 ;; Each returns {:state new-state} or {:state new-state :fx [effects...]}.
@@ -156,6 +159,9 @@
                  :ask/show-post-reasoning? false :ask/reasoning-expanded? false
                  :ask/expanded-session nil :ask/expanded-detail nil
                  :graph/focused-ids nil)})
+
+(defmethod handle-event :action/ask-panel-move [state [_ {:keys [x y]}]]
+  {:state (assoc state :ask/panel-x x :ask/panel-y y)})
 
 (def ^:private suggestion-catalog
   [;; Temporal & churn
@@ -573,19 +579,22 @@
 
 ;; --- Expand/collapse ---
 
-(defmethod handle-event :action/graph-expand-component [state [_ comp-name]]
-  (let [db-name (db-name-from state)
-        cached  (get-in state [:graph/file-cache comp-name])]
+(defmethod handle-event :action/graph-expand-component [state [_ {:keys [id cx cy]}]]
+  (let [comp-name id
+        db-name   (db-name-from state)
+        cached    (get-in state [:graph/file-cache comp-name])]
     (if cached
       {:state (assoc state :graph/depth :files :graph/expanded-comp comp-name
                      :graph/expanded-file nil :graph/breadcrumb [comp-name]
                      :graph/selected nil :graph/node-card nil
-                     :graph/expand-time (.now js/Date))
+                     :graph/expand-time (.now js/Date)
+                     :graph/expand-pos {:cx (or cx 400) :cy (or cy 300)})
        :fx [[:dispatch [:action/graph-file-cluster-ready comp-name]]]}
       {:state (assoc state :graph/depth :files :graph/expanded-comp comp-name
                      :graph/expanded-file nil :graph/breadcrumb [comp-name]
                      :graph/selected nil :graph/node-card nil :graph/loading? true
-                     :graph/expand-time (.now js/Date))
+                     :graph/expand-time (.now js/Date)
+                     :graph/expand-pos {:cx (or cx 400) :cy (or cy 300)})
        :fx (cond-> [[:http/post "/api/query"
                      {:repo_path db-name :query_name "component-files"
                       :params {:component-name comp-name} :limit 200}
@@ -603,10 +612,7 @@
                      :on-error :action/graph-load-error}]))})))
 
 (defmethod handle-event :action/graph-comp-files-loaded [state [_ comp-name data]]
-  (let [parent    (->> (:graph/comp-nodes state)
-                       (filter #(= (:id %) comp-name)) first)
-        cx        (or (:x parent) 400)
-        cy        (or (:y parent) 300)
+  (let [{:keys [cx cy]} (or (:graph/expand-pos state) {:cx 400 :cy 300})
         churn-map (into {} (map (juxt first second))
                         (or (:graph/hotspots state) []))
         nodes     (vec (gdata/build-file-cluster-nodes (:results data) churn-map cx cy))
@@ -625,30 +631,29 @@
   {:state (assoc-in state [:graph/comp-authors comp-name] (:results data))})
 
 (defmethod handle-event :action/graph-file-cluster-ready [state [_ comp-name]]
-  (let [cached     (get-in state [:graph/file-cache comp-name])
-        comp-nodes (->> (:graph/comp-nodes state)
-                        (remove #(= (:id %) comp-name)))
-        all-nodes  (into (vec comp-nodes) (:nodes cached))
-        file-ids   (set (map :id (:nodes cached)))
-        comp-edges (->> (:graph/comp-edges state)
-                        (remove #(or (= (:source %) comp-name)
-                                     (= (:target %) comp-name))))
-        all-edges  (into (vec comp-edges) (:edges cached))]
-    {:state (assoc state :graph/nodes all-nodes :graph/edges all-edges)}))
+  (let [cached (get-in state [:graph/file-cache comp-name])]
+    ;; Show only the expanded component's files — hide other components
+    {:state (assoc state
+                   :graph/nodes (:nodes cached)
+                   :graph/edges (:edges cached))}))
 
-(defmethod handle-event :action/graph-expand-file [state [_ file-path]]
-  (let [db-name (db-name-from state)
-        cached  (get-in state [:graph/segment-cache file-path])]
+(defmethod handle-event :action/graph-expand-file [state [_ {:keys [id cx cy]}]]
+  (let [file-path id
+        db-name   (db-name-from state)
+        cached    (get-in state [:graph/segment-cache file-path])
+        pos       {:cx (or cx 400) :cy (or cy 300)}]
     (if cached
       {:state (assoc state :graph/depth :segments :graph/expanded-file file-path
                      :graph/breadcrumb [(:graph/expanded-comp state) file-path]
                      :graph/selected nil :graph/node-card nil
-                     :graph/expand-time (.now js/Date))
+                     :graph/expand-time (.now js/Date)
+                     :graph/expand-pos pos)
        :fx [[:dispatch [:action/graph-segment-cluster-ready file-path]]]}
       {:state (assoc state :graph/depth :segments :graph/expanded-file file-path
                      :graph/breadcrumb [(:graph/expanded-comp state) file-path]
                      :graph/selected nil :graph/node-card nil :graph/loading? true
-                     :graph/expand-time (.now js/Date))
+                     :graph/expand-time (.now js/Date)
+                     :graph/expand-pos pos)
        :fx [[:http/post "/api/query"
              {:repo_path db-name :query_name "file-segments"
               :params {:file-path file-path} :limit 500}
@@ -702,9 +707,7 @@
 
 (defmethod handle-event :action/graph-segment-build [state [_ file-path]]
   (let [raw       (get-in state [:graph/raw-segments file-path])
-        parent    (->> (:graph/nodes state) (filter #(= (:id %) file-path)) first)
-        cx        (or (:x parent) 400)
-        cy        (or (:y parent) 300)
+        {:keys [cx cy]} (or (:graph/expand-pos state) {:cx 400 :cy 300})
         nodes     (vec (gdata/build-segment-nodes
                         (:segments raw) (:smells raw) (:safety raw) cx cy))
         seg-names (set (map :id nodes))
@@ -716,16 +719,11 @@
      :fx [[:dispatch [:action/graph-segment-cluster-ready file-path]]]}))
 
 (defmethod handle-event :action/graph-segment-cluster-ready [state [_ file-path]]
-  (let [cached    (get-in state [:graph/segment-cache file-path])
-        ;; Keep all nodes except the expanded file, add segment nodes
-        other     (->> (:graph/nodes state) (remove #(= (:id %) file-path)))
-        all-nodes (into (vec other) (:nodes cached))
-        ;; Keep edges not involving the expanded file, add segment edges
-        other-edges (->> (:graph/edges state)
-                         (remove #(or (= (:source %) file-path)
-                                      (= (:target %) file-path))))
-        all-edges (into (vec other-edges) (:edges cached))]
-    {:state (assoc state :graph/nodes all-nodes :graph/edges all-edges)}))
+  (let [cached (get-in state [:graph/segment-cache file-path])]
+    ;; Show only the expanded file's segments — hide other files
+    {:state (assoc state
+                   :graph/nodes (:nodes cached)
+                   :graph/edges (:edges cached))}))
 
 (defmethod handle-event :action/graph-collapse [state _]
   (case (:graph/depth state)

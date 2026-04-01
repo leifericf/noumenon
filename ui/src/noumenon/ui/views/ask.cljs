@@ -85,7 +85,9 @@
                        :padding "1px 6px"
                        :background (str (:success styles/tokens) "15")
                        :border-radius "8px"}}
-        (str results " results")])
+        (case results
+          1 "Found 1 result"
+          (str "Found " results " results"))])
      (when (and (seq samples) (= type "step"))
        [:button {:on {:click [:action/ask-show-step-on-graph samples]}
                  :style {:background (str (:accent styles/tokens) "15")
@@ -357,17 +359,7 @@
     [:div {:style {:display "flex"
                    :flex-direction "column"
                    :align-items "center"
-                   :width "100%"
-                   :padding-top (if has-results? "0" "20vh")
-                   :transition "padding-top 0.5s ease"}}
-     ;; Title
-     (when-not has-results?
-       [:h1 {:style {:font-size "1.6rem"
-                     :font-weight 600
-                     :color "#ffffff"
-                     :margin-bottom "16px"
-                     :letter-spacing "-0.02em"}}
-        "Noumenon"])
+                   :width "100%"}}
      [:div {:style {:width "100%"
                     :position "relative"}}
       [:input {:type "text"
@@ -463,7 +455,10 @@
      [:div {:style {:width "100%" :margin-top "6px"
                     :font-size "11px" :color (:text-muted styles/tokens)}}
       "Type @ to reference a file or author. Press Enter to ask. "
-      [:span {:style {:color "rgba(255,255,255,0.2)"}} "\u2318K to focus"]]
+      (let [mac? (and (exists? js/navigator)
+                      (re-find #"Mac" (.-platform js/navigator)))]
+        [:span {:style {:color "rgba(255,255,255,0.2)"}}
+         (if mac? "\u2318K to focus" "Ctrl+K to focus")])]
      ;; Suggestion chips on empty state
      (when (and (not has-results?) (not loading?))
        (suggestion-ticker visible-suggestions (:ask/ticker-paused? state)))
@@ -495,35 +490,36 @@
                    :style {:background "none" :border "none" :cursor "pointer"
                            :font-size "13px" :color (:text-muted styles/tokens)
                            :padding "4px 12px"}}
-          "New question"]]])
-     ;; Past questions — collapsible
-     (when (seq past-sessions)
-       (let [expanded-list? (:ask/history-open? state)]
-         [:div {:style {:width "100%" :margin-top "32px"}}
-          [:button {:on {:click [:action/ask-toggle-history]}
-                    :style {:display "flex" :align-items "center" :gap "6px"
-                            :background "none" :border "none" :cursor "pointer"
-                            :padding "0" :margin-bottom "8px"
-                            :font-size "12px" :font-weight 600
-                            :text-transform "uppercase" :letter-spacing "0.5px"
-                            :color (:text-muted styles/tokens)}}
-           [:span (if expanded-list? "\u25BC" "\u25B6")]
-           (str "Previous questions (" (count past-sessions) ")")]
-          (when expanded-list?
-            (let [limit     (or (:ask/history-limit state) 5)
-                  visible   (take limit past-sessions)
-                  has-more? (> (count past-sessions) limit)]
-              [:div
-               (for [[i session] (map-indexed vector visible)]
-                 [:div {:key (or (:id session) i)}
-                  (past-session-item session
-                                     (= (:id session) expanded-session)
-                                     (when (= (:id session) expanded-session)
-                                       expanded-detail)
-                                     state)])
-               (when has-more?
-                 [:button {:on {:click [:action/ask-load-more-history]}
-                           :style {:background "none" :border "none" :cursor "pointer"
-                                   :font-size "12px" :color (:accent styles/tokens)
-                                   :padding "8px 0"}}
-                  (str "Show more (" (- (count past-sessions) limit) " older)")])]))]))]))
+          "New question"]]])]))
+
+(defn past-questions-panel [state]
+  (let [{:keys [ask/past-sessions ask/expanded-session ask/expanded-detail]} state]
+    (when (seq past-sessions)
+      (let [expanded-list? (:ask/history-open? state)]
+        [:div
+         [:button {:on {:click [:action/ask-toggle-history]}
+                   :style {:display "flex" :align-items "center" :gap "6px"
+                           :background "none" :border "none" :cursor "pointer"
+                           :padding "0" :margin-bottom "8px"
+                           :font-size "11px"
+                           :color "rgba(255,255,255,0.3)"}}
+          [:span (if expanded-list? "\u25BC" "\u25B6")]
+          (str "Previous questions (" (count past-sessions) ")")]
+         (when expanded-list?
+           (let [limit     (or (:ask/history-limit state) 5)
+                 visible   (take limit past-sessions)
+                 has-more? (> (count past-sessions) limit)]
+             [:div
+              (for [[i session] (map-indexed vector visible)]
+                [:div {:key (or (:id session) i)}
+                 (past-session-item session
+                                    (= (:id session) expanded-session)
+                                    (when (= (:id session) expanded-session)
+                                      expanded-detail)
+                                    state)])
+              (when has-more?
+                [:button {:on {:click [:action/ask-load-more-history]}
+                          :style {:background "none" :border "none" :cursor "pointer"
+                                  :font-size "12px" :color (:accent styles/tokens)
+                                  :padding "8px 0"}}
+                 (str "Show more (" (- (count past-sessions) limit) " older)")])]))]))))
