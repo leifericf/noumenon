@@ -108,7 +108,7 @@
                (let [r (noum "help" cmd)]
                  [(assert-exit (str "help " cmd " exits 0") r 0)
                   (assert-contains (str "help " cmd " shows usage") r "Usage:")]))
-             ["import" "ask" "bench" "setup" "serve"
+             ["import" "ask" "bench" "setup" "serve" "demo"
               "start" "stop" "ping" "upgrade" "databases" "introspect" "synthesize" "open"]))))
 
 (defn tests-arg-validation []

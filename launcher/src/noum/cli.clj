@@ -64,6 +64,11 @@
                  :api-path "/api/reseed" :api-method :post}
    "history"    {:summary "Show artifact change history"
                  :usage   "noum history rules\n  noum history prompt <name>\n\n  Prompt names: analyze-file, agent-system, introspect"}
+   "synthesize" {:summary "Identify architectural components from analyzed data"
+                 :usage   "noum synthesize <repo> [options]"
+                 :api-path "/api/synthesize" :api-method :post :min-args 1}
+   "demo"       {:summary "Download pre-built demo database for instant querying"
+                 :usage   "noum demo [--force]\n\n  Downloads a fully analyzed knowledge graph of the Noumenon repository.\n  No LLM credentials needed — try queries immediately:\n\n    noum ask noumenon \"Describe the architecture\"\n    noum query components noumenon\n    noum status noumenon"}
    "setup"      {:summary "Configure MCP for Claude Desktop or Code"
                  :usage   "noum setup <desktop|code>"}
    "serve"      {:summary "Start MCP server (stdin/stdout, for Claude Desktop/Code)"
@@ -84,12 +89,13 @@
                  :usage   "noum version"}})
 
 (def ^:private command-groups
-  [["Pipeline"   ["digest" "import" "analyze" "enrich" "update" "watch"]]
+  [["Get Started" ["demo" "setup"]]
+   ["Pipeline"   ["digest" "import" "analyze" "enrich" "synthesize" "update" "watch"]]
    ["Query"      ["ask" "query" "queries" "schema" "status"]]
    ["Benchmark"  ["bench" "results" "compare"]]
    ["Introspect" ["introspect"]]
    ["Admin"      ["databases" "delete" "reseed" "history"]]
-   ["Setup"      ["setup" "serve"]]
+   ["Server"     ["serve"]]
    ["Daemon"     ["start" "stop" "ping" "upgrade"]]
    ["UI"         ["open"]]
    ["Other"      ["help" "version"]]])

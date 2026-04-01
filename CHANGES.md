@@ -27,6 +27,9 @@ Codebase-level architectural synthesis — the macro complement to per-file anal
   self-improvement decisions.
 - **Pipeline integration** — `digest` runs synthesize between analyze and benchmark.
   New `--skip-synthesize` flag.
+- **`noum demo`** — Downloads a pre-built knowledge graph of the Noumenon repo for
+  instant querying. No LLM credentials needed. Try `noum ask noumenon "Describe the
+  architecture"` right after install.
 
 ## 0.3.1
 

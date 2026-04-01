@@ -188,8 +188,10 @@
         (with-existing-db
           ctx
           (fn [{:keys [conn meta-db repo-path db-name]}]
+            (artifacts/reseed! (db/ensure-meta-db (:db-dir ctx)))
             (let [{:keys [prompt-fn model-id]}
-                  (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})
+                  (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model
+                                                    :max-tokens 16384})
                   result (synthesize/synthesize-repo!
                           conn prompt-fn
                           {:meta-db   meta-db
@@ -600,6 +602,7 @@
       (try
         (let [conn      (db/connect-and-ensure-schema db-dir db-name)
               meta-conn (db/ensure-meta-db db-dir)
+              _         (artifacts/reseed! meta-conn)
               meta-db   (d/db meta-conn)
               repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
               needs-llm (not (and skip-analyze skip-synthesize skip-benchmark))
@@ -619,12 +622,14 @@
                                                        :model-id    model-id
                                                        :concurrency (or concurrency 3)})))
           (when-not skip-synthesize
-            (run-digest-step! results :synthesize "synthesize"
-                              #(synthesize/synthesize-repo!
-                                conn prompt-fn
-                                {:meta-db   meta-db
-                                 :model-id  model-id
-                                 :repo-name db-name})))
+            (let [synth-llm (llm/wrap-as-prompt-fn-from-opts
+                             {:provider provider :model model :max-tokens 16384})]
+              (run-digest-step! results :synthesize "synthesize"
+                                #(synthesize/synthesize-repo!
+                                  conn (:prompt-fn synth-llm)
+                                  {:meta-db   meta-db
+                                   :model-id  (:model-id synth-llm)
+                                   :repo-name db-name}))))
           (when-not skip-benchmark
             (run-digest-step! results :benchmark "benchmark"
                               #(let [db   (d/db conn)

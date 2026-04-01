@@ -40,3 +40,5 @@ test-repos/
 
 # Noumenon data
 data/
+noumenon-demo-*.tar.gz
+noumenon-demo-*.tar.gz.sha256

@@ -9,6 +9,7 @@
             [clojure.string :as str]
             [noum.cli :as cli]
             [noum.daemon :as daemon]
+            [noum.demo :as demo]
             [noum.jar :as jar]
             [noum.jre :as jre]
             [noum.paths :as paths]
@@ -444,9 +445,31 @@
 
 ;; --- Dispatch ---
 
+(defn- do-demo [{:keys [flags]}]
+  (try
+    (demo/install! flags)
+    (let [port (ensure-backend! {})]
+      (tui/eprintln "")
+      (tui/eprintln (str (style/green "Done!") " Demo database ready."))
+      (tui/eprintln "")
+      (tui/eprintln "Try these commands:")
+      (tui/eprintln (str "  noum ask noumenon " (style/green "\"Describe the architecture\"")))
+      (tui/eprintln (str "  noum ask noumenon " (style/green "\"What are the main components?\"")))
+      (tui/eprintln "  noum query components noumenon")
+      (tui/eprintln "  noum status noumenon")
+      (tui/eprintln "")
+      (tui/eprintln "Run `noum databases` to see all databases.")
+      0)
+    (catch Exception e
+      (if (:cancelled (ex-data e))
+        0
+        (do (tui/eprintln (str "Error: " (.getMessage e)))
+            1)))))
+
 (def ^:private dispatch
   {"help"       do-help
    "version"    do-version
+   "demo"       do-demo
    "setup"      do-setup
    "start"      do-start
    "stop"       do-stop

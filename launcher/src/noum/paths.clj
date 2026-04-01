@@ -15,3 +15,5 @@
 (def config-path (str (fs/path noum-dir "config.edn")))
 (def daemon-file (str (fs/path noum-dir "daemon.edn")))
 (def daemon-log  (str (fs/path noum-dir "daemon.log")))
+(def data-dir    (str (fs/path noum-dir "data")))
+(def demo-manifest (str (fs/path data-dir "noumenon" "manifest.edn")))

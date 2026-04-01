@@ -48,7 +48,14 @@ For contributing or running from source, see the [Development](#development) sec
 
 ## Quick Start
 
-Use a local Git repo path or a Git URL.
+### Try instantly (no LLM credentials needed)
+
+```bash
+noum demo
+noum ask noumenon "Describe the architecture"
+```
+
+Downloads a pre-built knowledge graph of the Noumenon repo itself. Or build your own:
 
 ### 1) Import deterministic facts
 

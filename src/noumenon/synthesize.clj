@@ -134,14 +134,6 @@
 
 (defn- clamp [s] (when s (subs s 0 (min 4096 (count s)))))
 
-(defn- validate-file-classification [{:keys [path layer category patterns purpose]}]
-  (when (and (string? path) (seq path))
-    (cond-> {:path path}
-      (valid-layer layer)            (assoc :layer layer)
-      (valid-category category)      (assoc :category category)
-      (seq (filter valid-patterns patterns)) (assoc :patterns (vec (filter valid-patterns patterns)))
-      (string? purpose)              (assoc :purpose (clamp purpose)))))
-
 (defn- validate-component [{:keys [name summary purpose layer category patterns
                                    complexity subsystem files depends-on]}]
   (when (and (string? name) (seq name) (seq files))
@@ -165,29 +157,21 @@
                          (log! "synthesize/parse" (.getMessage e))
                          nil))]
       (when (map? parsed)
-        {:files      (->> (:files parsed) (keep validate-file-classification) vec)
-         :components (->> (:components parsed) (keep validate-component) vec)}))))
+        {:components (->> (:components parsed) (keep validate-component) vec)}))))
 
 ;; --- Transaction data ---
-
-(defn file-attrs->tx-data
-  "Build tx-data for per-file architectural classifications."
-  [file-classifications]
-  (->> file-classifications
-       (mapv (fn [{:keys [path layer category patterns purpose]}]
-               (cond-> {:file/path path}
-                 layer          (assoc :arch/layer layer)
-                 category       (assoc :sem/category category)
-                 (seq patterns) (assoc :sem/patterns patterns)
-                 purpose        (assoc :sem/purpose purpose))))))
 
 (defn components->tx-data
   "Build tx-data for component entities and file->component assignments."
   [components]
-  (let [comp-txs (->> components
+  (let [known-names (set (map :name components))
+        ;; Use temp IDs so refs within the same transaction work
+        name->tempid (into {} (map-indexed (fn [i c] [(:name c) (str "comp-" i)]) components))
+        comp-txs (->> components
                       (mapv (fn [{:keys [name summary purpose layer category
                                          patterns complexity subsystem]}]
-                              (cond-> {:component/name name}
+                              (cond-> {:db/id (name->tempid name)
+                                       :component/name name}
                                 summary              (assoc :component/summary summary)
                                 purpose              (assoc :component/purpose purpose)
                                 layer                (assoc :component/layer layer)
@@ -197,15 +181,18 @@
                                 subsystem            (assoc :component/subsystem subsystem)))))
         dep-txs  (->> components
                       (keep (fn [{:keys [name depends-on]}]
-                              (when (seq depends-on)
-                                {:component/name name
-                                 :component/depends-on (mapv #(vector :component/name %) depends-on)})))
+                              (let [valid-deps (filter known-names depends-on)]
+                                (when (seq valid-deps)
+                                  {:db/id (name->tempid name)
+                                   :component/depends-on (mapv #(name->tempid %) valid-deps)}))))
                       vec)
         file-txs (->> components
-                      (mapcat (fn [{:keys [name files]}]
+                      (mapcat (fn [{:keys [name files layer category]}]
                                 (map (fn [path]
-                                       {:file/path path
-                                        :arch/component [:component/name name]})
+                                       (cond-> {:file/path path
+                                                :arch/component (name->tempid name)}
+                                         layer    (assoc :arch/layer layer)
+                                         category (assoc :sem/category category)))
                                      files)))
                       vec)]
     (concat comp-txs dep-txs file-txs)))
@@ -269,15 +256,21 @@
           {:components 0 :files-classified 0 :elapsed-ms 0})
       (let [meta-db   (or meta-db db)
             template  (artifacts/load-prompt meta-db "synthesize")
+            _         (when-not template
+                        (throw (ex-info "Synthesize prompt not found — run 'reseed' first"
+                                        {:status 400 :message "Synthesize prompt not seeded. Run: noum reseed"})))
             prompt    (render-prompt template (or repo-name "unknown") data)
             _         (log! "synthesize" (str "Synthesizing " (count (:files data))
                                               " files, " (count (:edges data)) " edges"))
             {:keys [text usage resolved-model]} (invoke-llm prompt)
+            _         (log! "synthesize" (str "Response length: " (count text) " chars"))
+            _         (when (and text (> (count text) 0))
+                        (log! "synthesize/tail" (subs text (max 0 (- (count text) 200)))))
             parsed    (parse-response text)]
         (if (and parsed (seq (:components parsed)))
           (let [_          (retract-synthesis! conn)
-                file-txs   (file-attrs->tx-data (:files parsed))
                 comp-txs   (components->tx-data (:components parsed))
+                n-files    (->> (:components parsed) (mapcat :files) distinct count)
                 prompt-hash (subs (sha256-hex template) 0 16)
                 cost        (llm/estimate-cost (or resolved-model model-id "")
                                                (:input-tokens usage 0)
@@ -291,14 +284,14 @@
                              (:input-tokens usage)  (assoc :tx/input-tokens (:input-tokens usage))
                              (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
                              (pos? cost)            (assoc :tx/cost-usd cost))
-                tx-data    (vec (concat file-txs comp-txs [prov-tx]))]
+                tx-data    (vec (conj (vec comp-txs) prov-tx))]
             (d/transact conn {:tx-data tx-data})
             (let [elapsed (- (System/currentTimeMillis) start-ms)]
               (log! "synthesize" (str "Done. " (count (:components parsed)) " components, "
-                                      (count (:files parsed)) " files classified ("
+                                      n-files " files classified ("
                                       elapsed "ms)"))
               {:components      (count (:components parsed))
-               :files-classified (count (:files parsed))
+               :files-classified n-files
                :elapsed-ms      elapsed
                :usage           usage}))
           (do (log! "synthesize/error" "Failed to parse synthesis response")
