@@ -1,0 +1,10 @@
+{:name "file-segment-issues"
+ :description "Code smells for segments in a file [requires inputs: file-path]"
+ :query [:find ?name ?smell
+         :in $ ?path
+         :where
+         [?f :file/path ?path]
+         [?s :code/file ?f]
+         [?s :code/name ?name]
+         [?s :code/smells ?smell]]
+ :inputs [:file-path]}

@@ -1,5 +1,6 @@
 (ns noumenon.ui.state
-  (:require [noumenon.ui.http :as http]
+  (:require [noumenon.ui.graph.data :as gdata]
+            [noumenon.ui.http :as http]
             [noumenon.ui.styles :as styles]))
 
 (declare dispatch!)
@@ -22,7 +23,20 @@
          :backends         [{:name "Local" :url "auto" :token nil}]
          :active-backend   "Local"
          :settings/loaded? false
-         :toasts           []}))
+         :toasts           []
+         ;; Three-level graph
+         :graph/depth           :components
+         :graph/comp-nodes      nil
+         :graph/comp-edges      nil
+         :graph/expanded-comp   nil
+         :graph/expanded-file   nil
+         :graph/file-cache      {}
+         :graph/segment-cache   {}
+         :graph/card-cache      {}
+         :graph/breadcrumb      []
+         :graph/all-import-edges nil
+         :graph/comp-authors    {}
+         :graph/expand-time     nil}))
 
 ;; --- Pure event handlers ---
 ;; Each returns {:state new-state} or {:state new-state :fx [effects...]}.
@@ -388,7 +402,8 @@
      :fx    [[:dispatch [:action/toast {:message (str "Ask failed: " error) :type :error}]]]}))
 
 (defmethod handle-event :action/select-db-value [state [_ db-name]]
-  {:state (assoc state :db-name db-name)})
+  {:state (assoc state :db-name db-name
+                 :graph/file-cache {} :graph/segment-cache {} :graph/card-cache {})})
 
 ;; --- Schema events ---
 
@@ -478,88 +493,326 @@
 (defmethod handle-event :action/query-error [state [_ error]]
   {:state (assoc state :query/loading? false :query/error error)})
 
-;; --- Graph events ---
+;; --- Graph events (three-level drill-down) ---
+
+(defn- db-name-from [state]
+  (or (:db-name state) (-> state :databases/list first :name)))
 
 (defmethod handle-event :action/graph-load [state _]
-  (let [db-name (or (:db-name state) (-> state :databases/list first :name))
-        mode    (or (:graph/mode state) :imports)]
+  (let [db-name (db-name-from state)]
     (if-not db-name
       {:state state}
-      {:state (assoc state :graph/loading? true :graph/selected nil)
-       :fx
-       [[:http/post "/api/query"
-         {:repo_path db-name :query_name "hotspots" :limit 500}
-         {:on-ok :action/graph-hotspots}]
-        [:http/post "/api/query"
-         {:repo_path db-name :query_name "files-by-layer" :limit 500}
-         {:on-ok :action/graph-layers}]
-        [:dispatch [:action/graph-load-edges db-name mode]]]})))
-
-(defmethod handle-event :action/graph-load-edges [state [_ db-name mode]]
-  (let [query-name (case mode
-                     :imports      "all-import-edges"
-                     :co-changes   "co-changed-files"
-                     :dependencies "dependency-hotspots"
-                     "all-import-edges")]
-    {:state state
-     :fx    [[:http/post "/api/query"
-              {:repo_path db-name :query_name query-name :limit 2000}
-              {:on-ok [:action/graph-edges-loaded mode]}]]}))
+      {:state (assoc state :graph/loading? true :graph/selected nil
+                     :graph/depth :components :graph/expanded-comp nil
+                     :graph/expanded-file nil :graph/breadcrumb [])
+       :fx [[:http/post "/api/query"
+             {:repo_path db-name :query_name "components" :limit 100}
+             {:on-ok :action/graph-comp-data}]
+            [:http/post "/api/query"
+             {:repo_path db-name :query_name "cross-component-imports" :limit 500}
+             {:on-ok :action/graph-comp-edges-data}]
+            [:http/post "/api/query"
+             {:repo_path db-name :query_name "component-churn" :limit 100}
+             {:on-ok :action/graph-comp-churn-data}]
+            ;; Cache all import edges for client-side filtering on expand
+            [:http/post "/api/query"
+             {:repo_path db-name :query_name "all-import-edges" :limit 5000}
+             {:on-ok :action/graph-all-edges-cached}]
+            ;; Hotspots for file-level churn sizing
+            [:http/post "/api/query"
+             {:repo_path db-name :query_name "hotspots" :limit 500}
+             {:on-ok :action/graph-hotspots}]]})))
 
 (defmethod handle-event :action/graph-hotspots [state [_ data]]
   {:state (assoc state :graph/hotspots (:results data))})
 
-(defmethod handle-event :action/graph-layers [state [_ data]]
-  {:state (assoc state :graph/layer-data (:results data))})
+;; --- Component data accumulation (wait for all 3 before building) ---
 
-(defmethod handle-event :action/graph-edges-loaded [state [_ mode data]]
-  {:state (assoc state :graph/edge-data (:results data)
-                 :graph/edge-mode mode
-                 :graph/loading? false)})
+(defn- comp-data-ready? [state]
+  (and (:graph/raw-comp-data state)
+       (:graph/raw-comp-edges state)
+       (:graph/raw-comp-churn state)))
 
-(defmethod handle-event :action/graph-mode [state [_ mode]]
-  (let [db-name (or (:db-name state) (-> state :databases/list first :name))]
-    {:state (assoc state :graph/mode mode)
-     :fx    (when db-name
-              [[:dispatch [:action/graph-load-edges db-name mode]]])}))
+(defmethod handle-event :action/graph-comp-data [state [_ data]]
+  (let [state (assoc state :graph/raw-comp-data (:results data))]
+    (if (comp-data-ready? state)
+      {:state state :fx [[:dispatch [:action/graph-comp-build]]]}
+      {:state state})))
+
+(defmethod handle-event :action/graph-comp-edges-data [state [_ data]]
+  (let [state (assoc state :graph/raw-comp-edges (:results data))]
+    (if (comp-data-ready? state)
+      {:state state :fx [[:dispatch [:action/graph-comp-build]]]}
+      {:state state})))
+
+(defmethod handle-event :action/graph-comp-churn-data [state [_ data]]
+  (let [state (assoc state :graph/raw-comp-churn (:results data))]
+    (if (comp-data-ready? state)
+      {:state state :fx [[:dispatch [:action/graph-comp-build]]]}
+      {:state state})))
+
+(defmethod handle-event :action/graph-all-edges-cached [state [_ data]]
+  {:state (assoc state :graph/all-import-edges (:results data))})
+
+(defmethod handle-event :action/graph-comp-build [state _]
+  (let [nodes (vec (gdata/build-component-nodes
+                    (:graph/raw-comp-data state)
+                    (:graph/raw-comp-churn state)))
+        edges (vec (gdata/build-component-edges
+                    (:graph/raw-comp-edges state)))]
+    {:state (assoc state
+                   :graph/comp-nodes nodes :graph/comp-edges edges
+                   :graph/nodes nodes :graph/edges edges
+                   :graph/loading? false
+                   ;; Clean up raw data
+                   :graph/raw-comp-data nil :graph/raw-comp-edges nil
+                   :graph/raw-comp-churn nil)}))
+
+;; --- Expand/collapse ---
+
+(defmethod handle-event :action/graph-expand-component [state [_ comp-name]]
+  (let [db-name (db-name-from state)
+        cached  (get-in state [:graph/file-cache comp-name])]
+    (if cached
+      {:state (assoc state :graph/depth :files :graph/expanded-comp comp-name
+                     :graph/expanded-file nil :graph/breadcrumb [comp-name]
+                     :graph/selected nil :graph/node-card nil
+                     :graph/expand-time (.now js/Date))
+       :fx [[:dispatch [:action/graph-file-cluster-ready comp-name]]]}
+      {:state (assoc state :graph/depth :files :graph/expanded-comp comp-name
+                     :graph/expanded-file nil :graph/breadcrumb [comp-name]
+                     :graph/selected nil :graph/node-card nil :graph/loading? true
+                     :graph/expand-time (.now js/Date))
+       :fx [[:http/post "/api/query"
+             {:repo_path db-name :query_name "component-files"
+              :params {:component-name comp-name} :limit 200}
+             {:on-ok [:action/graph-comp-files-loaded comp-name]}]
+            [:http/post "/api/query"
+             {:repo_path db-name :query_name "component-authors"
+              :params {:component-name comp-name} :limit 20}
+             {:on-ok [:action/graph-comp-authors-loaded comp-name]}]]})))
+
+(defmethod handle-event :action/graph-comp-files-loaded [state [_ comp-name data]]
+  (let [parent    (->> (:graph/comp-nodes state)
+                       (filter #(= (:id %) comp-name)) first)
+        cx        (or (:x parent) 400)
+        cy        (or (:y parent) 300)
+        churn-map (into {} (map (juxt first second))
+                        (or (:graph/hotspots state) []))
+        nodes     (vec (gdata/build-file-cluster-nodes (:results data) churn-map cx cy))
+        file-ids  (set (map :id nodes))
+        edges     (->> (:graph/all-import-edges state)
+                       (keep (fn [[from to]]
+                               (when (and (file-ids from) (file-ids to))
+                                 {:source from :target to})))
+                       vec)]
+    {:state (-> state
+                (assoc-in [:graph/file-cache comp-name] {:nodes nodes :edges edges})
+                (assoc :graph/loading? false))
+     :fx [[:dispatch [:action/graph-file-cluster-ready comp-name]]]}))
+
+(defmethod handle-event :action/graph-comp-authors-loaded [state [_ comp-name data]]
+  {:state (assoc-in state [:graph/comp-authors comp-name] (:results data))})
+
+(defmethod handle-event :action/graph-file-cluster-ready [state [_ comp-name]]
+  (let [cached     (get-in state [:graph/file-cache comp-name])
+        comp-nodes (->> (:graph/comp-nodes state)
+                        (remove #(= (:id %) comp-name)))
+        all-nodes  (into (vec comp-nodes) (:nodes cached))
+        file-ids   (set (map :id (:nodes cached)))
+        comp-edges (->> (:graph/comp-edges state)
+                        (remove #(or (= (:source %) comp-name)
+                                     (= (:target %) comp-name))))
+        all-edges  (into (vec comp-edges) (:edges cached))]
+    {:state (assoc state :graph/nodes all-nodes :graph/edges all-edges)}))
+
+(defmethod handle-event :action/graph-expand-file [state [_ file-path]]
+  (let [db-name (db-name-from state)
+        cached  (get-in state [:graph/segment-cache file-path])]
+    (if cached
+      {:state (assoc state :graph/depth :segments :graph/expanded-file file-path
+                     :graph/breadcrumb [(:graph/expanded-comp state) file-path]
+                     :graph/selected nil :graph/node-card nil
+                     :graph/expand-time (.now js/Date))
+       :fx [[:dispatch [:action/graph-segment-cluster-ready file-path]]]}
+      {:state (assoc state :graph/depth :segments :graph/expanded-file file-path
+                     :graph/breadcrumb [(:graph/expanded-comp state) file-path]
+                     :graph/selected nil :graph/node-card nil :graph/loading? true
+                     :graph/expand-time (.now js/Date))
+       :fx [[:http/post "/api/query"
+             {:repo_path db-name :query_name "file-segments"
+              :params {:file-path file-path} :limit 500}
+             {:on-ok [:action/graph-segments-loaded file-path]}]
+            [:http/post "/api/query"
+             {:repo_path db-name :query_name "file-segment-issues"
+              :params {:file-path file-path} :limit 500}
+             {:on-ok [:action/graph-segment-smells-loaded file-path]}]
+            [:http/post "/api/query"
+             {:repo_path db-name :query_name "file-segment-safety"
+              :params {:file-path file-path} :limit 500}
+             {:on-ok [:action/graph-segment-safety-loaded file-path]}]
+            [:http/post "/api/query"
+             {:repo_path db-name :query_name "file-segment-calls"
+              :params {:file-path file-path} :limit 500}
+             {:on-ok [:action/graph-segment-calls-loaded file-path]}]]})))
+
+;; --- Segment data accumulation ---
+
+(defn- seg-data-ready? [state file-path]
+  (let [raw (get-in state [:graph/raw-segments file-path])]
+    (every? #(contains? raw %) [:segments :smells :safety :calls])))
+
+(defmethod handle-event :action/graph-segments-loaded [state [_ file-path data]]
+  (let [state (assoc-in state [:graph/raw-segments file-path :segments] (:results data))]
+    (if (seg-data-ready? state file-path)
+      {:state state :fx [[:dispatch [:action/graph-segment-build file-path]]]}
+      {:state state})))
+
+(defmethod handle-event :action/graph-segment-smells-loaded [state [_ file-path data]]
+  (let [state (assoc-in state [:graph/raw-segments file-path :smells] (:results data))]
+    (if (seg-data-ready? state file-path)
+      {:state state :fx [[:dispatch [:action/graph-segment-build file-path]]]}
+      {:state state})))
+
+(defmethod handle-event :action/graph-segment-safety-loaded [state [_ file-path data]]
+  (let [state (assoc-in state [:graph/raw-segments file-path :safety] (:results data))]
+    (if (seg-data-ready? state file-path)
+      {:state state :fx [[:dispatch [:action/graph-segment-build file-path]]]}
+      {:state state})))
+
+(defmethod handle-event :action/graph-segment-calls-loaded [state [_ file-path data]]
+  (let [state (assoc-in state [:graph/raw-segments file-path :calls] (:results data))]
+    (if (seg-data-ready? state file-path)
+      {:state state :fx [[:dispatch [:action/graph-segment-build file-path]]]}
+      {:state state})))
+
+(defmethod handle-event :action/graph-segment-build [state [_ file-path]]
+  (let [raw       (get-in state [:graph/raw-segments file-path])
+        parent    (->> (:graph/nodes state) (filter #(= (:id %) file-path)) first)
+        cx        (or (:x parent) 400)
+        cy        (or (:y parent) 300)
+        nodes     (vec (gdata/build-segment-nodes
+                        (:segments raw) (:smells raw) (:safety raw) cx cy))
+        seg-names (set (map :id nodes))
+        edges     (vec (gdata/build-segment-edges (:calls raw) seg-names))]
+    {:state (-> state
+                (assoc-in [:graph/segment-cache file-path] {:nodes nodes :edges edges})
+                (update :graph/raw-segments dissoc file-path)
+                (assoc :graph/loading? false))
+     :fx [[:dispatch [:action/graph-segment-cluster-ready file-path]]]}))
+
+(defmethod handle-event :action/graph-segment-cluster-ready [state [_ file-path]]
+  (let [cached    (get-in state [:graph/segment-cache file-path])
+        ;; Keep all nodes except the expanded file, add segment nodes
+        other     (->> (:graph/nodes state) (remove #(= (:id %) file-path)))
+        all-nodes (into (vec other) (:nodes cached))
+        ;; Keep edges not involving the expanded file, add segment edges
+        other-edges (->> (:graph/edges state)
+                         (remove #(or (= (:source %) file-path)
+                                      (= (:target %) file-path))))
+        all-edges (into (vec other-edges) (:edges cached))]
+    {:state (assoc state :graph/nodes all-nodes :graph/edges all-edges)}))
+
+(defmethod handle-event :action/graph-collapse [state _]
+  (case (:graph/depth state)
+    :segments
+    {:state (assoc state :graph/depth :files :graph/expanded-file nil
+                   :graph/breadcrumb [(first (:graph/breadcrumb state))]
+                   :graph/selected nil :graph/node-card nil)
+     :fx [[:dispatch [:action/graph-file-cluster-ready (:graph/expanded-comp state)]]]}
+
+    :files
+    {:state (assoc state :graph/depth :components :graph/expanded-comp nil
+                   :graph/expanded-file nil :graph/breadcrumb []
+                   :graph/nodes (:graph/comp-nodes state)
+                   :graph/edges (:graph/comp-edges state)
+                   :graph/selected nil :graph/node-card nil)}
+
+    {:state state}))
+
+(defmethod handle-event :action/graph-collapse-to-top [state _]
+  {:state (assoc state :graph/depth :components :graph/expanded-comp nil
+                 :graph/expanded-file nil :graph/breadcrumb []
+                 :graph/nodes (:graph/comp-nodes state)
+                 :graph/edges (:graph/comp-edges state)
+                 :graph/selected nil :graph/node-card nil)})
+
+;; --- Node selection / card ---
 
 (defmethod handle-event :action/graph-select [state [_ node-id]]
   {:state (assoc state :graph/selected node-id
                  :graph/node-card nil :graph/node-card-pos nil)})
 
+(defn- file-card-effects
+  "HTTP effects to fetch file card details."
+  [db-name id]
+  [[:http/post "/api/query"
+    {:repo_path db-name :query_name "file-imports"
+     :params {:file-path id} :limit 20}
+    {:on-ok [:action/graph-node-imports-loaded id]}]
+   [:http/post "/api/query"
+    {:repo_path db-name :query_name "file-importers"
+     :params {:file-path id} :limit 20}
+    {:on-ok [:action/graph-node-importers-loaded id]}]
+   [:http/post "/api/query"
+    {:repo_path db-name :query_name "file-authors"
+     :params {:file-path id} :limit 10}
+    {:on-ok [:action/graph-node-authors-loaded id]}]
+   [:http/post "/api/query"
+    {:repo_path db-name :query_name "file-history"
+     :params {:file-path id} :limit 3}
+    {:on-ok [:action/graph-node-history-loaded id]}]
+   [:http/post "/api/query-raw"
+    {:repo_path db-name
+     :query (pr-str '[:find ?summary ?complexity
+                      :in $ ?path
+                      :where
+                      [?f :file/path ?path]
+                      [(get-else $ ?f :sem/summary "") ?summary]
+                      [(get-else $ ?f :sem/complexity :unknown) ?complexity]])
+     :args [id]}
+    {:on-ok [:action/graph-node-meta-loaded id]}]])
+
 (defmethod handle-event :action/graph-select-node [state [_ {:keys [id x y]}]]
-  (let [db-name (or (:db-name state) (-> state :databases/list first :name))]
-    {:state (assoc state :graph/selected id
-                   :graph/node-card nil
-                   :graph/node-card-pos {:x x :y y})
-     :fx    (when db-name
-              [[:http/post "/api/query"
-                {:repo_path db-name :query_name "file-imports"
-                 :params {:file-path id} :limit 20}
-                {:on-ok [:action/graph-node-imports-loaded id]}]
-               [:http/post "/api/query"
-                {:repo_path db-name :query_name "file-importers"
-                 :params {:file-path id} :limit 20}
-                {:on-ok [:action/graph-node-importers-loaded id]}]
-               [:http/post "/api/query"
-                {:repo_path db-name :query_name "file-authors"
-                 :params {:file-path id} :limit 10}
-                {:on-ok [:action/graph-node-authors-loaded id]}]
-               [:http/post "/api/query"
-                {:repo_path db-name :query_name "file-history"
-                 :params {:file-path id} :limit 3}
-                {:on-ok [:action/graph-node-history-loaded id]}]
-               ;; Summary + complexity via raw query with parameterized input
-               [:http/post "/api/query-raw"
-                {:repo_path db-name
-                 :query (pr-str '[:find ?summary ?complexity
-                                  :in $ ?path
-                                  :where
-                                  [?f :file/path ?path]
-                                  [(get-else $ ?f :sem/summary "") ?summary]
-                                  [(get-else $ ?f :sem/complexity :unknown) ?complexity]])
-                 :args [id]}
-                {:on-ok [:action/graph-node-meta-loaded id]}]])}))
+  (let [db-name (db-name-from state)
+        node    (->> (:graph/nodes state) (filter #(= (:id %) id)) first)
+        cached  (get-in state [:graph/card-cache id])]
+    (cond
+      ;; Cached card
+      cached
+      {:state (assoc state :graph/selected id
+                     :graph/node-card cached
+                     :graph/node-card-pos {:x x :y y})}
+      ;; Component node — card data is in the node itself
+      (= :component (:type node))
+      (let [card {:type       :component
+                  :summary    (:summary node)
+                  :complexity (:complexity node)
+                  :category   (:category node)
+                  :file-count (:file-count node)}]
+        {:state (-> state
+                    (assoc :graph/selected id
+                           :graph/node-card card
+                           :graph/node-card-pos {:x x :y y})
+                    (assoc-in [:graph/card-cache id] card))})
+      ;; Segment node — card data is in the node itself
+      (= :segment (:type node))
+      (let [card (assoc (select-keys node [:kind :complexity :visibility :pure?
+                                           :ai-likelihood :purpose :error-handling
+                                           :args :returns :smells :safety
+                                           :line-start :line-end])
+                        :type :segment)]
+        {:state (-> state
+                    (assoc :graph/selected id
+                           :graph/node-card card
+                           :graph/node-card-pos {:x x :y y})
+                    (assoc-in [:graph/card-cache id] card))})
+      ;; File node — fetch details
+      :else
+      {:state (assoc state :graph/selected id
+                     :graph/node-card nil
+                     :graph/node-card-pos {:x x :y y})
+       :fx (when db-name (file-card-effects db-name id))})))
 
 (defmethod handle-event :action/graph-node-imports-loaded [state [_ file-id data]]
   (if (= file-id (:graph/selected state))
@@ -583,10 +836,14 @@
 
 (defmethod handle-event :action/graph-node-meta-loaded [state [_ file-id data]]
   (if (= file-id (:graph/selected state))
-    (let [row (first (:results data))]
+    (let [row   (first (:results data))
+          state (cond-> state
+                  (seq (first row))  (assoc-in [:graph/node-card :summary] (first row))
+                  (second row)       (assoc-in [:graph/node-card :complexity] (second row)))
+          ;; Cache completed card for re-use
+          card  (:graph/node-card state)]
       {:state (cond-> state
-                (seq (first row))  (assoc-in [:graph/node-card :summary] (first row))
-                (second row)       (assoc-in [:graph/node-card :complexity] (second row)))})
+                card (assoc-in [:graph/card-cache file-id] card))})
     {:state state}))
 
 (defmethod handle-event :action/graph-built [state [_ {:keys [nodes edges]}]]

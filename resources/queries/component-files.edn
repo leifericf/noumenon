@@ -8,4 +8,4 @@
          [?f :file/path ?path]
          [(get-else $ ?f :arch/layer :unknown) ?layer]
          [(get-else $ ?f :sem/complexity :unknown) ?complexity]]
- :params [:component-name]}
+ :inputs [:component-name]}

@@ -7,4 +7,4 @@
          [?c :component/depends-on ?target]
          [?c :component/name ?dep-name]
          [(get-else $ ?c :component/layer :unknown) ?dep-layer]]
- :params [:component-name]}
+ :inputs [:component-name]}

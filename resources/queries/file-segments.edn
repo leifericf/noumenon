@@ -1,0 +1,21 @@
+{:name "file-segments"
+ :description "All code segments in a file with full detail [requires inputs: file-path]"
+ :query [:find ?name ?kind ?line-start ?line-end ?complexity ?visibility
+         ?pure ?ai-likelihood ?purpose ?error-handling ?args ?returns
+         :in $ ?path
+         :where
+         [?f :file/path ?path]
+         [?s :code/file ?f]
+         [?s :code/name ?name]
+         [(get-else $ ?s :code/kind :unknown) ?kind]
+         [(get-else $ ?s :code/line-start 0) ?line-start]
+         [(get-else $ ?s :code/line-end 0) ?line-end]
+         [(get-else $ ?s :code/complexity :unknown) ?complexity]
+         [(get-else $ ?s :code/visibility :unknown) ?visibility]
+         [(get-else $ ?s :code/pure? false) ?pure]
+         [(get-else $ ?s :code/ai-likelihood :unknown) ?ai-likelihood]
+         [(get-else $ ?s :code/purpose "") ?purpose]
+         [(get-else $ ?s :code/error-handling :unknown) ?error-handling]
+         [(get-else $ ?s :code/args "") ?args]
+         [(get-else $ ?s :code/returns "") ?returns]]
+ :inputs [:file-path]}

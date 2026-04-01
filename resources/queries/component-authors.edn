@@ -8,4 +8,4 @@
          [?commit :commit/changed-files ?f]
          [?commit :commit/author ?a]
          [?a :person/name ?author-name]]
- :params [:component-name]}
+ :inputs [:component-name]}

@@ -15,17 +15,22 @@
     zoom))
 
 (defn find-nearest-node
-  "Find the node nearest to [x y] within max-distance.
-   nodes is a JS array from simulation.nodes()."
+  "Find the node nearest to [x y] within distance.
+   Component nodes have larger hit radius; segments have smaller."
   [nodes x y max-distance]
   (let [result (atom nil)
         min-dist (atom max-distance)]
     (.forEach nodes
               (fn [node]
-                (let [dx (- x (.-x node))
-                      dy (- y (.-y node))
-                      dist (Math/sqrt (+ (* dx dx) (* dy dy)))]
-                  (when (< dist @min-dist)
+                (let [dx   (- x (.-x node))
+                      dy   (- y (.-y node))
+                      dist (Math/sqrt (+ (* dx dx) (* dy dy)))
+                      ntype (keyword (or (.-type node) "file"))
+                      hit-r (case ntype
+                              :component 35
+                              :segment   10
+                              max-distance)]
+                  (when (and (< dist hit-r) (< dist @min-dist))
                     (reset! min-dist dist)
                     (reset! result node)))))
     @result))

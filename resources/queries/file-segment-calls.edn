@@ -1,0 +1,10 @@
+{:name "file-segment-calls"
+ :description "Call graph within a file — segment to called names [requires inputs: file-path]"
+ :query [:find ?caller-name ?callee-name
+         :in $ ?path
+         :where
+         [?f :file/path ?path]
+         [?s :code/file ?f]
+         [?s :code/name ?caller-name]
+         [?s :code/call-names ?callee-name]]
+ :inputs [:file-path]}

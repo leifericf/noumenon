@@ -8,4 +8,4 @@
          [?d :component/name ?dep-name]
          [(get-else $ ?d :component/layer :unknown) ?dep-layer]
          [(get-else $ ?d :component/category :unknown) ?dep-category]]
- :params [:component-name]}
+ :inputs [:component-name]}

@@ -1,0 +1,10 @@
+{:name "file-segment-safety"
+ :description "Safety concerns for segments in a file [requires inputs: file-path]"
+ :query [:find ?name ?concern
+         :in $ ?path
+         :where
+         [?f :file/path ?path]
+         [?s :code/file ?f]
+         [?s :code/name ?name]
+         [?s :code/safety-concerns ?concern]]
+ :inputs [:file-path]}
