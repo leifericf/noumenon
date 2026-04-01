@@ -400,29 +400,11 @@
                       :total-usage llm/zero-usage
                       :max-iterations max-iterations})]
     (let [start-ms (System/currentTimeMillis)]
+      ;; Immediate feedback before first LLM call
+      (when on-iteration
+        (on-iteration {:type "progress" :current 0 :total max-iterations
+                       :message "Analyzing question..."}))
       (loop [state initial]
-        ;; Pre-step: announce thinking
-        (when on-iteration
-          (let [i (:iterations state)
-                thinking-msgs ["Thinking about what to look for..."
-                               "Considering which queries would help..."
-                               "Breaking down the question..."
-                               "Figuring out where to start..."]
-                refining-msgs ["Hmm, let me dig deeper..."
-                               "Interesting — following up on that..."
-                               "Not quite enough yet, trying another angle..."
-                               "Connecting the dots from what I found..."
-                               "Let me cross-reference that..."
-                               "Almost there, checking one more thing..."
-                               "Refining my understanding..."
-                               "That raised a new question..."]]
-            (on-iteration {:type    "thinking"
-                           :current i
-                           :total   (:max-iterations state)
-                           :message (if (zero? i)
-                                      (nth thinking-msgs (mod (hash (:question state)) (count thinking-msgs)))
-                                      (nth refining-msgs (mod (+ i (hash (:question state))) (count refining-msgs))))})))
-
         (let [step-start (System/currentTimeMillis)
               nxt        (next-state context state)]
           (if-let [done (:done nxt)]
@@ -430,7 +412,7 @@
                   (on-iteration {:type      "done"
                                  :current   (get-in done [:usage :iterations])
                                  :total     (get-in done [:usage :iterations])
-                                 :message   "Putting it all together..."
+                                 :message   "Composing answer"
                                  :elapsed   (- (System/currentTimeMillis) start-ms)}))
                 done)
             (let [elapsed (- (System/currentTimeMillis) step-start)
@@ -477,31 +459,39 @@
                                                         clause)))
                                           distinct
                                           (take 3)))
+                          ;; Extract query summary for display
+                          query-summary
+                          (when (and (= 1 (count tools)) (= :query (first tools)))
+                            (let [q (:query (first args))]
+                              (when (sequential? q)
+                                (let [find-idx (.indexOf q :find)
+                                      where-idx (.indexOf q :where)
+                                      find-vars (when (and (>= find-idx 0) (> where-idx find-idx))
+                                                  (->> (subvec (vec q) (inc find-idx) where-idx)
+                                                       (filter symbol?)
+                                                       (map #(str/replace (name %) #"^\?" ""))
+                                                       (take 3)
+                                                       (str/join ", ")))]
+                                  find-vars))))
                           desc     (cond
                                      (:error step)
-                                     "Hmm, that didn't work — trying a different approach..."
+                                     "Query error — retrying with different approach"
 
                                      (and (= 1 (count tools)) (= :query (first tools)))
-                                     (let [what (if (seq attrs)
-                                                  (str/join ", " (map humanize attrs))
-                                                  nil)]
-                                       (if what
-                                         (str "Looked at " what)
-                                         (nth ["Searched the codebase"
-                                               "Checked the graph"
-                                               "Ran a query"]
-                                              (mod iteration 3))))
+                                     (if (seq query-summary)
+                                       (str "Datalog query — :find " query-summary)
+                                       "Datalog query")
 
                                      (and (= 1 (count tools)) (= :schema (first tools)))
-                                     "Checking what data is available..."
+                                     "Schema lookup"
 
                                      (and (= 1 (count tools)) (= :rules (first tools)))
-                                     "Looking up some patterns..."
+                                     "Rules lookup"
 
                                      (seq tools)
-                                     (str "Running " (count tools) " queries at once")
+                                     (str (count tools) " parallel queries")
 
-                                     :else "Thinking...")]
+                                     :else "Processing")]
                       (on-iteration {:type      "step"
                                      :current   (:iterations nxt)
                                      :total     (:max-iterations nxt)

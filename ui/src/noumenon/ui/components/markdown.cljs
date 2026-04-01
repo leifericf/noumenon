@@ -28,48 +28,50 @@
                   :font-size "13px"}}
    text])
 
+(defn- format-match
+  "Convert a regex match to hiccup."
+  [m]
+  (cond
+    (str/starts-with? m "`")
+    (inline-code (subs m 1 (dec (count m))))
+
+    (str/starts-with? m "**")
+    [:strong {:style {:font-weight 600}} (subs m 2 (- (count m) 2))]
+
+    (str/starts-with? m "*")
+    [:em (subs m 1 (dec (count m)))]
+
+    (str/starts-with? m "[")
+    (let [i (str/index-of m "]")]
+      [:span {:style {:color (:accent styles/tokens)}} (subs m 1 i)])
+
+    :else m))
+
 (defn- process-inline
   "Process inline markdown: **bold**, *italic*, `code`, [links](url)."
   [text]
   (if-not (string? text)
     text
-    ;; Split on inline patterns, process each token
-    (let [;; Match: `code`, **bold**, *italic*, [text](url)
-          pattern #"(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))"
-          parts   (str/split text pattern)
-          matches (re-seq pattern text)
-          ;; Interleave plain text with formatted tokens
-          tokens  (loop [ps parts ms matches acc []]
-                    (if (empty? ps)
-                      acc
-                      (let [p (first ps)
-                            acc (if (seq p) (conj acc p) acc)
-                            acc (if (seq ms)
-                                  (let [m (first ms)]
-                                    (conj acc
-                                          (cond
-                                            (str/starts-with? m "`")
-                                            (inline-code (subs m 1 (dec (count m))))
-
-                                            (str/starts-with? m "**")
-                                            [:strong {:style {:font-weight 600}}
-                                             (subs m 2 (- (count m) 2))]
-
-                                            (str/starts-with? m "*")
-                                            [:em (subs m 1 (dec (count m)))]
-
-                                            (str/starts-with? m "[")
-                                            (let [bracket-end (str/index-of m "]")
-                                                  link-text   (subs m 1 bracket-end)
-                                                  url         (subs m (+ bracket-end 2) (dec (count m)))]
-                                              [:span {:style {:color (:accent styles/tokens)}}
-                                               link-text])
-
-                                            :else m)))
-                                  acc)]
-                        (recur (rest ps) (rest ms) acc))))]
-      (if (= 1 (count tokens))
-        (first tokens)
+    (let [pattern #"`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\)"
+          ;; Use JS regex exec loop to get match positions
+          re      (js/RegExp. (.-source pattern) "g")
+          tokens  (loop [acc [] last-end 0]
+                    (if-let [m (.exec re text)]
+                      (let [idx   (.-index m)
+                            match (aget m 0)
+                            ;; Plain text before this match
+                            acc   (if (> idx last-end)
+                                    (conj acc (subs text last-end idx))
+                                    acc)]
+                        (recur (conj acc (format-match match))
+                               (+ idx (count match))))
+                      ;; Trailing plain text
+                      (if (< last-end (count text))
+                        (conj acc (subs text last-end))
+                        acc)))]
+      (case (count tokens)
+        0 text
+        1 (first tokens)
         (into [:span] tokens)))))
 
 (defn- parse-line [line]

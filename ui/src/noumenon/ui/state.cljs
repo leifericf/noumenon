@@ -876,6 +876,10 @@
 (defmethod handle-event :action/graph-filter-layer-set [state [_ layer]]
   {:state (assoc state :graph/filter-layer (when (seq layer) (keyword layer)))})
 
+(defmethod handle-event :action/copy-to-clipboard [state [_ text]]
+  {:state state
+   :fx [[:clipboard/write text]]})
+
 (defmethod handle-event :action/ask-about-node [state [_ file-id]]
   {:state (assoc state :ask/query (str "Tell me about @" file-id)
                  :graph/selected nil :graph/node-card nil :graph/node-card-pos nil)
@@ -1179,6 +1183,12 @@
       :dom/set-hash
       (let [[hash] args]
         (set! (.-hash js/location) hash))
+
+      :clipboard/write
+      (let [[text] args]
+        (-> (.writeText js/navigator.clipboard text)
+            (.then #(dispatch! [:action/toast {:message "Copied" :type :info}]))
+            (.catch #(dispatch! [:action/toast {:message "Copy failed" :type :error}]))))
 
       :download/csv
       (let [[{:keys [filename content]}] args

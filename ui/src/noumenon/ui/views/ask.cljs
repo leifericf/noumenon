@@ -130,11 +130,12 @@
     (or message "Connecting...")]])
 
 (defn- reasoning-trace [steps progress expanded?]
-  (let [n          (count steps)
+  (let [real-steps (filterv #(not= "thinking" (:type %)) steps)
+        n          (count real-steps)
         show-all?  (or expanded? (<= n 3))
         visible    (if show-all?
-                     (map-indexed vector steps)
-                     (map-indexed vector (take-last 3 steps)))]
+                     (map-indexed vector real-steps)
+                     (map-indexed vector (take-last 3 real-steps)))]
     [:div {:style {:width "100%"
                    :margin-top "20px"
                    :padding "16px 20px"
@@ -149,10 +150,7 @@
       [:span {:style {:font-size "12px" :font-weight 600
                       :text-transform "uppercase" :letter-spacing "0.5px"
                       :color (:text-muted styles/tokens)}}
-       "Reasoning"]
-      [:span {:style {:font-size "10px" :color (:text-muted styles/tokens)
-                      :margin-left "4px"}}
-       "(latest first)"]
+       "Agent steps"]
       (when (> n 3)
         [:button {:on {:click [:action/ask-toggle-reasoning]}
                   :aria-expanded (boolean show-all?)
@@ -187,7 +185,20 @@
    [:div {:style {:background "rgba(15,20,30,0.75)"
                   :border (str "1px solid " (:border styles/tokens))
                   :border-radius (:radius styles/tokens)
-                  :padding "16px"}}
+                  :padding "16px"
+                  :position "relative"}}
+    [:button {:on {:click [:action/copy-to-clipboard answer]}
+              :style {:position "absolute" :top "10px" :right "10px"
+                      :background "rgba(255,255,255,0.05)"
+                      :border "1px solid rgba(255,255,255,0.08)"
+                      :border-radius "6px"
+                      :cursor "pointer"
+                      :color "rgba(255,255,255,0.4)"
+                      :font-size "11px"
+                      :padding "4px 10px"
+                      :letter-spacing "0.3px"}
+              :title "Copy to clipboard"}
+     "Copy"]
     (md/render-markdown answer)]])
 
 ;; --- Main view ---
@@ -269,12 +280,23 @@
   (when detail
     [:div {:style {:padding "12px 0"
                    :animation "fadeSlideIn 0.2s ease"}}
-     ;; Answer
      (when-let [answer (:answer detail)]
        [:div {:style {:padding "12px 16px"
                       :background "rgba(15,20,30,0.75)"
                       :border (str "1px solid " (:border styles/tokens))
-                      :border-radius (:radius styles/tokens)}}
+                      :border-radius (:radius styles/tokens)
+                      :position "relative"}}
+        [:button {:on {:click [:action/copy-to-clipboard answer]}
+                  :style {:position "absolute" :top "10px" :right "10px"
+                          :background "rgba(255,255,255,0.05)"
+                          :border "1px solid rgba(255,255,255,0.08)"
+                          :border-radius "6px"
+                          :cursor "pointer"
+                          :color "rgba(255,255,255,0.4)"
+                          :font-size "11px"
+                          :padding "4px 10px"}
+                  :title "Copy to clipboard"}
+         "Copy"]
         (md/render-markdown answer)])]))
 
 (defn- past-session-item [{:keys [id question status duration-ms iterations
@@ -411,13 +433,15 @@
                        :left 0
                        :right 0
                        :margin-top "4px"
-                       :background "rgba(15,20,30,0.75)"
+                       :background "rgba(10,14,23,0.95)"
+                       :backdrop-filter "blur(12px)"
+                       :-webkit-backdrop-filter "blur(12px)"
                        :border (str "1px solid " (:border styles/tokens))
                        :border-radius (:radius styles/tokens)
-                       :box-shadow "0 4px 12px rgba(0,0,0,0.3)"
+                       :box-shadow "0 4px 12px rgba(0,0,0,0.4)"
                        :max-height "240px"
                        :overflow-y "auto"
-                       :z-index 100}}
+                       :z-index 200}}
          (for [[i item] (map-indexed vector completions)]
            [:div {:key (:value item)
                   :id (str "ask-completion-" i)
@@ -459,38 +483,34 @@
                       (re-find #"Mac" (.-platform js/navigator)))]
         [:span {:style {:color "rgba(255,255,255,0.2)"}}
          (if mac? "\u2318K to focus" "Ctrl+K to focus")])]
-     ;; Suggestion chips on empty state
-     (when (and (not has-results?) (not loading?))
-       (suggestion-ticker visible-suggestions (:ask/ticker-paused? state)))
-     ;; Reasoning trace (during loading)
-     (when (and loading? (or (seq steps) progress))
-       (reasoning-trace steps progress reasoning-expanded?))
-     ;; Current session history
-     (when (seq history)
-       [:div {:style {:width "100%" :margin-top "24px"}}
-        (for [[i item] (map-indexed vector (reverse history))]
-          [:div {:key i} (history-item item)])
-        ;; Show reasoning link for the most recent answer
-        (let [last-steps (filterv #(= "step" (:type %)) (or (:ask/last-steps state) []))]
-          (when (and (seq last-steps) (not loading?))
-            (let [showing? (:ask/show-post-reasoning? state)]
-              [:div {:style {:margin-top "4px"}}
-               [:button {:on {:click [:action/ask-toggle-post-reasoning]}
-                         :style {:background "none" :border "none" :cursor "pointer"
-                                 :font-size "12px" :color (:text-muted styles/tokens)
-                                 :padding "0" :display "flex" :align-items "center"
-                                 :gap "4px"}}
-                [:span (if showing? "\u25BC" "\u25B6")]
-                (str "Show reasoning (" (count last-steps) " steps)")]
-               (when showing?
-                 (reasoning-trace last-steps nil reasoning-expanded?))])))
-        ;; New question link
-        [:div {:style {:margin-top "12px" :text-align "center"}}
-         [:button {:on {:click [:action/ask-clear]}
-                   :style {:background "none" :border "none" :cursor "pointer"
-                           :font-size "13px" :color (:text-muted styles/tokens)
-                           :padding "4px 12px"}}
-          "New question"]]])]))
+     ;; Scrollable content below input (doesn't clip the completions dropdown)
+     [:div {:style {:max-height "55vh" :overflow-y "auto" :width "100%"}}
+      (when (and loading? (or (seq steps) progress))
+        (reasoning-trace steps progress reasoning-expanded?))
+      (when (seq history)
+        (into [:div {:style {:width "100%" :margin-top "24px"}}]
+              (concat
+               (for [[i item] (map-indexed vector (reverse history))]
+                 [:div {:key i} (history-item item)])
+               (let [last-steps (filterv #(= "step" (:type %)) (or (:ask/last-steps state) []))]
+                 (when (and (seq last-steps) (not loading?))
+                   (let [showing? (:ask/show-post-reasoning? state)]
+                     [[:div {:style {:margin-top "4px"}}
+                       [:button {:on {:click [:action/ask-toggle-post-reasoning]}
+                                 :style {:background "none" :border "none" :cursor "pointer"
+                                         :font-size "12px" :color (:text-muted styles/tokens)
+                                         :padding "0" :display "flex" :align-items "center"
+                                         :gap "4px"}}
+                        [:span (if showing? "\u25BC" "\u25B6")]
+                        (str "Show reasoning (" (count last-steps) " steps)")]
+                       (when showing?
+                         (reasoning-trace last-steps nil reasoning-expanded?))]])))
+               [[:div {:style {:margin-top "12px" :text-align "center"}}
+                 [:button {:on {:click [:action/ask-clear]}
+                           :style {:background "none" :border "none" :cursor "pointer"
+                                   :font-size "13px" :color (:text-muted styles/tokens)
+                                   :padding "4px 12px"}}
+                  "New question"]]])))]]))
 
 (defn past-questions-panel [state]
   (let [{:keys [ask/past-sessions ask/expanded-session ask/expanded-detail]} state]

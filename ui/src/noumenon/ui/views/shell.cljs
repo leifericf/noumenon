@@ -288,8 +288,8 @@
                     {:position "absolute"
                      :width "640px"
                      :max-height "75vh"
-                     :overflow-y "auto"
-                     :z-index 10}
+                     :z-index 10
+                     :overflow "visible"}
                     (if panel-centered?
                       {:top "12vh" :left "50%" :transform "translateX(-50%)"}
                       {:top (str panel-y "px") :left (str panel-x "px")}))}
