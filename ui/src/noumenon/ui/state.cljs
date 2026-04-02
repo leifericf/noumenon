@@ -224,8 +224,10 @@
   {:state (assoc state :ask/ticker-paused? paused?)})
 
 (defmethod handle-event :action/ask-run-suggestion [state [_ question]]
-  {:state (assoc state :ask/query question)
-   :fx [[:dispatch [:action/ask-submit]]]})
+  (if (:ask/loading? state)
+    {:state state}
+    {:state (assoc state :ask/query question)
+     :fx [[:dispatch [:action/ask-submit]]]}))
 
 (defmethod handle-event :action/ask-init-suggestions [state _]
   (let [shuffled (sort-by (fn [_] (js/Math.random)) suggestion-catalog)]
@@ -838,10 +840,13 @@
        :fx (when db-name (file-card-effects db-name id))})))
 
 (defn- maybe-cache-file-card
-  "Cache file card when both summary and imports are populated."
+  "Cache file card when all five data fields are populated."
   [state file-id]
   (let [card (:graph/node-card state)]
-    (if (and card (contains? card :summary) (contains? card :imports))
+    (if (and card
+             (contains? card :summary) (contains? card :imports)
+             (contains? card :importers) (contains? card :authors)
+             (contains? card :history))
       (assoc-in state [:graph/card-cache file-id] card)
       state)))
 

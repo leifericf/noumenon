@@ -145,7 +145,9 @@
                     (let [ordered? (ordered-item? line)
                           [items remaining]
                           (loop [items [line] rest-lines (rest ls)]
-                            (if (and (seq rest-lines) (list-item? (first rest-lines)))
+                            (if (and (seq rest-lines)
+                                     (list-item? (first rest-lines))
+                                     (= ordered? (ordered-item? (first rest-lines))))
                               (recur (conj items (first rest-lines)) (rest rest-lines))
                               [items rest-lines]))
                           tag (if ordered? :ol :ul)]

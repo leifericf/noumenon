@@ -364,7 +364,7 @@
             (let [duplicate? (>= i n)]
               [:button {:key (str i "-" q)
                         :on {:click [:action/ask-run-suggestion q]}
-                        :tab-index (if duplicate? -1 0)
+                        :tabindex (if duplicate? -1 0)
                         :aria-hidden (when duplicate? "true")
                         :aria-label (str "Ask: " q)
                         :style {:background "rgba(15,20,30,0.75)"
