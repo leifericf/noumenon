@@ -179,7 +179,7 @@
                            (throw (ex-info "Query references rules (%) but no rules are loaded. Seed rules first via noumenon_artifact_seed."
                                            {:query q})))
               f          (future (try
-                                   (if rules
+                                   (if (and rules uses-rules)
                                      (d/q q db rules)
                                      (d/q q db))
                                    (catch OutOfMemoryError _

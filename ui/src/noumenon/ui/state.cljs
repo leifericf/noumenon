@@ -854,17 +854,23 @@
 
 (defmethod handle-event :action/graph-node-importers-loaded [state [_ file-id data]]
   (if (= file-id (:graph/selected state))
-    {:state (assoc-in state [:graph/node-card :importers] (:results data))}
+    {:state (-> state
+                (assoc-in [:graph/node-card :importers] (:results data))
+                (maybe-cache-file-card file-id))}
     {:state state}))
 
 (defmethod handle-event :action/graph-node-authors-loaded [state [_ file-id data]]
   (if (= file-id (:graph/selected state))
-    {:state (assoc-in state [:graph/node-card :authors] (:results data))}
+    {:state (-> state
+                (assoc-in [:graph/node-card :authors] (:results data))
+                (maybe-cache-file-card file-id))}
     {:state state}))
 
 (defmethod handle-event :action/graph-node-history-loaded [state [_ file-id data]]
   (if (= file-id (:graph/selected state))
-    {:state (assoc-in state [:graph/node-card :history] (:results data))}
+    {:state (-> state
+                (assoc-in [:graph/node-card :history] (:results data))
+                (maybe-cache-file-card file-id))}
     {:state state}))
 
 (defmethod handle-event :action/graph-node-meta-loaded [state [_ file-id data]]
