@@ -250,12 +250,13 @@
             meta-conn  (db/ensure-meta-db db-dir)
             repo-uri   (.getCanonicalPath (java.io.File. (str repo-path)))
             interval-s (or interval 30)
-            sync-opts  (cond-> (build-sync-opts opts)
-                         analyze (assoc :meta-db (d/db meta-conn)))]
+            base-opts  (build-sync-opts opts)]
         (log! (str "Watching " repo-path " (polling every " interval-s "s)"))
         (loop [failures 0
                last-had-changes? true]
-          (let [result  (try
+          (let [sync-opts (cond-> base-opts
+                            analyze (assoc :meta-db (d/db meta-conn)))
+                result  (try
                           (sync/update-repo! conn repo-path repo-uri
                                              (assoc sync-opts :quiet? (not last-had-changes?)))
                           (catch Exception e

@@ -45,6 +45,11 @@
                 (swap! conn-cache assoc cache-key conn)
                 conn))))))
 
+(defn evict-conn!
+  "Remove a cached connection for [db-dir db-name]."
+  [db-dir db-name]
+  (swap! conn-cache dissoc [db-dir db-name]))
+
 (defn ensure-meta-db
   "Connect to the noumenon-internal meta database, ensure schema, and seed
    artifacts from classpath if needed. Returns the connection."
@@ -85,7 +90,6 @@
   [client db-name]
   (try
     (let [conn   (d/connect client {:db-name db-name})
-          _      (schema/ensure-schema conn)
           db     (d/db conn)
           latest (ffirst (d/q '[:find (max ?d) :where [_ :commit/committed-at ?d]] db))
           cost   (or (ffirst (d/q '[:find (sum ?c) :where [_ :tx/cost-usd ?c]] db)) 0.0)

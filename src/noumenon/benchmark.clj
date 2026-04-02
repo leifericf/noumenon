@@ -176,6 +176,9 @@
         total         (count complex-files)
         ratio         (if (pos? total) (/ (double found) total) 0.0)]
     (cond
+      (zero? total)
+      {:score :skipped :reasoning "No complex files in repo — question not applicable"}
+
       (= found total)
       {:score :correct :reasoning (str "All " total " complex files listed")}
 

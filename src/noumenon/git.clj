@@ -106,10 +106,12 @@
   100000000)
 
 (defn- parse-iso-instant [s]
-  (->> s
-       (.parse DateTimeFormatter/ISO_OFFSET_DATE_TIME)
-       Instant/from
-       Date/from))
+  (try
+    (->> s
+         (.parse DateTimeFormatter/ISO_OFFSET_DATE_TIME)
+         Instant/from
+         Date/from)
+    (catch Exception _ nil)))
 
 (defn- resolve-rename-path
   "Resolve git rename syntax '{old => new}/rest' to the destination path.
@@ -152,18 +154,21 @@
       ;; If the body contains embedded \x00, extra fields appear
       ;; between 8 and the end — we rejoin them to reconstruct it.
       (let [[sha parents aname aemail adate cname cemail cdate] fields
-            numstat (parse-numstat (peek fields))
-            body    (str/join "\u0000" (subvec fields 8 (dec (count fields))))]
-        (merge {:sha             sha
-                :parent-shas     (if (str/blank? parents) [] (str/split parents #" "))
-                :author-name     aname
-                :author-email    aemail
-                :authored-at     (parse-iso-instant adate)
-                :committer-name  cname
-                :committer-email cemail
-                :committed-at    (parse-iso-instant cdate)
-                :message         (str/trim body)}
-               numstat)))))
+            authored  (parse-iso-instant adate)
+            committed (parse-iso-instant cdate)]
+        (when (and authored committed)
+          (let [numstat (parse-numstat (peek fields))
+                body    (str/join "\u0000" (subvec fields 8 (dec (count fields))))]
+            (merge {:sha             sha
+                    :parent-shas     (if (str/blank? parents) [] (str/split parents #" "))
+                    :author-name     aname
+                    :author-email    aemail
+                    :authored-at     authored
+                    :committer-name  cname
+                    :committer-email cemail
+                    :committed-at    committed
+                    :message         (str/trim body)}
+                   numstat)))))))
 
 ;; --- Issue reference extraction ---
 
