@@ -335,9 +335,10 @@
         args     (cond-> [java-bin "-jar" jar-path "serve"]
                    (:db-dir flags)   (into ["--db-dir" (:db-dir flags)])
                    (:provider flags) (into ["--provider" (:provider flags)])
-                   (:model flags)    (into ["--model" (:model flags)])
-                   (:token flags)    (into ["--token" (:token flags)]))]
-    (:exit @(proc/process {:cmd args :inherit true}))))
+                   (:model flags)    (into ["--model" (:model flags)]))
+        env      (cond-> (into {} (System/getenv))
+                   (:token flags) (assoc "NOUMENON_TOKEN" (:token flags)))]
+    (:exit @(proc/process {:cmd args :extra-env env :inherit true}))))
 
 (defn- do-watch [{:keys [flags positional]}]
   (if (empty? positional)
