@@ -42,7 +42,7 @@
 <section class="hero">
   <div class="container">
     <div class="hero-badge">
-      <span>&#9679;</span> Open source &middot; Zero dependencies &middot; MIT License
+      <span>&#9679;</span> Open source &middot; Self-contained &middot; MIT License
     </div>
     <h1>Precise, grounded answers<br>about your codebase.</h1>
     <p class="hero-sub">
@@ -289,6 +289,10 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
         <p>Identifies components, layers, and dependencies from the full codebase. Language-agnostic.</p>
       </div>
       <div class="card">
+        <h3>Interactive TUI</h3>
+        <p>Run <code>noum</code> with no arguments for a menu-driven terminal interface. Browse commands, select repositories and sessions from live data &mdash; no memorizing IDs.</p>
+      </div>
+      <div class="card">
         <h3>Visual desktop UI</h3>
         <p>Electron app with a force-directed graph, three-level drill-down, floating Ask overlay, and Canvas rendering at 60fps. <code>noum open</code></p>
       </div>
@@ -361,7 +365,7 @@ src/auth/session.ts       28       complex</span></pre>
   <div class="container section-center">
     <h2 class="section-title">Get started</h2>
     <p class="section-sub">
-      One command to install, zero dependencies. See the <a href="https://github.com/leifericf/noumenon#readme">README</a> for details.
+      One command to install. See the <a href="https://github.com/leifericf/noumenon#readme">README</a> for details.
     </p>
     <div class="steps">
       <div class="step">
@@ -370,10 +374,21 @@ src/auth/session.ts       28       complex</span></pre>
           <h3>Install</h3>
           <p>Single binary. Auto-downloads everything it needs on first use.</p>
           <code>curl -sSL https://noumenon.leifericf.com/install | bash</code>
+          <p style="margin-top: 0.75rem;">Or via <a href="https://brew.sh">Homebrew</a> (macOS / Linux) or <a href="https://scoop.sh">Scoop</a> (Windows):</p>
+          <code>brew install leifericf/noumenon/noumenon</code>
+          <code style="margin-top: 0.25rem;">scoop bucket add noumenon https://github.com/leifericf/scoop-noumenon &amp;&amp; scoop install noumenon</code>
         </div>
       </div>
       <div class="step">
         <div class="step-number">2</div>
+        <div class="step-content">
+          <h3>Launch interactive mode</h3>
+          <p>A menu-driven TUI that lets you browse commands by category, select repositories and sessions from live data &mdash; no memorizing IDs.</p>
+          <code>noum</code>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-number">3</div>
         <div class="step-content">
           <h3>Try the demo</h3>
           <p>Downloads a pre-built knowledge graph. No LLM credentials needed.</p>
@@ -381,11 +396,19 @@ src/auth/session.ts       28       complex</span></pre>
         </div>
       </div>
       <div class="step">
-        <div class="step-number">3</div>
+        <div class="step-number">4</div>
         <div class="step-content">
           <h3>Ask a question</h3>
           <p>Natural-language questions answered by iterative Datalog queries against the knowledge graph.</p>
           <code>noum ask noumenon "Which files are the biggest risk hotspots?"</code>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-number">5</div>
+        <div class="step-content">
+          <h3>Open the visual UI</h3>
+          <p>Force-directed graph visualization with three-level drill-down and a floating Ask overlay. <a href="https://nodejs.org">Node.js</a> must be installed.</p>
+          <code>noum open</code>
         </div>
       </div>
     </div>

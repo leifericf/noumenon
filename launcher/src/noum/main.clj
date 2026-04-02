@@ -7,7 +7,9 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [noum.api :as api]
             [noum.cli :as cli]
+            [noum.interactive :as interactive]
             [noum.daemon :as daemon]
             [noum.demo :as demo]
             [noum.jar :as jar]
@@ -24,135 +26,6 @@
   (or (try (:version (edn/read-string (slurp (io/resource "version.edn"))))
            (catch Exception _ nil))
       "dev"))
-
-;; --- Config ---
-
-(defn- load-config []
-  (if (fs/exists? paths/config-path)
-    (do (paths/ensure-private! paths/config-path)
-        (edn/read-string (slurp paths/config-path)))
-    {}))
-
-;; --- HTTP client ---
-
-(def ^:private blocked-ip-patterns
-  "Regex patterns matching private/loopback IP ranges (RFC-1918, RFC-5737, loopback, link-local)."
-  [#"^127\." #"^10\." #"^172\.(1[6-9]|2[0-9]|3[01])\." #"^192\.168\."
-   #"^0\." #"^169\.254\." #"^::1$" #"^fc00:" #"^fe80:" #"^fd"])
-
-(defn- private-ip?
-  "True if ip-str matches a private, loopback, or link-local range."
-  [ip-str]
-  (some #(re-find % ip-str) blocked-ip-patterns))
-
-(defn- blocked-address?
-  "True if addr is private, loopback, or link-local.
-   Handles IPv4-mapped IPv6 addresses by re-canonicalizing."
-  [^java.net.InetAddress addr]
-  (let [ip (.getHostAddress addr)]
-    (or (private-ip? ip)
-        (.isLoopbackAddress addr)
-        (.isLinkLocalAddress addr)
-        (.isSiteLocalAddress addr)
-        (when (instance? java.net.Inet6Address addr)
-          (let [canon (java.net.InetAddress/getByAddress (.getAddress addr))]
-            (or (.isLoopbackAddress canon)
-                (.isLinkLocalAddress canon)
-                (.isSiteLocalAddress canon)
-                (private-ip? (.getHostAddress canon))))))))
-
-(defn- private-address?
-  "True if the host resolves to a private, loopback, or link-local IP.
-   Checks all DNS results (not just the first) to mitigate DNS rebinding.
-   Returns true (fail-closed) on DNS resolution failure."
-  [host-str]
-  (try
-    (let [host  (first (str/split host-str #":"))
-          addrs (java.net.InetAddress/getAllByName host)]
-      (some blocked-address? addrs))
-    (catch Exception _ true)))
-
-(defn- base-url
-  "Build base URL from connection info. Supports remote --host.
-   Remote hosts default to https:// unless --insecure is set.
-   Rejects hosts that resolve to private/link-local addresses (SSRF protection)."
-  [{:keys [port host insecure]}]
-  (or (when host
-        (when (and (not (re-find #"^(localhost|127\.0\.0\.1)(:|$)" host))
-                   (private-address? host))
-          (throw (ex-info "Blocked: --host resolves to a private/internal address"
-                          {:host host})))
-        (if (or insecure (re-find #"^(localhost|127\.0\.0\.1)(:|$)" host))
-          (str "http://" host)
-          (str "https://" host)))
-      (str "http://127.0.0.1:" port)))
-
-(defn- auth-headers
-  "Build auth headers from connection info."
-  [{:keys [token]}]
-  (cond-> {"Content-Type" "application/json"}
-    token (assoc "Authorization" (str "Bearer " token))))
-
-(defn- parse-sse-events
-  "Read an SSE stream, call on-progress for each progress event.
-   Returns the result from the 'result' event."
-  [input-stream on-progress]
-  (let [result (atom nil)]
-    (with-open [rdr (io/reader input-stream)]
-      (loop [event-type nil]
-        (when-let [line (.readLine rdr)]
-          (cond
-            (str/starts-with? line "event: ")
-            (recur (subs line 7))
-
-            (str/starts-with? line "data: ")
-            (let [data (json/parse-string (subs line 6) true)]
-              (case event-type
-                "progress" (do (when on-progress (on-progress data)) (recur nil))
-                "result"   (do (reset! result data) (recur nil))
-                "error"    (do (reset! result {:ok false :error (:message data)}) (recur nil))
-                "done"     nil
-                (recur nil)))
-
-            :else (recur event-type)))))
-    @result))
-
-(defn- api-post!
-  "POST to the daemon API. When stream? is true, requests SSE and feeds
-   on-progress with each event. Returns parsed response."
-  ([conn path body] (api-post! conn path body nil))
-  ([conn path body on-progress]
-   (let [sse?    (some? on-progress)
-         headers (cond-> (auth-headers conn)
-                   sse? (assoc "Accept" "text/event-stream"))
-         resp    (http/post (str (base-url conn) path)
-                            {:headers headers
-                             :body    (json/generate-string body)
-                             :timeout 600000
-                             :throw   false
-                             :as      (if sse? :stream :string)})]
-     (cond
-       (and sse? (<= 200 (:status resp) 299))
-       (let [result (parse-sse-events (:body resp) on-progress)]
-         (if (and (map? result) (false? (:ok result)))
-           result
-           {:ok true :data result}))
-
-       sse?
-       (let [body-str (slurp (:body resp))]
-         (try (json/parse-string body-str true)
-              (catch Exception _
-                {:ok false :error (str "HTTP " (:status resp) ": " body-str)})))
-
-       :else
-       (json/parse-string (:body resp) true)))))
-
-(defn- api-get! [conn path]
-  (let [resp (http/get (str (base-url conn) path)
-                       {:headers (auth-headers conn)
-                        :timeout 30000
-                        :throw   false})]
-    (json/parse-string (:body resp) true)))
 
 ;; --- Output ---
 
@@ -187,23 +60,6 @@
   (if (:ok resp)
     (do (print-result (:data resp)) 0)
     (do (tui/eprintln (str (style/red "Error: ") (:error resp))) 1)))
-
-;; --- Backend ---
-
-(defn- ensure-backend!
-  "Returns a connection map {:port N} or {:host \"addr:port\" :token \"...\"}.
-   Remote mode (--host): skips JRE/JAR/daemon, connects directly."
-  [flags]
-  (let [effective (merge (load-config) flags)]
-    (if-let [host (:host effective)]
-      {:host host :token (:token effective) :insecure (:insecure effective)}
-      (let [jre-path (jre/ensure!)
-            jar-path (jar/ensure!)]
-        (daemon/ensure! (merge {:jre-path jre-path :jar-path jar-path}
-                               (select-keys effective [:db-dir :provider :model :token])))))))
-
-(defn- url-encode [s]
-  (java.net.URLEncoder/encode (str s) "UTF-8"))
 
 ;; --- Path resolution ---
 
@@ -293,7 +149,7 @@
               ((:done b))
               ((:update b) current))))))))
 
-(defn- do-api-command [{:keys [command flags positional]}]
+(defn do-api-command [{:keys [command flags positional]}]
   (let [{:keys [api-path api-method min-args usage] :as cmd-def} (cli/commands command)]
     (cond
       (not api-path)
@@ -306,20 +162,20 @@
           1)
 
       :else
-      (let [conn        (ensure-backend! flags)
+      (let [conn        (api/ensure-backend! flags)
             body        (build-api-body flags positional cmd-def)
             progress-fn (make-progress-handler command)]
         (print-api-result (case api-method
-                            :post (api-post! conn api-path body progress-fn)
-                            :get  (api-get! conn api-path)))))))
+                            :post (api/post! conn api-path body progress-fn)
+                            :get  (api/get! conn api-path)))))))
 
 (defn- do-db-get
   "GET endpoint addressed by database name. Accepts a path or name."
   [{:keys [flags positional]} path-prefix cmd-name]
   (if-let [repo (first positional)]
-    (let [conn    (ensure-backend! flags)
+    (let [conn    (api/ensure-backend! flags)
           db-name (path->db-name repo)]
-      (api-get! conn (str path-prefix (url-encode db-name))))
+      (api/get! conn (str path-prefix (api/url-encode db-name))))
     {:ok false :error (str "Usage: noum " cmd-name " <repo>. Use `noum databases` to see names.")}))
 
 (defn- do-status [parsed]
@@ -339,7 +195,7 @@
 
 (defn- do-start [{:keys [flags]}]
   (let [was-running (daemon/running?)]
-    (ensure-backend! flags)
+    (api/ensure-backend! flags)
     (when was-running
       (tui/eprintln (str (style/green "✓") " Daemon already running on port " (:port (daemon/connection)))))
     0))
@@ -351,7 +207,7 @@
 
 (defn- do-ping [_]
   (if-let [conn (daemon/connection)]
-    (let [resp (api-get! conn "/health")]
+    (let [resp (api/get! conn "/health")]
       (tui/eprintln (str (style/green "✓") " Daemon running on port " (:port conn)))
       (print-result (:data resp))
       0)
@@ -385,14 +241,14 @@
 (defn- do-watch [{:keys [flags positional]}]
   (if-not (seq positional)
     (do (tui/eprintln "Usage: noum watch <repo> [--interval N] [--analyze]") 1)
-    (let [conn       (ensure-backend! flags)
+    (let [conn       (api/ensure-backend! flags)
           repo-path  (first positional)
           interval-s (or (some-> (:interval flags) parse-long) 30)
           body       (cond-> {:repo_path (canonicalize-path repo-path)}
                        (:analyze flags) (assoc :analyze true))]
       (tui/eprintln (str "Watching " repo-path " (polling every " interval-s "s). Ctrl+C to stop."))
       (loop [failures 0]
-        (let [resp (try (api-post! conn "/api/update" body)
+        (let [resp (try (api/post! conn "/api/update" body)
                         (catch Exception e {:ok false :error (.getMessage e)}))]
           (if (:ok resp)
             (do (when (not= :up-to-date (get-in resp [:data :status]))
@@ -413,13 +269,13 @@
         (tui/eprintln "Use `noum databases` to see available database names.")
         1)
     (let [db-name (path->db-name (first positional))
-          conn    (ensure-backend! flags)]
+          conn    (api/ensure-backend! flags)]
       (if (and (not (:force flags))
                (not (confirm/ask (str "Delete database '" db-name "'? This cannot be undone.") false)))
         (do (tui/eprintln "Aborted.") 0)
         (let [resp (try
-                     (let [r (http/delete (str (base-url conn) "/api/databases/" (url-encode db-name))
-                                          {:headers (auth-headers conn)
+                     (let [r (http/delete (str (api/base-url conn) "/api/databases/" (api/url-encode db-name))
+                                          {:headers (api/auth-headers conn)
                                            :timeout 30000
                                            :throw   false})]
                        (json/parse-string (:body r) true))
@@ -431,23 +287,23 @@
     (do (tui/eprintln "Usage: noum results <repo> [--run-id <id>]")
         (tui/eprintln "Omit --run-id to get the latest run.")
         1)
-    (let [conn   (ensure-backend! flags)
+    (let [conn   (api/ensure-backend! flags)
           repo   (canonicalize-path (first positional))
-          params (str "?repo_path=" (url-encode repo)
-                      (when-let [rid (:run-id flags)] (str "&run_id=" (url-encode rid))))]
-      (print-api-result (api-get! conn (str "/api/benchmark/results" params))))))
+          params (str "?repo_path=" (api/url-encode repo)
+                      (when-let [rid (:run-id flags)] (str "&run_id=" (api/url-encode rid))))]
+      (print-api-result (api/get! conn (str "/api/benchmark/results" params))))))
 
 (defn- do-compare [{:keys [flags positional]}]
   (if (< (count positional) 3)
     (do (tui/eprintln "Usage: noum compare <repo> <run-a> <run-b>")
         (tui/eprintln "Use `noum results <repo>` to find run IDs.")
         1)
-    (let [conn   (ensure-backend! flags)
+    (let [conn   (api/ensure-backend! flags)
           repo   (canonicalize-path (first positional))
-          params (str "?repo_path=" (url-encode repo)
-                      "&run_id_a=" (url-encode (second positional))
-                      "&run_id_b=" (url-encode (nth positional 2)))]
-      (print-api-result (api-get! conn (str "/api/benchmark/compare" params))))))
+          params (str "?repo_path=" (api/url-encode repo)
+                      "&run_id_a=" (api/url-encode (second positional))
+                      "&run_id_b=" (api/url-encode (nth positional 2)))]
+      (print-api-result (api/get! conn (str "/api/benchmark/compare" params))))))
 
 (defn- do-history [{:keys [flags positional]}]
   (let [atype (or (:type flags) (first positional))
@@ -467,9 +323,9 @@
           1)
 
       :else
-      (let [conn   (ensure-backend! flags)
+      (let [conn   (api/ensure-backend! flags)
             params (str "?type=" atype (when aname (str "&name=" aname)))
-            resp   (api-get! conn (str "/api/artifacts/history" params))]
+            resp   (api/get! conn (str "/api/artifacts/history" params))]
         (print-api-result resp)))))
 
 (defn- do-help [{:keys [positional]}]
@@ -485,7 +341,7 @@
   (when (jar/installed?)
     (try
       (when-let [conn (daemon/connection)]
-        (let [resp (api-get! conn "/health")]
+        (let [resp (api/get! conn "/health")]
           (when (:ok resp)
             (tui/eprintln (str "noumenon " (get-in resp [:data :version]))))))
       (catch Exception _
@@ -493,7 +349,7 @@
   0)
 
 (defn- do-open [{:keys [flags]}]
-  (let [conn (ensure-backend! flags)
+  (let [conn (api/ensure-backend! flags)
         port (:port conn)]
     (tui/eprintln (str "Opening Noumenon UI (daemon on port " port ")..."))
     (let [exit-code (try
@@ -512,12 +368,97 @@
         (tui/eprintln "    npm install -g electron"))
       exit-code)))
 
+;; --- Query (raw + as-of) ---
+
+(defn- do-query [{:keys [flags positional] :as parsed}]
+  (cond
+    (and (:raw flags) (:as-of flags))
+    (do (tui/eprintln "Error: --raw and --as-of cannot be used together.") 1)
+
+    (:raw flags)
+    (if-not (string? (:raw flags))
+      (do (tui/eprintln "Usage: noum query --raw '<datalog>' <repo> [--limit N]") 1)
+      (let [conn (api/ensure-backend! flags)
+            body (cond-> {:query     (:raw flags)
+                          :repo_path (canonicalize-path (or (first positional) "."))}
+                   (:limit flags) (assoc :limit (parse-long (:limit flags))))]
+        (print-api-result (api/post! conn "/api/query-raw" body))))
+
+    (:as-of flags)
+    (if (< (count positional) 2)
+      (do (tui/eprintln "Usage: noum query <name> <repo> --as-of <date> [--param key=value]") 1)
+      (let [conn (api/ensure-backend! flags)
+            body (cond-> {:query_name (first positional)
+                          :repo_path  (canonicalize-path (second positional))
+                          :as_of      (:as-of flags)}
+                   (:limit flags) (assoc :limit (parse-long (:limit flags)))
+                   (:param flags) (assoc :params (parse-param-flag (:param flags))))]
+        (print-api-result (api/post! conn "/api/query-as-of" body))))
+
+    :else
+    (do-api-command parsed)))
+
+;; --- Introspect (status / stop / history) ---
+
+(defn- do-introspect [{:keys [flags] :as parsed}]
+  (cond
+    (string? (:status flags))
+    (let [conn (api/ensure-backend! flags)]
+      (print-api-result (api/get! conn (str "/api/introspect/status?run_id=" (api/url-encode (:status flags))))))
+
+    (string? (:stop flags))
+    (let [conn (api/ensure-backend! flags)]
+      (print-api-result (api/post! conn "/api/introspect/stop" {:run_id (:stop flags)})))
+
+    (:history flags)
+    (let [conn       (api/ensure-backend! flags)
+          query-name (if (string? (:history flags)) (:history flags) "introspect-runs")]
+      (print-api-result (api/get! conn (str "/api/introspect/history?query_name=" (api/url-encode query-name)))))
+
+    :else
+    (do-api-command parsed)))
+
+;; --- Sessions / Feedback / Settings ---
+
+(defn- do-sessions [{:keys [flags positional]}]
+  (let [conn (api/ensure-backend! flags)]
+    (if-let [session-id (first positional)]
+      (print-api-result (api/get! conn (str "/api/ask/sessions/" (api/url-encode session-id))))
+      (print-api-result (api/get! conn "/api/ask/sessions")))))
+
+(defn- do-feedback [{:keys [flags positional]}]
+  (let [session-id (first positional)
+        rating     (second positional)]
+    (if-not (#{"positive" "negative"} rating)
+      (do (tui/eprintln "Usage: noum feedback <session-id> positive|negative [--comment \"...\"]")
+          (tui/eprintln "Rating must be 'positive' or 'negative'.")
+          1)
+      (let [conn (api/ensure-backend! flags)
+            body (cond-> {:feedback rating}
+                   (:comment flags) (assoc :comment (:comment flags)))]
+        (print-api-result (api/post! conn (str "/api/ask/sessions/" (api/url-encode session-id) "/feedback") body))))))
+
+(defn- do-settings [{:keys [flags positional]}]
+  (let [conn (api/ensure-backend! flags)]
+    (case (count positional)
+      0 (print-api-result (api/get! conn "/api/settings"))
+      1 (let [resp (api/get! conn "/api/settings")]
+          (if (:ok resp)
+            (let [k   (first positional)
+                  val (get (:data resp) (keyword k))]
+              (if (some? val)
+                (do (tui/eprintln (str "  " k ": " val)) 0)
+                (do (tui/eprintln (str "No setting: " k)) 1)))
+            (print-api-result resp)))
+      (print-api-result (api/post! conn "/api/settings"
+                                   {:key (first positional) :value (second positional)})))))
+
 ;; --- Dispatch ---
 
 (defn- do-demo [{:keys [flags]}]
   (try
     (demo/install! flags)
-    (let [port (ensure-backend! {})]
+    (let [port (api/ensure-backend! {})]
       (tui/eprintln "")
       (tui/eprintln (str (style/green "Done!") " Demo database ready."))
       (tui/eprintln "")
@@ -535,7 +476,7 @@
         (do (tui/eprintln (str "Error: " (.getMessage e)))
             1)))))
 
-(def ^:private dispatch
+(def dispatch
   {"help"       do-help
    "version"    do-version
    "demo"       do-demo
@@ -552,15 +493,23 @@
    "results"    do-results
    "compare"    do-compare
    "history"    do-history
-   "open"       do-open})
+   "open"       do-open
+   "query"      do-query
+   "introspect" do-introspect
+   "sessions"   do-sessions
+   "feedback"   do-feedback
+   "settings"   do-settings})
 
 (defn -main [& args]
   (let [parsed (cli/parse-args args)]
     (if (:error parsed)
-      (do (case (:error parsed)
-            :no-args         (tui/eprintln (cli/format-help))
-            :unknown-command (tui/eprintln (str "Unknown command: " (:command parsed)
-                                                "\n\n" (cli/format-help))))
-          (System/exit 1))
+      (case (:error parsed)
+        :no-args         (if (tui/interactive?)
+                           (System/exit (interactive/run! dispatch do-api-command))
+                           (do (tui/eprintln (cli/format-help))
+                               (System/exit 1)))
+        :unknown-command (do (tui/eprintln (str "Unknown command: " (:command parsed)
+                                                "\n\n" (cli/format-help)))
+                             (System/exit 1)))
       (let [handler (get dispatch (:command parsed) do-api-command)]
         (System/exit (handler parsed))))))

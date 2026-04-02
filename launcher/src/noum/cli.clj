@@ -28,8 +28,8 @@
                  :usage   "noum ask <repo> <question...> [options]"
                  :api-path "/api/ask" :api-method :post :min-args 2
                  :positional-map :ask}
-   "query"      {:summary "Run a named Datalog query"
-                 :usage   "noum query <name> <repo> [--param key=value]"
+   "query"      {:summary "Run a named or raw Datalog query"
+                 :usage   "noum query <name> <repo> [--param key=value] [--as-of <date>]\n  noum query --raw '<datalog>' <repo> [--limit N]"
                  :api-path "/api/query" :api-method :post :min-args 2
                  :positional-map :query}
    "queries"    {:summary "List available named queries"
@@ -51,14 +51,21 @@
                  :usage   "noum compare <repo> <run-a> <run-b>"
                  :min-args 3}
    "introspect" {:summary "Run autonomous self-improvement loop"
-                 :usage   "noum introspect <repo> [options]"
+                 :usage   "noum introspect <repo> [options]\n  noum introspect --status <run-id>\n  noum introspect --stop <run-id>\n  noum introspect --history [<query-name>]"
                  :api-path "/api/introspect" :api-method :post :min-args 1}
+   "sessions"   {:summary "List or view past ask sessions"
+                 :usage   "noum sessions [<session-id>]"}
+   "feedback"   {:summary "Submit feedback on an ask session"
+                 :usage   "noum feedback <session-id> positive|negative [--comment \"...\"]"
+                 :min-args 2}
    "databases"  {:summary "List all databases"
                  :usage   "noum databases"
                  :api-path "/api/databases" :api-method :get}
    "delete"     {:summary "Delete a database (prompts for confirmation)"
                  :usage   "noum delete <name> [--force]"
                  :min-args 1}
+   "settings"   {:summary "View or update settings"
+                 :usage   "noum settings [<key> [<value>]]"}
    "reseed"     {:summary "Reload prompts, queries, and rules"
                  :usage   "noum reseed"
                  :api-path "/api/reseed" :api-method :post}
@@ -88,13 +95,13 @@
    "version"    {:summary "Show version"
                  :usage   "noum version"}})
 
-(def ^:private command-groups
+(def command-groups
   [["Get Started" ["demo" "setup"]]
    ["Pipeline"   ["digest" "import" "analyze" "enrich" "synthesize" "update" "watch"]]
-   ["Query"      ["ask" "query" "queries" "schema" "status"]]
+   ["Query"      ["ask" "query" "queries" "sessions" "feedback" "schema" "status"]]
    ["Benchmark"  ["bench" "results" "compare"]]
    ["Introspect" ["introspect"]]
-   ["Admin"      ["databases" "delete" "reseed" "history"]]
+   ["Admin"      ["databases" "delete" "reseed" "history" "settings"]]
    ["Server"     ["serve"]]
    ["Daemon"     ["start" "stop" "ping" "upgrade"]]
    ["UI"         ["open"]]

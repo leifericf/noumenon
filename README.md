@@ -48,6 +48,16 @@ For contributing or running from source, see the [Development](#development) sec
 
 ## Quick Start
 
+### Interactive mode
+
+Run `noum` with no arguments to enter interactive mode — a menu-driven TUI that guides you through every command:
+
+```bash
+noum
+```
+
+Interactive mode presents a grouped command menu, then prompts for any required arguments (repository, query name, session, etc.) using selection menus populated from the daemon. No need to memorize commands or look up IDs.
+
 ### Try instantly (no LLM credentials needed)
 
 ```bash
@@ -84,6 +94,14 @@ noum synthesize /path/to/repo --provider glm
 ```
 
 Or run the full pipeline at once: `noum digest /path/to/repo --provider glm`
+
+### Open the visual UI
+
+```bash
+noum open
+```
+
+Launches the Electron desktop app with a force-directed graph visualization, three-level drill-down (components, files, code segments), and a floating Ask overlay. [Node.js](https://nodejs.org) must be installed.
 
 ### Keep the graph in sync
 
@@ -177,8 +195,9 @@ flowchart TB
 ## Command Reference
 
 ```bash
-noum <command> [options]
-noum help <command>
+noum                       # interactive mode (menu-driven TUI)
+noum <command> [options]    # single-shot mode
+noum help <command>         # command-specific help
 ```
 
 The `noum` CLI and [MCP](https://modelcontextprotocol.io) server expose the same capabilities.
