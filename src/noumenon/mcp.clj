@@ -68,7 +68,7 @@
 (defn- validate-string-length!
   "Throw ex-info if s exceeds max-len characters."
   [field-name s max-len]
-  (when (> (count s) max-len)
+  (when (and (string? s) (> (count s) max-len))
     (throw (ex-info (str field-name " exceeds maximum length of " max-len " characters")
                     {:field field-name :length (count s) :max max-len}))))
 
@@ -286,6 +286,8 @@
    When auto-update is enabled (default), transparently updates stale databases before returning."
   [args defaults f]
   (let [raw-path  (args "repo_path")]
+    (when-not (string? raw-path)
+      (throw (ex-info "repo_path is required" {:field "repo_path"})))
     (validate-string-length! "repo_path" raw-path max-repo-path-len)
     (let [repo-path (.getCanonicalPath (io/file raw-path))]
       (validate-repo-path! repo-path)
