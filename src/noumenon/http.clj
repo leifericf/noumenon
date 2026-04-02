@@ -193,34 +193,40 @@
                          "http://localhost")]
      (update response :headers merge
              (assoc cors-headers
-                    "Access-Control-Allow-Origin" origin-header)))))
+                    "Access-Control-Allow-Origin" origin-header
+                    "X-Content-Type-Options" "nosniff"
+                    "X-Frame-Options" "DENY"
+                    "Referrer-Policy" "no-referrer")))))
 
 (defn- with-sse
   "Run body-fn in a future, streaming progress via SSE. body-fn receives a progress-fn.
-   Sends the final result as an event and closes the channel."
+   Sends the final result as an event and closes the channel.
+   Rejects cross-origin requests before starting expensive work."
   [request body-fn]
-  (server/as-channel request
-                     {:on-open
-                      (fn [ch]
-                        (let [origin   (get-in request [:headers "origin"])
-                              origin-h (if (allowed-origin? origin) origin "http://localhost")]
-                          (server/send! ch {:status  200
-                                            :headers (merge cors-headers
-                                                            {"Content-Type"  "text/event-stream"
-                                                             "Cache-Control" "no-cache"
-                                                             "Connection"    "keep-alive"
-                                                             "Access-Control-Allow-Origin" origin-h})}
-                                        false)
-                          (future
-                            (try
-                              (let [progress-fn (fn [evt]
-                                                  (server/send! ch (sse-event "progress" evt) false))
-                                    result (body-fn progress-fn)]
-                                (server/send! ch (sse-event "result" result) false)
-                                (server/send! ch (sse-event "done" {}) true))
-                              (catch Exception e
-                                (log! "sse/error" (.getMessage e))
-                                (server/send! ch (sse-event "error" {:message "Internal server error"}) true))))))}))
+  (let [origin (get-in request [:headers "origin"])]
+    (if (and origin (not (allowed-origin? origin)))
+      (error-response 403 "Origin not allowed")
+      (server/as-channel request
+                         {:on-open
+                          (fn [ch]
+                            (let [origin-h (or origin "http://localhost")]
+                              (server/send! ch {:status  200
+                                                :headers (merge cors-headers
+                                                                {"Content-Type"  "text/event-stream"
+                                                                 "Cache-Control" "no-cache"
+                                                                 "Connection"    "keep-alive"
+                                                                 "Access-Control-Allow-Origin" origin-h})}
+                                            false)
+                              (future
+                                (try
+                                  (let [progress-fn (fn [evt]
+                                                      (server/send! ch (sse-event "progress" evt) false))
+                                        result (body-fn progress-fn)]
+                                    (server/send! ch (sse-event "result" result) false)
+                                    (server/send! ch (sse-event "done" {}) true))
+                                  (catch Exception e
+                                    (log! "sse/error" (.getMessage e))
+                                    (server/send! ch (sse-event "error" {:message "Internal server error"}) true))))))}))))
 
 ;; --- Shared helpers ---
 
@@ -376,8 +382,8 @@
         max-iter   (min (or (:max_iterations params) 10) 50)
         started-at (java.util.Date.)
         start-ms   (System/currentTimeMillis)
-        channel    (keyword (or (:channel params) "unknown"))
-        caller     (keyword (or (:caller params) "human"))
+        channel    (get #{:ui :cli :mcp :api} (keyword (or (:channel params) "")) :unknown)
+        caller     (get #{:human :ai-agent} (keyword (or (:caller params) "")) :unknown)
         result     (agent/ask meta-db db (:question params)
                               {:invoke-fn      invoke-fn
                                :repo-name      db-name
@@ -406,6 +412,7 @@
   (let [params (parse-json-body request)]
     (when-not (:question params)
       (throw (ex-info "Missing question" {:status 400 :message "question is required"})))
+    (validate-string-length! "question" (:question params) 2000)
     (with-repo params (:db-dir config)
       (fn [ctx]
         (if (wants-sse? request)
