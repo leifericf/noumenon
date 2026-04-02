@@ -35,41 +35,16 @@
 
 ;; --- HTTP client ---
 
-(def ^:private blocked-ip-patterns
-  "Regex patterns matching private/loopback IP ranges (RFC-1918, RFC-5737, loopback, link-local)."
-  [#"^127\." #"^10\." #"^172\.(1[6-9]|2[0-9]|3[01])\." #"^192\.168\."
-   #"^0\." #"^169\.254\." #"^::1$" #"^fc00:" #"^fe80:" #"^fd"])
-
-(defn- private-ip?
-  "True if ip-str matches a private, loopback, or link-local range."
-  [ip-str]
-  (some #(re-find % ip-str) blocked-ip-patterns))
-
-(defn- blocked-address?
-  "True if addr is private, loopback, or link-local.
-   Handles IPv4-mapped IPv6 addresses by re-canonicalizing."
-  [^java.net.InetAddress addr]
-  (let [ip (.getHostAddress addr)]
-    (or (private-ip? ip)
-        (.isLoopbackAddress addr)
-        (.isLinkLocalAddress addr)
-        (.isSiteLocalAddress addr)
-        (when (instance? java.net.Inet6Address addr)
-          (let [canon (java.net.InetAddress/getByAddress (.getAddress addr))]
-            (or (.isLoopbackAddress canon)
-                (.isLinkLocalAddress canon)
-                (.isSiteLocalAddress canon)
-                (private-ip? (.getHostAddress canon))))))))
-
 (defn- private-address?
   "True if the host resolves to a private, loopback, or link-local IP.
-   Checks all DNS results (not just the first) to mitigate DNS rebinding.
    Returns true (fail-closed) on DNS resolution failure."
   [host-str]
   (try
-    (let [host  (first (str/split host-str #":"))
-          addrs (java.net.InetAddress/getAllByName host)]
-      (some blocked-address? addrs))
+    (let [host (first (str/split host-str #":"))
+          addr (java.net.InetAddress/getByName host)]
+      (or (.isLoopbackAddress addr)
+          (.isLinkLocalAddress addr)
+          (.isSiteLocalAddress addr)))
     (catch Exception _ true)))
 
 (defn- base-url
@@ -358,17 +333,11 @@
     (do (tui/eprintln (str (style/red "✗") " Daemon not running. Run 'noum start' to start it.")) 1)))
 
 (defn- do-upgrade [_]
-  (try
-    (if (jar/download!)
-      (do (tui/eprintln (str (style/green "✓") " Noumenon updated."))
-          (tui/eprintln "To update the noum launcher itself, re-run the installer.")
-          0)
-      (do (tui/eprintln (str (style/green "✓") " Already at latest version."))
-          (tui/eprintln "To update the noum launcher itself, re-run the installer.")
-          0))
-    (catch Exception e
-      (tui/eprintln (str (style/red "Error: ") "upgrade failed: " (.getMessage e)))
-      1)))
+  (if (jar/download!)
+    (do (tui/eprintln (str (style/green "✓") " Noumenon updated."))
+        (tui/eprintln "To update the noum launcher itself, re-run the installer."))
+    (tui/eprintln "To update the noum launcher itself, re-run the installer."))
+  0)
 
 (defn- do-serve [{:keys [flags]}]
   (let [jre-path (jre/ensure!)
@@ -401,9 +370,9 @@
                 (Thread/sleep (* interval-s 1000))
                 (recur 0))
             (let [n (inc failures)]
-              (tui/eprintln (str (style/yellow "  Warning: ") repo-path ": update failed (" n "/3): " (:error resp)))
+              (tui/eprintln (str (style/yellow "  Warning: ") "update failed: " (:error resp)))
               (if (>= n 3)
-                (do (tui/eprintln (str (style/red "Error: ") repo-path ": 3 consecutive failures, stopping watch.")) 1)
+                (do (tui/eprintln (str (style/red "Error: ") "3 consecutive failures, stopping watch.")) 1)
                 (do (Thread/sleep (* interval-s 1000))
                     (recur n))))))))))
 
@@ -496,21 +465,13 @@
   (let [conn (ensure-backend! flags)
         port (:port conn)]
     (tui/eprintln (str "Opening Noumenon UI (daemon on port " port ")..."))
-    (let [exit-code (try
-                      (:exit @(proc/process
-                               {:cmd ["npx" "electron" "ui/"]
-                                :dir (or (System/getenv "NOUMENON_ROOT") ".")
-                                :env (assoc (into {} (System/getenv))
-                                            "NOUMENON_PORT" (str port))
-                                :inherit true}))
-                      (catch Exception e
-                        (tui/eprintln (str (style/red "Error: ") (.getMessage e)))
-                        127))]
-      (when-not (zero? exit-code)
-        (tui/eprintln (str (style/red "Error: ") "Electron UI exited with code " exit-code "."))
-        (tui/eprintln "  Ensure Node.js is installed (https://nodejs.org) and run:")
-        (tui/eprintln "    npm install -g electron"))
-      exit-code)))
+    (let [result @(proc/process
+                   {:cmd ["npx" "electron" "ui/"]
+                    :dir (or (System/getenv "NOUMENON_ROOT") ".")
+                    :env (assoc (into {} (System/getenv))
+                                "NOUMENON_PORT" (str port))
+                    :inherit true})]
+      (:exit result))))
 
 ;; --- Dispatch ---
 

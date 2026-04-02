@@ -172,7 +172,9 @@
                  :ask/expanded-detail nil :graph/focused-ids nil)})
 
 (defmethod handle-event :action/ask-panel-move [state [_ {:keys [x y]}]]
-  {:state (assoc state :ask/panel-x x :ask/panel-y y)})
+  (let [x (max 0 (min x (- js/window.innerWidth 640)))
+        y (max 0 (min y (- js/window.innerHeight 100)))]
+    {:state (assoc state :ask/panel-x x :ask/panel-y y)}))
 
 (defmethod handle-event :action/ask-panel-toggle-collapse [state _]
   {:state (update state :ask/panel-collapsed? not)})

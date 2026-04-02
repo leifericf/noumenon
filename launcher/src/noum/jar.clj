@@ -3,11 +3,9 @@
   (:require [babashka.fs :as fs]
             [babashka.http-client :as http]
             [cheshire.core :as json]
-            [clojure.java.io :as io]
             [noum.paths :as paths]
             [noum.tui.core :as tui]
-            [noum.tui.spinner :as spinner])
-  (:import [java.security MessageDigest]))
+            [noum.tui.spinner :as spinner]))
 
 (def ^:private github-repo "leifericf/noumenon")
 
@@ -31,36 +29,6 @@
 
 (defn- find-jar-asset [assets]
   (first (filter #(re-matches #"noumenon-.*\.jar" (:name %)) assets)))
-
-(defn- find-sha-asset [assets jar-name]
-  (first (filter #(= (:name %) (str jar-name ".sha256")) assets)))
-
-(defn- sha256-file [path]
-  (let [digest (MessageDigest/getInstance "SHA-256")
-        buf    (byte-array 8192)]
-    (with-open [in (io/input-stream (str path))]
-      (loop []
-        (let [n (.read in buf)]
-          (when (pos? n)
-            (.update digest buf 0 n)
-            (recur)))))
-    (apply str (map #(format "%02x" (bit-and % 0xff)) (.digest digest)))))
-
-(defn- verify-checksum!
-  "Verify JAR SHA256 against sidecar. Throws on mismatch. Warns if no sidecar."
-  [jar-path assets jar-name]
-  (if-let [sha-asset (find-sha-asset assets jar-name)]
-    (let [s        (spinner/start "Verifying integrity...")
-          sha-resp (http/get (:url sha-asset) {:follow-redirects true})
-          expected (first (re-seq #"[0-9a-f]{64}" (:body sha-resp)))
-          actual   (sha256-file jar-path)]
-      (if (= expected actual)
-        ((:stop s) "SHA256 verified")
-        (do ((:stop s) "FAILED")
-            (fs/delete jar-path)
-            (throw (ex-info "SHA256 mismatch -- download may be corrupted. Try again."
-                            {:expected expected :actual actual})))))
-    (tui/eprintln "  Warning: no .sha256 sidecar in release, skipping checksum verification.")))
 
 (defn- current-version
   "Read the installed JAR's version from the daemon, or nil."
@@ -90,10 +58,9 @@
               (fs/create-dirs paths/lib-dir)
               (let [resp (http/get (:url asset) {:as :stream :follow-redirects true})]
                 (with-open [in (:body resp)
-                            out (io/output-stream paths/jar-path)]
-                  (io/copy in out)))
-              ((:stop s2) (str (:name asset) " downloaded.")))
-            (verify-checksum! paths/jar-path (:assets release) (:name asset))
+                            out (clojure.java.io/output-stream paths/jar-path)]
+                  (clojure.java.io/copy in out)))
+              ((:stop s2) (str (:name asset) " installed.")))
             paths/jar-path)))))
 
 (defn ensure!

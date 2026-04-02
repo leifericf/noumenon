@@ -64,7 +64,6 @@
 (def ^:private max-provider-len 64)
 (def ^:private max-layers-len 64)
 (def ^:private allowed-layers #{:raw :import :enrich :full})
-(def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
 
 (defn- validate-string-length!
   "Throw ex-info if s exceeds max-len characters."
@@ -297,13 +296,10 @@
             conn      (get-or-create-conn db-dir db-name)
             meta-conn (db/ensure-meta-db db-dir)]
         (when (:auto-update defaults true)
-          (try
-            (let [db (d/db conn)]
-              (when (sync/stale? db repo-path)
-                (log! "auto-update" "HEAD changed, updating...")
-                (sync/update-repo! conn repo-path repo-path {:concurrency 8})))
-            (catch Exception e
-              (log! "auto-update" (str "failed, continuing: " (.getMessage e))))))
+          (let [db (d/db conn)]
+            (when (sync/stale? db repo-path)
+              (log! "auto-update" "HEAD changed, updating...")
+              (sync/update-repo! conn repo-path repo-path {:concurrency 8}))))
         (f {:conn conn :db (d/db conn)
             :meta-conn meta-conn :meta-db (d/db meta-conn)
             :repo-path repo-path :db-name db-name})))))
@@ -379,7 +375,7 @@
      (if (seq lines)
        (str "Available queries (pass the name to noumenon_query):\n"
             (str/join "\n" lines))
-       "No named queries found. First call noumenon_update with your repo_path to initialize the knowledge graph, then retry. If queries are still missing, call noumenon_reseed."))))
+       "No named queries found. Run noumenon_reseed or noumenon_import to initialize."))))
 
 (defn- handle-get-schema [args defaults]
   (with-conn args defaults
@@ -785,15 +781,9 @@
                                :stop-flag stop-flag}
                         (args "target")
                         (assoc :allowed-targets
-                               (->> (str/split (args "target") #",")
-                                    (keep (comp allowed-introspect-targets keyword str/trim))
-                                    set)))
+                               (set (map keyword (str/split (args "target") #",")))))
             run-id    (str (System/currentTimeMillis) "-" (java.util.UUID/randomUUID))
             now       (System/currentTimeMillis)]
-        (when (>= (sessions/running-count) sessions/max-sessions)
-          (throw (ex-info "Too many active introspect sessions"
-                          {:user-message (str "Maximum " sessions/max-sessions
-                                              " concurrent sessions. Stop one first.")})))
         (sessions/register! run-id {:status :running :stop-flag stop-flag :started-at now})
         (let [fut (future
                     (try

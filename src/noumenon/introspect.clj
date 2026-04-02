@@ -26,7 +26,7 @@
 
 (defn load-current-examples [meta-db]
   (some-> (artifacts/load-prompt meta-db "agent-examples")
-          (edn/read-string {:readers {}})))
+          edn/read-string))
 
 (defn load-current-system-prompt [meta-db]
   (artifacts/load-prompt meta-db "agent-system"))
@@ -84,7 +84,7 @@
   (when (seq data)
     (let [all-items (->> data
                          (mapcat (fn [[s]] (when (<= (count (str s)) 10000)
-                                             (try (edn/read-string {:readers {}} s) (catch Exception _ [])))))
+                                             (try (edn/read-string s) (catch Exception _ [])))))
                          frequencies
                          (sort-by val >))]
       (when (seq all-items)
@@ -320,7 +320,7 @@
   (when text
     (try
       (let [cleaned (analyze/strip-markdown-fences text)
-            parsed  (edn/read-string {:readers {}} cleaned)]
+            parsed  (edn/read-string cleaned)]
         (when (map? parsed) parsed))
       (catch Exception e
         (log! (str "introspect: parse error: " (.getMessage e)))
@@ -367,7 +367,7 @@
       "For :rules target, :modification must contain {:rules \"...edn...\"}"
 
       (and (= :rules target)
-           (try (not (vector? (edn/read-string {:readers {}} (:rules modification))))
+           (try (not (vector? (edn/read-string (:rules modification))))
                 (catch Exception _ true)))
       "Rules must be a valid EDN vector"
 

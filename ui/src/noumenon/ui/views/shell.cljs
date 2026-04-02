@@ -179,9 +179,12 @@
                  [:div {:style {:font-family (:font-mono styles/tokens)
                                 :font-size "12px"
                                 :color (:text-primary styles/tokens)
-                                :word-break "break-all"
+                                :white-space "nowrap"
+                                :overflow "hidden"
+                                :text-overflow "ellipsis"
                                 :margin-bottom "10px"
-                                :font-weight 600}}
+                                :font-weight 600}
+                        :title selected}
                   selected]
       ;; Quick stats
                  [:div {:style {:display "flex" :gap "12px" :margin-bottom "10px"
@@ -298,7 +301,7 @@
                  :style {:position "absolute"
                          :top "12px" :left "50%"
                          :transform "translateX(-50%)"
-                         :z-index 10
+                         :z-index 60
                          :background (:bg-secondary styles/tokens)
                          :border (str "1px solid " (:border styles/tokens))
                          :border-radius "20px"
@@ -314,7 +317,7 @@
                       {:position "absolute"
                        :width "640px"
                        :max-height "75vh"
-                       :z-index 10
+                       :z-index 60
                        :overflow "visible"}
                       (if panel-centered?
                         {:top "12vh" :left "50%" :transform "translateX(-50%)"}
@@ -393,7 +396,7 @@
                     :max-width "360px"
                     :max-height "50vh"
                     :overflow-y "auto"
-                    :z-index 10}}
+                    :z-index 55}}
       (ask/past-questions-panel state)]
      ;; Toasts
      (toast/toast-container toasts)

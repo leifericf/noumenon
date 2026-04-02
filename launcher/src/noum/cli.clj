@@ -25,7 +25,7 @@
                  :usage   "noum watch <repo> [--interval N]"
                  :min-args 1}
    "ask"        {:summary "Ask a question about a repository using AI"
-                 :usage   "noum ask <repo> <question...> [options]"
+                 :usage   "noum ask <repo> \"question\" [options]"
                  :api-path "/api/ask" :api-method :post :min-args 2
                  :positional-map :ask}
    "query"      {:summary "Run a named Datalog query"

@@ -29,11 +29,9 @@
 ;; --- Input validation ---
 
 (def ^:private max-param-value-len 4096)
-(def ^:private max-question-len 8000)
 (def ^:private max-run-id-len 256)
 (def ^:private max-layers-len 64)
 (def ^:private allowed-layers #{:raw :import :enrich :full})
-(def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
 
 (defn- validate-string-length!
   "Reject string values exceeding max-len."
@@ -415,7 +413,7 @@
   (let [params (parse-json-body request)]
     (when-not (:question params)
       (throw (ex-info "Missing question" {:status 400 :message "question is required"})))
-    (validate-string-length! "question" (:question params) max-question-len)
+    (validate-string-length! "question" (:question params) 2000)
     (with-repo params (:db-dir config)
       (fn [ctx]
         (if (wants-sse? request)
@@ -652,9 +650,7 @@
       run-id        (assoc :run-id run-id)
       (:target params)
       (assoc :allowed-targets
-             (->> (str/split (:target params) #",")
-                  (keep (comp allowed-introspect-targets keyword str/trim))
-                  set)))))
+             (set (map keyword (str/split (:target params) #",")))))))
 
 (defn- handle-introspect [request config]
   (let [params (parse-json-body request)]
@@ -671,11 +667,6 @@
               now       (System/currentTimeMillis)
               run-opts  (build-introspect-opts ctx params config
                                                {:stop-flag stop-flag :run-id run-id})]
-          (when (>= (sessions/running-count) sessions/max-sessions)
-            (throw (ex-info "Too many active introspect sessions"
-                            {:status 429
-                             :message (str "Maximum " sessions/max-sessions
-                                           " concurrent sessions. Stop one first.")})))
           (sessions/register! run-id {:status :running :stop-flag stop-flag :started-at now})
           (if (wants-sse? request)
             (with-sse request
@@ -784,16 +775,13 @@
 (defn- handle-ask-session-feedback [request config]
   (let [params     (parse-json-body request)
         session-id (or (:session_id params) (get-in request [:params :id]))
-        polarity   (keyword (or (:feedback params) "negative"))
         comment    (or (:comment params) "")]
     (when-not session-id
       (throw (ex-info "Missing session_id" {:status 400 :message "session_id is required"})))
-    (when-not (#{:positive :negative} polarity)
-      (throw (ex-info "Invalid feedback polarity" {:status 400 :message "feedback must be 'positive' or 'negative'"})))
     (validate-string-length! "session_id" session-id max-run-id-len)
     (validate-string-length! "comment" comment max-param-value-len)
     (let [meta-conn (db/ensure-meta-db (:db-dir config))]
-      (ask-store/set-feedback! meta-conn session-id polarity comment)
+      (ask-store/set-feedback! meta-conn session-id comment)
       (ok {:session-id session-id}))))
 
 ;; Cache completion source data per db-name (invalidated on import/enrich)

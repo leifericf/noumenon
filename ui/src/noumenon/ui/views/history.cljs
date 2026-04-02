@@ -63,15 +63,16 @@
                     (button/secondary {:on {:click [:action/history-refresh]}} "Refresh")]])
 
        :else
-       [:table {:style {:width "100%" :border-collapse "collapse" :font-size "13px"}}
-        [:thead
-         [:tr {:style {:border-bottom (str "1px solid " (:border styles/tokens))}}
-          (for [label ["SHA" "Type" "Message" "Author" "Date" "Changes"]]
-            [:th {:key label
-                  :style {:text-align "left" :padding "8px 12px"
-                          :color (:text-secondary styles/tokens) :font-weight 500
-                          :font-size "12px" :text-transform "uppercase"}}
-             label])]]
-        [:tbody
-         (for [commit commits]
-           (commit-row commit))]])]))
+       [:div {:style {:overflow-x "auto"}}
+        [:table {:style {:width "100%" :border-collapse "collapse" :font-size "13px"}}
+         [:thead
+          [:tr {:style {:border-bottom (str "1px solid " (:border styles/tokens))}}
+           (for [label ["SHA" "Type" "Message" "Author" "Date" "Changes"]]
+             [:th {:key label
+                   :style {:text-align "left" :padding "8px 12px"
+                           :color (:text-secondary styles/tokens) :font-weight 500
+                           :font-size "12px" :text-transform "uppercase"}}
+              label])]]
+         [:tbody
+          (for [commit commits]
+            (commit-row commit))]]])]))
