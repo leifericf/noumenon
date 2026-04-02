@@ -26,7 +26,7 @@
 
 (defn load-current-examples [meta-db]
   (some-> (artifacts/load-prompt meta-db "agent-examples")
-          edn/read-string))
+          (edn/read-string {:readers {}})))
 
 (defn load-current-system-prompt [meta-db]
   (artifacts/load-prompt meta-db "agent-system"))
@@ -61,8 +61,7 @@
 ;; --- Gap analysis ---
 
 (defn- gap-analysis [results]
-  (if (empty? results)
-    "No baseline data for gap analysis."
+  (if (seq results)
     (let [by-score (group-by :score results)
           section  (fn [label kw]
                      (when-let [items (seq (by-score kw))]
@@ -76,7 +75,25 @@
            (count (by-score :partial)) " partial, "
            (count (by-score :wrong)) " wrong\n\n"
            (section "WRONG answers (highest priority)" :wrong)
-           (section "PARTIAL answers (medium priority)" :partial)))))
+           (section "PARTIAL answers (medium priority)" :partial)))
+    "No baseline data for gap analysis."))
+
+(defn- summarize-feedback-items
+  "Parse EDN data, aggregate by frequency, and format as a titled section."
+  [data title description verb take-n]
+  (when (seq data)
+    (let [all-items (->> data
+                         (mapcat (fn [[s]] (when (<= (count (str s)) 10000)
+                                             (try (edn/read-string {:readers {}} s) (catch Exception _ [])))))
+                         frequencies
+                         (sort-by val >))]
+      (when (seq all-items)
+        (str "### " title " (" (count all-items) " distinct)\n"
+             (when description (str description "\n"))
+             (->> all-items (take take-n)
+                  (map (fn [[item cnt]] (str "  - " item " (" verb " " cnt "x)")))
+                  (str/join "\n"))
+             "\n\n")))))
 
 (defn- ask-session-insights
   "Summarize ask session data for the introspect agent.
@@ -182,62 +199,34 @@
                               (str "  - (" cnt "x) " (subs qedn 0 (min 80 (count qedn))))))
                        (str/join "\n"))
                   "\n\n"))
-           ;; Agent-reported missing attributes
-           (when (seq missing-attrs)
-             (let [all-items (->> missing-attrs
-                                  (mapcat (fn [[s]] (when (<= (count (str s)) 10000) (try (edn/read-string s) (catch Exception _ [])))))
-                                  frequencies
-                                  (sort-by val >))]
-               (when (seq all-items)
-                 (str "### Data Gaps Reported by Ask Agents (" (count all-items) " distinct)\n"
-                      "Attributes or relationships agents needed but couldn't find:\n"
-                      (->> all-items (take 15)
-                           (map (fn [[attr cnt]] (str "  - " attr " (reported " cnt "x)")))
-                           (str/join "\n"))
-                      "\n\n"))))
-           ;; Agent-reported quality issues
-           (when (seq quality-iss)
-             (let [all-items (->> quality-iss
-                                  (mapcat (fn [[s]] (when (<= (count (str s)) 10000) (try (edn/read-string s) (catch Exception _ [])))))
-                                  frequencies
-                                  (sort-by val >))]
-               (when (seq all-items)
-                 (str "### Data Quality Issues Reported by Agents (" (count all-items) " distinct)\n"
-                      (->> all-items (take 10)
-                           (map (fn [[issue cnt]] (str "  - " issue " (reported " cnt "x)")))
-                           (str/join "\n"))
-                      "\n\n"))))
-           ;; Agent-suggested named queries
-           (when (seq suggested-qs)
-             (let [all-items (->> suggested-qs
-                                  (mapcat (fn [[s]] (when (<= (count (str s)) 10000) (try (edn/read-string s) (catch Exception _ [])))))
-                                  frequencies
-                                  (sort-by val >))]
-               (when (seq all-items)
-                 (str "### Named Queries Suggested by Agents (" (count all-items) " distinct)\n"
-                      "Queries agents wished existed — consider adding these:\n"
-                      (->> all-items (take 10)
-                           (map (fn [[q cnt]] (str "  - " q " (suggested " cnt "x)")))
-                           (str/join "\n"))
-                      "\n\n"))))))))
+           (summarize-feedback-items missing-attrs
+                                     "Data Gaps Reported by Ask Agents"
+                                     "Attributes or relationships agents needed but couldn't find:"
+                                     "reported" 15)
+           (summarize-feedback-items quality-iss
+                                     "Data Quality Issues Reported by Agents"
+                                     nil "reported" 10)
+           (summarize-feedback-items suggested-qs
+                                     "Named Queries Suggested by Agents"
+                                     "Queries agents wished existed — consider adding these:"
+                                     "suggested" 10)))))
 
 ;; --- Meta-prompt assembly ---
 
 (defn- format-scores [results]
-  (if (empty? results)
-    "No baseline scores yet."
+  (if (seq results)
     (->> results
          (map (fn [{:keys [id score reasoning]}]
                 (str "  " (name id) ": " (name score)
                      (when reasoning (str " — " reasoning)))))
-         (str/join "\n"))))
+         (str/join "\n"))
+    "No baseline scores yet."))
 
 (defn- truncate [s max-len]
   (if (> (count s) max-len) (subs s 0 max-len) s))
 
 (defn- format-history [history]
-  (if (empty? history)
-    "No prior iterations."
+  (if (seq history)
     (->> history
          (map-indexed
           (fn [i {:keys [target rationale outcome delta goal]}]
@@ -247,7 +236,8 @@
                  (when delta (str " delta=" (format "%+.3f" (double delta))))
                  (when goal (str " goal=\"" (truncate (str goal) 200) "\""))
                  "\n  " (truncate (or rationale "no rationale") 500))))
-         (str/join "\n\n"))))
+         (str/join "\n\n"))
+    "No prior iterations."))
 
 (defn- format-query-catalog [meta-db]
   (->> (artifacts/list-active-query-names meta-db)
@@ -280,8 +270,7 @@
                            [?f :arch/component ?c]]
                          db)
         fc-map     (into {} file-counts)]
-    (if (empty? components)
-      "No components identified yet — run synthesize first."
+    (if (seq components)
       (str (count components) " components identified:\n"
            (->> components
                 (sort-by first)
@@ -294,7 +283,8 @@
              (str "\n\nDependency edges:\n"
                   (->> deps
                        (map (fn [[from to]] (str "  " from " → " to)))
-                       (str/join "\n"))))))))
+                       (str/join "\n")))))
+      "No components identified yet — run synthesize first.")))
 
 (defn build-meta-prompt
   "Assemble the meta-prompt for the optimizer LLM.
@@ -330,7 +320,7 @@
   (when text
     (try
       (let [cleaned (analyze/strip-markdown-fences text)
-            parsed  (edn/read-string cleaned)]
+            parsed  (edn/read-string {:readers {}} cleaned)]
         (when (map? parsed) parsed))
       (catch Exception e
         (log! (str "introspect: parse error: " (.getMessage e)))
@@ -377,7 +367,7 @@
       "For :rules target, :modification must contain {:rules \"...edn...\"}"
 
       (and (= :rules target)
-           (try (not (vector? (edn/read-string (:rules modification))))
+           (try (not (vector? (edn/read-string {:readers {}} (:rules modification))))
                 (catch Exception _ true)))
       "Rules must be a valid EDN vector"
 
@@ -767,11 +757,89 @@
           :outcome   outcome}
          extra))
 
+(defn- classify-proposal
+  "Classify a proposal as :skip (with reason) or nil if valid to proceed."
+  [proposal validation allowed-targets]
+  (cond
+    (nil? proposal)
+    {:outcome :skipped :record {:outcome :skipped :rationale "Parse failure"}
+     :message "introspect: failed to parse proposal, skipping"}
+
+    validation
+    {:outcome :skipped :record {:outcome :skipped :rationale (str "Validation: " validation)}
+     :message (str "introspect: invalid proposal: " validation)}
+
+    (and allowed-targets (not (allowed-targets (:target proposal))))
+    (let [t (:target proposal)]
+      {:outcome :skipped
+       :record  {:outcome :skipped :rationale (str "Target " (name t) " not allowed")}
+       :message (str "introspect: target " (name t) " not in allowed set "
+                     (pr-str allowed-targets) ", skipping")})))
+
+(defn- apply-train-model!
+  "Train the priority model when target is :train."
+  [meta-conn db]
+  (let [config  (model/load-config)
+        dataset (td/build-dataset (d/db meta-conn) db config)
+        prev    (model/load-best-model)
+        mdl     (if (and prev (= (:config prev) config))
+                  (do (log! "introspect: warm-starting from previous model")
+                      prev)
+                  (model/init-model config))
+        _       (model/train! mdl dataset config)
+        eval-r  (model/evaluate mdl dataset)]
+    (log! (str "introspect: model accuracy="
+               (format "%.3f" (:accuracy eval-r))
+               " top3=" (format "%.3f" (:top3-accuracy eval-r))))
+    (model/save-model! (assoc mdl
+                              :vocab (:vocab dataset)
+                              :label-index (:label-index dataset))
+                       "data/models/latest.edn")))
+
+(defn- evaluate-and-decide
+  "Evaluate after modification and decide whether to keep or revert.
+   Returns {:outcome kw :record map :eval-result map?}."
+  [{:keys [meta-conn db repo-name repo-path invoke-fn-factory baseline
+           git-commit? eval-runs]} proposal]
+  (log! "introspect: evaluating...")
+  (let [eval-result   (evaluate-agent! (d/db meta-conn) db repo-name invoke-fn-factory
+                                       :eval-runs (or eval-runs 1))
+        new-mean      (:mean eval-result)
+        base-mean     (:mean baseline)
+        delta         (- new-mean base-mean)
+        base-iters    (or (:total-iterations baseline) 0)
+        new-iters     (or (:total-iterations eval-result) 0)
+        iter-increase (if (pos? base-iters)
+                        (/ (double (- new-iters base-iters)) base-iters)
+                        0.0)
+        improved?     (and (> delta 0.001) (< iter-increase 0.5))]
+    (when (and (> delta 0.001) (>= iter-increase 0.5))
+      (log! (str "introspect: accuracy improved but iteration cost increased "
+                 (format "%.0f%%" (* 100 iter-increase)) " — rejecting")))
+    (if improved?
+      (do (log! (str "introspect: IMPROVED " (format "%+.1f%%" (* 100 delta))
+                     " (" (format "%.1f%%" (* 100 base-mean))
+                     " -> " (format "%.1f%%" (* 100 new-mean)) ")"))
+          (when git-commit?
+            (git-commit-improvement! repo-path
+                                     {:target (:target proposal) :rationale (:rationale proposal)
+                                      :delta delta}))
+          {:outcome     :improved
+           :record      (make-record proposal :improved
+                                     :baseline base-mean :result new-mean
+                                     :delta delta :modification (:modification proposal))
+           :eval-result eval-result})
+      (do (log! (str "introspect: reverted (delta=" (format "%+.1f%%" (* 100 delta)) ")"))
+          {:outcome :reverted
+           :record  (make-record proposal :reverted
+                                 :baseline base-mean :result new-mean
+                                 :delta delta)}))))
+
 (defn run-iteration!
   "Run a single introspect iteration.
    Returns {:outcome kw :record map :eval-result map?}."
-  [{:keys [db meta-db meta-conn repo-name repo-path invoke-fn-factory optimizer-invoke-fn
-           baseline history git-commit? allowed-targets eval-runs]}]
+  [{:keys [db meta-db meta-conn optimizer-invoke-fn
+           baseline history allowed-targets] :as ctx}]
   (let [meta-prompt (build-meta-prompt
                      {:db               db
                       :meta-db          meta-db
@@ -788,153 +856,86 @@
                         nil))
         proposal    (parse-proposal (:text response))
         validation  (when proposal (validate-proposal meta-db proposal))]
-    (cond
-      ;; No proposal — skip
-      (nil? proposal)
-      (do (log! "introspect: failed to parse proposal, skipping")
-          {:outcome :skipped :record {:outcome :skipped :rationale "Parse failure"}})
-
-      ;; Invalid proposal — skip
-      validation
-      (do (log! (str "introspect: invalid proposal: " validation))
-          {:outcome :skipped :record {:outcome :skipped :rationale (str "Validation: " validation)}})
-
-      ;; Target not in allowed set — skip
-      (and allowed-targets (not (allowed-targets (:target proposal))))
-      (let [t (:target proposal)]
-        (log! (str "introspect: target " (name t) " not in allowed set "
-                   (pr-str allowed-targets) ", skipping"))
-        {:outcome :skipped
-         :record  {:outcome :skipped
-                   :rationale (str "Target " (name t) " not allowed")}})
-
-      ;; Valid proposal — apply, gate, evaluate, decide
-      :else
-      (let [{:keys [target modification rationale goal]} proposal
+    (if-let [{:keys [message] :as skip} (classify-proposal proposal validation allowed-targets)]
+      (do (log! message) (dissoc skip :message))
+      (let [{:keys [target modification]} proposal
             _ (log! (str "introspect: target=" (name target)
-                         " goal=" (pr-str goal) "\n  " rationale))
-            ;; Code gate runs BEFORE with-modification to avoid TOCTOU:
-            ;; file is not written to real path until gate passes
+                         " goal=" (pr-str (:goal proposal)) "\n  " (:rationale proposal)))
             code-gate (when (= :code target)
                         (run-code-gate!
                          (str (validate-code-path! (:file modification)) ".staging")
                          (:content modification)))]
         (if (and (= :code target) (not (:pass? code-gate)))
           {:outcome :gate-failed :record (make-record proposal :gate-failed)}
-          ;; with-modification handles apply, revert-on-failure, and exception recovery
           (with-modification (assoc proposal :meta-conn meta-conn)
-              ;; Train model if target is :train
             (when (= :train target)
-              (let [config  (model/load-config)
-                    dataset (td/build-dataset (d/db meta-conn) db config)
-                    prev    (model/load-best-model)
-                    mdl     (if (and prev (= (:config prev) config))
-                              (do (log! "introspect: warm-starting from previous model")
-                                  prev)
-                              (model/init-model config))
-                    _       (model/train! mdl dataset config)
-                    eval-r  (model/evaluate mdl dataset)]
-                (log! (str "introspect: model accuracy="
-                           (format "%.3f" (:accuracy eval-r))
-                           " top3=" (format "%.3f" (:top3-accuracy eval-r))))
-                (model/save-model! (assoc mdl
-                                          :vocab (:vocab dataset)
-                                          :label-index (:label-index dataset))
-                                   "data/models/latest.edn")))
-
-              ;; Reset prompt cache for prompt/example/rule changes
-              ;; Evaluate (refresh meta-db to see Datomic writes)
-            (log! "introspect: evaluating...")
-            (let [eval-result   (evaluate-agent! (d/db meta-conn) db repo-name invoke-fn-factory
-                                                 :eval-runs (or eval-runs 1))
-                  new-mean      (:mean eval-result)
-                  base-mean     (:mean baseline)
-                  delta         (- new-mean base-mean)
-                    ;; Multi-objective: penalize if accuracy improved but cost increased significantly
-                  base-iters    (or (:total-iterations baseline) 0)
-                  new-iters     (or (:total-iterations eval-result) 0)
-                  iter-increase (if (pos? base-iters)
-                                  (/ (double (- new-iters base-iters)) base-iters)
-                                  0.0)
-                    ;; Accept if accuracy improved, unless iteration cost increased >50%
-                  improved?     (and (> delta 0.001)
-                                     (< iter-increase 0.5))]
-              (when (and (> delta 0.001) (>= iter-increase 0.5))
-                (log! (str "introspect: accuracy improved but iteration cost increased "
-                           (format "%.0f%%" (* 100 iter-increase))
-                           " — rejecting")))
-              (if improved?
-                (do (log! (str "introspect: IMPROVED " (format "%+.1f%%" (* 100 delta))
-                               " (" (format "%.1f%%" (* 100 base-mean))
-                               " -> " (format "%.1f%%" (* 100 new-mean)) ")"))
-                    (when git-commit?
-                      (git-commit-improvement! repo-path
-                                               {:target target :rationale rationale
-                                                :delta delta}))
-                    {:outcome     :improved
-                     :record      (make-record proposal :improved
-                                               :baseline base-mean :result new-mean
-                                               :delta delta :modification modification)
-                     :eval-result eval-result})
-                (do (log! (str "introspect: reverted (delta=" (format "%+.1f%%" (* 100 delta)) ")"))
-                    {:outcome :reverted
-                     :record  (make-record proposal :reverted
-                                           :baseline base-mean :result new-mean
-                                           :delta delta)})))))))))
+              (apply-train-model! meta-conn db))
+            (evaluate-and-decide ctx proposal)))))))
 
 ;; --- Main loop ---
+
+(defn- initialize-run!
+  "Set up a run: compute hashes, evaluate baseline, persist run entity.
+   Returns {:run-id :baseline :history :start-ms :started-at :max-ms}."
+  [{:keys [db repo-name repo-path invoke-fn-factory meta-conn
+           max-hours max-cost model-config max-iterations eval-runs run-id]}]
+  (let [run-id     (or run-id (generate-run-id))
+        start-ms   (System/currentTimeMillis)
+        started-at (java.util.Date.)
+        max-ms     (when max-hours (* max-hours 3600000))
+        meta-db    (d/db meta-conn)
+        history    (load-history meta-db)
+        hashes     {:prompt-hash   (util/sha256-hex (or (load-current-system-prompt meta-db) ""))
+                    :examples-hash (util/sha256-hex (pr-str (or (load-current-examples meta-db) [])))
+                    :rules-hash    (util/sha256-hex (pr-str (or (load-current-rules meta-db) [])))}
+        commit-sha (git/head-sha repo-path)
+        db-basis-t (try (:t (d/db-stats db)) (catch Exception _ nil))
+        _          (log! "introspect: running baseline evaluation...")
+        baseline   (evaluate-agent! meta-db db repo-name invoke-fn-factory
+                                    :eval-runs eval-runs)
+        _          (log! (str "introspect: baseline mean="
+                              (format "%.1f%%" (* 100.0 (:mean baseline)))))
+        _          (when max-cost
+                     (log! "introspect: WARNING: max-cost budget is not yet tracked (no LLM cost data available)"))]
+    (d/transact meta-conn
+                {:tx-data (run-start-tx-data
+                           (merge hashes
+                                  {:run-id run-id :repo-path repo-path
+                                   :commit-sha commit-sha :started-at started-at
+                                   :model-config model-config
+                                   :max-iterations max-iterations
+                                   :db-basis-t db-basis-t
+                                   :baseline-mean (:mean baseline)}))})
+    (log! (str "introspect: created run " run-id))
+    {:run-id run-id :baseline baseline :history history
+     :start-ms start-ms :started-at started-at :max-ms max-ms}))
+
+(defn- budget-done?
+  "Return a reason string if the budget is exhausted, nil otherwise."
+  [{:keys [stop-flag max-iterations max-ms start-ms]} i]
+  (cond
+    (and stop-flag @stop-flag)          "stopped by request"
+    (>= i max-iterations)              (str "reached max iterations (" max-iterations ")")
+    (and max-ms (> (- (System/currentTimeMillis) start-ms) max-ms)) "time budget exhausted"))
 
 (defn run-loop!
   "Run the introspect improvement loop.
    Persists results to the internal meta database.
    Returns {:run-id str :iterations n :improvements n :final-score double}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
-           meta-conn max-iterations max-hours max-cost git-commit?
-           model-config allowed-targets eval-runs stop-flag run-id progress-fn]
-    :or   {max-iterations 10 eval-runs 1}}]
-  (let [run-id        (or run-id (generate-run-id))
-        start-ms      (System/currentTimeMillis)
-        started-at    (java.util.Date.)
-        max-ms        (when max-hours (* max-hours 3600000))
-        meta-db       (d/db meta-conn)
-        history       (load-history meta-db)
-        prompt-hash   (util/sha256-hex (or (load-current-system-prompt meta-db) ""))
-        examples-hash (util/sha256-hex (pr-str (or (load-current-examples meta-db) [])))
-        rules-hash    (util/sha256-hex (pr-str (or (load-current-rules meta-db) [])))
-        commit-sha    (git/head-sha repo-path)
-        db-basis-t    (try (:t (d/db-stats db)) (catch Exception _ nil))
-        _             (log! "introspect: running baseline evaluation...")
-        baseline      (evaluate-agent! meta-db db repo-name invoke-fn-factory
-                                       :eval-runs eval-runs)
-        _             (log! (str "introspect: baseline mean="
-                                 (format "%.1f%%" (* 100.0 (:mean baseline)))))
-        _             (when max-cost
-                        (log! "introspect: WARNING: max-cost budget is not yet tracked (no LLM cost data available)"))
-        ;; Persist the run entity up front so iterations are never orphaned
-        _             (d/transact meta-conn
-                                  {:tx-data (run-start-tx-data
-                                             {:run-id run-id :repo-path repo-path
-                                              :commit-sha commit-sha :started-at started-at
-                                              :model-config model-config
-                                              :max-iterations max-iterations
-                                              :prompt-hash prompt-hash
-                                              :examples-hash examples-hash
-                                              :rules-hash rules-hash
-                                              :db-basis-t db-basis-t
-                                              :baseline-mean (:mean baseline)})})
-        _             (log! (str "introspect: created run " run-id))
-        budget-done?  (fn [i]
-                        (let [elapsed (- (System/currentTimeMillis) start-ms)]
-                          (cond
-                            (and stop-flag @stop-flag)
-                            "stopped by request"
-                            (>= i max-iterations)
-                            (str "reached max iterations (" max-iterations ")")
-                            (and max-ms (> elapsed max-ms))
-                            "time budget exhausted")))
+           meta-conn max-iterations git-commit? allowed-targets eval-runs
+           stop-flag progress-fn]
+    :or   {max-iterations 10 eval-runs 1}
+    :as   opts}]
+  (let [{:keys [run-id baseline history start-ms started-at max-ms]}
+        (initialize-run! opts)
+
+        budget  {:stop-flag stop-flag :max-iterations max-iterations
+                 :max-ms max-ms :start-ms start-ms}
+
         result
         (loop [i 0, baseline baseline, history history, improvements 0]
-          (if-let [reason (budget-done? i)]
+          (if-let [reason (budget-done? budget i)]
             (do (log! (str "introspect: " reason))
                 {:iterations i :improvements improvements
                  :final-score (:mean baseline)})
@@ -951,7 +952,6 @@
                         :allowed-targets allowed-targets
                         :eval-runs eval-runs})
                       new-baseline (if (= :improved outcome) eval-result baseline)]
-                  ;; Persist each iteration immediately
                   (d/transact meta-conn
                               {:tx-data (iter-tx-data run-id i record)})
                   (when progress-fn
@@ -960,7 +960,6 @@
                                                 " " (name (or outcome :unknown)))}))
                   (recur (inc i) new-baseline (conj history record)
                          (if (= :improved outcome) (inc improvements) improvements))))))]
-    ;; Finalize the run with completion stats
     (d/transact meta-conn
                 {:tx-data (run-complete-tx-data
                            {:run-id run-id :started-at started-at

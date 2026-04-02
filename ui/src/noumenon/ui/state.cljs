@@ -7,6 +7,8 @@
 
 (defonce ^:private active-sse-cancels (atom {}))
 
+(defonce ^:private connection-timer (atom nil))
+
 (defonce app-state
   (atom {:route            :ask
          :db-name          nil
@@ -80,6 +82,9 @@
 (defmethod handle-event :action/db-loaded [state [_ data]]
   (let [had-db? (some? (:db-name state))
         new-db  (or (:db-name state) (:name (first data)))]
+    (when-let [t @connection-timer]
+      (js/clearTimeout t)
+      (reset! connection-timer nil))
     {:state (assoc state :databases/list data :databases/loading? false
                    :daemon/status :connected
                    :db-name new-db)
@@ -129,7 +134,7 @@
    :fx    [[:dispatch [:action/db-refresh]]]})
 
 (defmethod handle-event :action/db-new-repo-set [state [_ value]]
-  {:state (assoc state :databases/new-repo value)})
+  {:state (assoc state :databases/new-repo value :databases/error nil)})
 
 (defmethod handle-event :action/db-import-new [state _]
   (let [repo-path (:databases/new-repo state)]
@@ -161,13 +166,16 @@
   {:state (update state :ask/show-post-reasoning? not)})
 
 (defmethod handle-event :action/ask-clear [state _]
-  {:state (assoc state :ask/history [] :ask/last-steps nil :ask/steps [] :ask/result nil
-                 :ask/show-post-reasoning? false :ask/reasoning-expanded? false
-                 :ask/expanded-session nil :ask/expanded-detail nil
-                 :graph/focused-ids nil)})
+  {:state (assoc state :ask/query "" :ask/history [] :ask/last-steps nil :ask/steps []
+                 :ask/result nil :ask/show-post-reasoning? false
+                 :ask/reasoning-expanded? false :ask/expanded-session nil
+                 :ask/expanded-detail nil :graph/focused-ids nil)})
 
 (defmethod handle-event :action/ask-panel-move [state [_ {:keys [x y]}]]
   {:state (assoc state :ask/panel-x x :ask/panel-y y)})
+
+(defmethod handle-event :action/ask-panel-toggle-collapse [state _]
+  {:state (update state :ask/panel-collapsed? not)})
 
 (def ^:private suggestion-catalog
   [;; Temporal & churn
@@ -412,12 +420,8 @@
    :fx    [[:sse/cancel "/api/ask"]]})
 
 (defmethod handle-event :action/ask-error [state [_ error]]
-  (let [query (:ask/query state)]
-    {:state (-> state
-                (assoc :ask/loading? false :ask/result nil)
-                (update :ask/history conj {:question query
-                                           :answer (str "**Error:** " error)}))
-     :fx    [[:dispatch [:action/toast {:message (str "Ask failed: " error) :type :error}]]]}))
+  {:state (assoc state :ask/loading? false :ask/result nil)
+   :fx    [[:dispatch [:action/toast {:message (str "Ask failed: " error) :type :error}]]]})
 
 (defmethod handle-event :action/select-db-value [state [_ db-name]]
   {:state (assoc state :db-name db-name
@@ -850,33 +854,26 @@
       (assoc-in state [:graph/card-cache file-id] card)
       state)))
 
-(defmethod handle-event :action/graph-node-imports-loaded [state [_ file-id data]]
+(defn- handle-node-data-loaded
+  "Handle a loaded data response for a graph node card section."
+  [state file-id data card-key]
   (if (= file-id (:graph/selected state))
     {:state (-> state
-                (assoc-in [:graph/node-card :imports] (:results data))
+                (assoc-in [:graph/node-card card-key] (:results data))
                 (maybe-cache-file-card file-id))}
     {:state state}))
+
+(defmethod handle-event :action/graph-node-imports-loaded [state [_ file-id data]]
+  (handle-node-data-loaded state file-id data :imports))
 
 (defmethod handle-event :action/graph-node-importers-loaded [state [_ file-id data]]
-  (if (= file-id (:graph/selected state))
-    {:state (-> state
-                (assoc-in [:graph/node-card :importers] (:results data))
-                (maybe-cache-file-card file-id))}
-    {:state state}))
+  (handle-node-data-loaded state file-id data :importers))
 
 (defmethod handle-event :action/graph-node-authors-loaded [state [_ file-id data]]
-  (if (= file-id (:graph/selected state))
-    {:state (-> state
-                (assoc-in [:graph/node-card :authors] (:results data))
-                (maybe-cache-file-card file-id))}
-    {:state state}))
+  (handle-node-data-loaded state file-id data :authors))
 
 (defmethod handle-event :action/graph-node-history-loaded [state [_ file-id data]]
-  (if (= file-id (:graph/selected state))
-    {:state (-> state
-                (assoc-in [:graph/node-card :history] (:results data))
-                (maybe-cache-file-card file-id))}
-    {:state state}))
+  (handle-node-data-loaded state file-id data :history))
 
 (defmethod handle-event :action/graph-node-meta-loaded [state [_ file-id data]]
   (if (= file-id (:graph/selected state))
@@ -1107,8 +1104,15 @@
    :fx    [[:http/get "/api/settings"
             {:on-ok :action/settings-loaded}]]})
 
+(defn- os-preferred-theme []
+  (if (and (exists? js/window)
+           (.-matchMedia js/window)
+           (.-matches (.matchMedia js/window "(prefers-color-scheme: dark)")))
+    :dark
+    :light))
+
 (defmethod handle-event :action/settings-loaded [state [_ settings]]
-  (let [theme    (get settings "theme" :dark)
+  (let [theme    (get settings "theme" (os-preferred-theme))
         sidebar  (get settings "sidebar-collapsed" false)
         db-name  (get settings "default-db")]
     {:state (assoc state
@@ -1140,46 +1144,43 @@
 
 ;; --- Effect execution (impure shell) ---
 
+(defn- dispatch-response
+  "Dispatch a handler event with a response value appended."
+  [handler response]
+  (dispatch! (if (vector? handler) (conj handler response) [handler response])))
+
+(defn- execute-http!
+  "Execute an HTTP request effect with standard dispatch callbacks."
+  [request-fn path body {:keys [on-ok on-error]}]
+  (let [callbacks {:on-ok    #(dispatch-response on-ok %)
+                   :on-error #(when on-error (dispatch! [on-error %]))}]
+    (if body
+      (request-fn path body callbacks)
+      (request-fn path callbacks))))
+
+(defn- execute-sse!
+  "Execute an SSE streaming request with cancel tracking."
+  [path body {:keys [on-progress on-result on-done on-error]}]
+  (when-let [old-cancel (get @active-sse-cancels path)]
+    (old-cancel))
+  (let [cancel (http/sse-post! path body
+                               {:on-progress #(dispatch-response on-progress %)
+                                :on-result   #(dispatch-response on-result %)
+                                :on-done     #(do (swap! active-sse-cancels dissoc path)
+                                                  (dispatch! (if (vector? on-done) on-done [on-done])))
+                                :on-error    #(do (swap! active-sse-cancels dissoc path)
+                                                  (when on-error (dispatch! [on-error %])))})]
+    (swap! active-sse-cancels assoc path cancel)))
+
 (defn- execute-fx!
   "Execute a single effect. This is the only impure code."
   [effect]
   (let [[kind & args] effect]
     (case kind
-      :http/get
-      (let [[path {:keys [on-ok on-error]}] args]
-        (http/api-get! path
-                       {:on-ok    #(dispatch! (if (vector? on-ok) (conj on-ok %) [on-ok %]))
-                        :on-error #(when on-error (dispatch! [on-error %]))}))
-
-      :http/post
-      (let [[path body {:keys [on-ok on-error]}] args]
-        (http/api-post! path body
-                        {:on-ok    #(dispatch! (if (vector? on-ok) (conj on-ok %) [on-ok %]))
-                         :on-error #(when on-error (dispatch! [on-error %]))}))
-
-      :http/delete
-      (let [[path {:keys [on-ok on-error]}] args]
-        (http/api-delete! path
-                          {:on-ok    #(dispatch! (if (vector? on-ok) (conj on-ok %) [on-ok %]))
-                           :on-error #(when on-error (dispatch! [on-error %]))}))
-
-      :http/sse
-      (let [[path body {:keys [on-progress on-result on-done on-error]}] args]
-        ;; Cancel any existing SSE stream for this path
-        (when-let [old-cancel (get @active-sse-cancels path)]
-          (old-cancel))
-        (let [cancel (http/sse-post! path body
-                                     {:on-progress #(dispatch! (if (vector? on-progress)
-                                                                 (conj on-progress %)
-                                                                 [on-progress %]))
-                                      :on-result   #(dispatch! (if (vector? on-result)
-                                                                 (conj on-result %)
-                                                                 [on-result %]))
-                                      :on-done     #(do (swap! active-sse-cancels dissoc path)
-                                                        (dispatch! (if (vector? on-done) on-done [on-done])))
-                                      :on-error    #(do (swap! active-sse-cancels dissoc path)
-                                                        (when on-error (dispatch! [on-error %])))})]
-          (swap! active-sse-cancels assoc path cancel)))
+      :http/get    (let [[path opts] args] (execute-http! http/api-get! path nil opts))
+      :http/post   (let [[path body opts] args] (execute-http! http/api-post! path body opts))
+      :http/delete (let [[path opts] args] (execute-http! http/api-delete! path nil opts))
+      :http/sse    (let [[path body opts] args] (execute-sse! path body opts))
 
       :sse/cancel
       (let [[path] args]
@@ -1286,7 +1287,9 @@
   (dispatch! [:action/backends-load])
   (dispatch! [:action/settings-load])
   (dispatch! [:action/db-refresh])
-  (js/setTimeout #(dispatch! [:action/connection-timeout]) 10000)
+  (when-let [t @connection-timer] (js/clearTimeout t))
+  (reset! connection-timer
+          (js/setTimeout #(dispatch! [:action/connection-timeout]) 10000))
   ;; Load graph immediately — it's always visible
   (dispatch! [:action/ask-load-history])
   (dispatch! [:action/graph-load]))

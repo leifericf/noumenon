@@ -77,7 +77,8 @@
   (is (= 1.0 (bench/score-value :correct)))
   (is (= 0.5 (bench/score-value :partial)))
   (is (= 0.0 (bench/score-value :wrong)))
-  (is (= 0.0 (bench/score-value :unknown))))
+  (is (= 0.0 (bench/score-value :unknown)))
+  (is (nil? (bench/score-value :skipped))))
 
 (deftest aggregate-scores-basic
   (let [results [{:full-score :correct :raw-score :partial :category :single-hop}
@@ -1439,7 +1440,7 @@
     (let [q      {:id :q05 :query-name "files-by-complexity" :scoring :deterministic}
           answer "There are none that match both criteria."
           result (bench/deterministic-score q nil nil answer)]
-      (is (= :correct (:score result))))))
+      (is (= :skipped (:score result))))))
 
 (deftest deterministic-score-q06-correct
   (with-redefs [query/run-named-query

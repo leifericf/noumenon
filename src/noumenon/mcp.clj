@@ -64,6 +64,7 @@
 (def ^:private max-provider-len 64)
 (def ^:private max-layers-len 64)
 (def ^:private allowed-layers #{:raw :import :enrich :full})
+(def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
 
 (defn- validate-string-length!
   "Throw ex-info if s exceeds max-len characters."
@@ -105,12 +106,12 @@
                   :properties repo-path-prop
                   :required ["repo_path"]}}
    {:name "noumenon_status"
-    :description "Get entity counts (commits, files, directories) and the HEAD SHA of the last imported commit. Compare with `git rev-parse HEAD` to check if the knowledge graph is up to date."
+    :description "RECOMMENDED FIRST STEP — call this before reading files. Returns entity counts (commits, files, directories) and the HEAD SHA of the last imported commit. Compare with `git rev-parse HEAD` to check if the knowledge graph is up to date."
     :inputSchema {:type "object"
                   :properties repo-path-prop
                   :required ["repo_path"]}}
    {:name "noumenon_query"
-    :description "Run a named Datalog query against the knowledge graph. Some queries require params — use noumenon_list_queries to see which."
+    :description "Use INSTEAD of Glob/Grep for codebase search — the knowledge graph knows file structure, dependencies, complexity, and commit history. Runs a named Datalog query. Some queries require params — use noumenon_list_queries to see available names and params."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"query_name" {:type "string"
@@ -122,7 +123,7 @@
                                                :description "Maximum number of result rows to return (default 500, max 10000)"}})
                   :required ["query_name" "repo_path"]}}
    {:name "noumenon_list_queries"
-    :description "List available named Datalog queries"
+    :description "List all available named Datalog queries with descriptions. Use this to discover what structured questions you can ask the knowledge graph via noumenon_query."
     :inputSchema {:type "object" :properties {}}}
    {:name "noumenon_get_schema"
     :description "Get the database schema showing all attributes and their types. Requires a repo to have been imported first."
@@ -137,7 +138,7 @@
                                                  :description "Also run LLM analysis on changed files (default: false)"}})
                   :required ["repo_path"]}}
    {:name "noumenon_ask"
-    :description "Ask a natural-language question about a repository. Uses an AI agent to run iterative Datalog queries against the knowledge graph. Requires prior import — if the repository has not been imported yet, call noumenon_update first. Uses LLM API calls. For structured queries, prefer noumenon_query."
+    :description "Use for codebase exploration BEFORE reading files — ask any natural-language question about a repository. Uses an AI agent to run iterative Datalog queries against the knowledge graph. Requires prior import — if the repository has not been imported yet, call noumenon_update first. Uses LLM API calls. For structured queries, prefer noumenon_query."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"question" {:type "string" :description "Question to ask about the repository"}
@@ -296,10 +297,13 @@
             conn      (get-or-create-conn db-dir db-name)
             meta-conn (db/ensure-meta-db db-dir)]
         (when (:auto-update defaults true)
-          (let [db (d/db conn)]
-            (when (sync/stale? db repo-path)
-              (log! "auto-update" "HEAD changed, updating...")
-              (sync/update-repo! conn repo-path repo-path {:concurrency 8}))))
+          (try
+            (let [db (d/db conn)]
+              (when (sync/stale? db repo-path)
+                (log! "auto-update" "HEAD changed, updating...")
+                (sync/update-repo! conn repo-path repo-path {:concurrency 8})))
+            (catch Exception e
+              (log! "auto-update" (str "failed, continuing: " (.getMessage e))))))
         (f {:conn conn :db (d/db conn)
             :meta-conn meta-conn :meta-db (d/db meta-conn)
             :repo-path repo-path :db-name db-name})))))
@@ -326,7 +330,8 @@
             head (if head-sha
                    (str "\nHead: " (subs head-sha 0 (min 7 (count head-sha))))
                    "")]
-        (tool-result (str commits " commits, " files " files, " dirs " directories." head))))))
+        (tool-result (str commits " commits, " files " files, " dirs " directories." head
+                          "\n\nTip: Use noumenon_query or noumenon_ask to explore the codebase before reading files directly."))))))
 
 (defn- handle-query [args defaults]
   (validate-string-length! "query_name" (args "query_name") 256)
@@ -374,7 +379,7 @@
      (if (seq lines)
        (str "Available queries (pass the name to noumenon_query):\n"
             (str/join "\n" lines))
-       "No named queries found. Run noumenon_reseed or noumenon_import to initialize."))))
+       "No named queries found. First call noumenon_update with your repo_path to initialize the knowledge graph, then retry. If queries are still missing, call noumenon_reseed."))))
 
 (defn- handle-get-schema [args defaults]
   (with-conn args defaults
@@ -780,9 +785,15 @@
                                :stop-flag stop-flag}
                         (args "target")
                         (assoc :allowed-targets
-                               (set (map keyword (str/split (args "target") #",")))))
+                               (->> (str/split (args "target") #",")
+                                    (keep (comp allowed-introspect-targets keyword str/trim))
+                                    set)))
             run-id    (str (System/currentTimeMillis) "-" (java.util.UUID/randomUUID))
             now       (System/currentTimeMillis)]
+        (when (>= (sessions/running-count) sessions/max-sessions)
+          (throw (ex-info "Too many active introspect sessions"
+                          {:user-message (str "Maximum " sessions/max-sessions
+                                              " concurrent sessions. Stop one first.")})))
         (sessions/register! run-id {:status :running :stop-flag stop-flag :started-at now})
         (let [fut (future
                     (try
@@ -876,12 +887,12 @@
                                    (artifacts/prompt-history meta-conn aname))
                       "rules"  (artifacts/rules-history meta-conn))]
       (tool-result
-       (if (empty? history)
-         "No history found."
+       (if (seq history)
          (->> history
               (map (fn [{:keys [tx-time source]}]
                      (str tx-time " [" (name source) "]")))
-              (str/join "\n")))))))
+              (str/join "\n"))
+         "No history found.")))))
 
 (def ^:private tool-handlers
   {"noumenon_import"            handle-import

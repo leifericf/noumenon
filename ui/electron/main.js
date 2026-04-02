@@ -125,10 +125,17 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      // Dev loads from shadow-cljs (8280) but API is on daemon port — disable CORS for dev
-      webSecurity: !isDev()
+      webSecurity: true
     }
   });
+
+  // Restrict navigation to app-owned origins only
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file://') && !url.startsWith('http://localhost')) {
+      event.preventDefault();
+    }
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   if (isDev()) {
     win.loadURL(DEV_URL);
@@ -144,8 +151,13 @@ function setupAutoUpdate() {
   if (isDev()) return;
   try {
     const { autoUpdater } = require('electron-updater');
+    autoUpdater.on('error', (err) => {
+      console.error('Auto-update error:', err);
+    });
     autoUpdater.checkForUpdatesAndNotify();
-  } catch (_) {}
+  } catch (err) {
+    console.error('Failed to initialize auto-updater:', err);
+  }
 }
 
 app.whenReady().then(async () => {

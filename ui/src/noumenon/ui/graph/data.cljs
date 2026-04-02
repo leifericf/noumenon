@@ -3,6 +3,12 @@
    Returns lazy sequences — realized to vectors at simulation boundary via clj->js."
   (:require [clojure.string :as str]))
 
+;; Layout constants for child node scatter around parent
+(def ^:private file-scatter-radius 20)
+(def ^:private segment-scatter-radius 15)
+(def ^:private person-orbit-radius 35)
+(def ^:private max-initials-len 2)
+
 (def layer-colors
   {:core      "#7b9abf"   ;; muted steel blue
    :subsystem "#6b9e8a"   ;; muted sage
@@ -111,8 +117,8 @@
             :size       (get churn-map path 1)
             :color      (layer-colors layer-kw (layer-colors nil))
             :complexity (keyword (or complexity :unknown))
-            :x          (+ cx (* (- (rand) 0.5) 20))
-            :y          (+ cy (* (- (rand) 0.5) 20))}))
+            :x          (+ cx (* (- (rand) 0.5) file-scatter-radius))
+            :y          (+ cy (* (- (rand) 0.5) file-scatter-radius))}))
        comp-files))
 
 ;; --- Segment-level builders (level 3) ---
@@ -154,8 +160,8 @@
               :safety         safety
               :line-start     line-start
               :line-end       line-end
-              :x              (+ cx (* (- (rand) 0.5) 15))
-              :y              (+ cy (* (- (rand) 0.5) 15))}))
+              :x              (+ cx (* (- (rand) 0.5) segment-scatter-radius))
+              :y              (+ cy (* (- (rand) 0.5) segment-scatter-radius))}))
          segments)))
 
 (defn build-segment-edges
@@ -181,9 +187,9 @@
     (map-indexed
      (fn [i [name commits]]
        (let [angle  (* i step)
-             radius 35
+             radius person-orbit-radius
              initials (-> name (str/split #"\s+") (->> (map first) (apply str))
-                          .toUpperCase (subs 0 (min 2 (count name))))]
+                          .toUpperCase (subs 0 (min max-initials-len (count name))))]
          {:id      (str "person:" name)
           :type    :person
           :label   initials

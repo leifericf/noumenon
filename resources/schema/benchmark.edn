@@ -162,6 +162,27 @@
   :db/cardinality :db.cardinality/one
   :db/doc         "Mean score for :full condition (0.0-1.0)"}
 
+ ;; --- Weighted aggregate scores (architectural questions weighted 2x) ---
+ {:db/ident       :bench.run/weighted-raw-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Category-weighted mean score for :raw condition"}
+
+ {:db/ident       :bench.run/weighted-import-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Category-weighted mean score for :import condition"}
+
+ {:db/ident       :bench.run/weighted-enrich-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Category-weighted mean score for :enrich condition"}
+
+ {:db/ident       :bench.run/weighted-full-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Category-weighted mean score for :full condition"}
+
  {:db/ident       :bench.run/deterministic-count
   :db/valueType   :db.type/long
   :db/cardinality :db.cardinality/one

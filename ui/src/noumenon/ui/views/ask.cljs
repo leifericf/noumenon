@@ -139,7 +139,7 @@
     [:div {:style {:width "100%"
                    :margin-top "20px"
                    :padding "16px 20px"
-                   :background "rgba(15,20,30,0.75)"
+                   :background (:bg-secondary styles/tokens)
                    :border (str "1px solid " (:border styles/tokens))
                    :border-radius (:radius styles/tokens)}}
      ;; Header with expand/collapse
@@ -182,7 +182,7 @@
                   :color (:accent styles/tokens)
                   :margin-bottom "8px"}}
     question]
-   [:div {:style {:background "rgba(15,20,30,0.75)"
+   [:div {:style {:background (:bg-secondary styles/tokens)
                   :border (str "1px solid " (:border styles/tokens))
                   :border-radius (:radius styles/tokens)
                   :padding "16px"
@@ -197,7 +197,8 @@
                       :font-size "11px"
                       :padding "4px 10px"
                       :letter-spacing "0.3px"}
-              :title "Copy to clipboard"}
+              :title "Copy to clipboard"
+              :aria-label "Copy answer to clipboard"}
      "Copy"]
     (md/render-markdown answer)]])
 
@@ -248,7 +249,7 @@
                   :rows 2
                   :style {:flex 1
                           :padding "8px 10px"
-                          :background "rgba(15,20,30,0.75)"
+                          :background (:bg-secondary styles/tokens)
                           :border (str "1px solid " (:border styles/tokens))
                           :border-radius (:radius styles/tokens)
                           :color (:text-primary styles/tokens)
@@ -282,7 +283,7 @@
                    :animation "fadeSlideIn 0.2s ease"}}
      (when-let [answer (:answer detail)]
        [:div {:style {:padding "12px 16px"
-                      :background "rgba(15,20,30,0.75)"
+                      :background (:bg-secondary styles/tokens)
                       :border (str "1px solid " (:border styles/tokens))
                       :border-radius (:radius styles/tokens)
                       :position "relative"}}
@@ -295,7 +296,8 @@
                           :color "rgba(255,255,255,0.4)"
                           :font-size "11px"
                           :padding "4px 10px"}
-                  :title "Copy to clipboard"}
+                  :title "Copy to clipboard"
+                  :aria-label "Copy answer to clipboard"}
          "Copy"]
         (md/render-markdown answer)])]))
 
@@ -362,12 +364,12 @@
         (let [n (count visible-set)]
           (for [[i q] (map-indexed vector items)]
             (let [duplicate? (>= i n)]
-              [:button {:key (str i "-" q)
+              [:button {:key (if duplicate? (str "dup-" q) q)
                         :on {:click [:action/ask-run-suggestion q]}
                         :tabindex (if duplicate? -1 0)
                         :aria-hidden (when duplicate? "true")
                         :aria-label (str "Ask: " q)
-                        :style {:background "rgba(15,20,30,0.75)"
+                        :style {:background (:bg-secondary styles/tokens)
                                 :border (str "1px solid " (:border styles/tokens))
                                 :border-radius "16px"
                                 :color (:text-secondary styles/tokens)
@@ -378,150 +380,152 @@
                                 :flex-shrink 0}}
                q])))]])))
 
+(defn- ask-input-field
+  "Search input with submit/stop button and completions dropdown."
+  [{:keys [query loading? completions completion-idx]}]
+  [:div {:style {:width "100%" :position "relative"}}
+   [:input {:type "text"
+            :id "ask-input"
+            :placeholder "Ask anything about your codebase..."
+            :value (or query "")
+            :on {:input [:action/ask-input]
+                 :keydown [:action/ask-keydown]}
+            :role "combobox"
+            :aria-expanded (boolean (seq completions))
+            :aria-autocomplete "list"
+            :aria-haspopup "listbox"
+            :aria-controls "ask-completions"
+            :style {:width "100%"
+                    :padding "14px 18px"
+                    :padding-right "44px"
+                    :background (:bg-secondary styles/tokens)
+                    :backdrop-filter "blur(12px)"
+                    :-webkit-backdrop-filter "blur(12px)"
+                    :border "1px solid rgba(255,255,255,0.08)"
+                    :border-radius "12px"
+                    :color (:text-primary styles/tokens)
+                    :font-size "15px"}}]
+   (if loading?
+     [:button {:on {:click [:action/ask-cancel]}
+               :style {:position "absolute" :right "12px" :top "50%"
+                       :transform "translateY(-50%)"
+                       :background "none" :border "none" :cursor "pointer"
+                       :color (:danger styles/tokens) :font-size "13px"
+                       :padding "4px 8px" :z-index 2}}
+      "Stop"]
+     (when (seq query)
+       [:button {:on {:click [:action/ask-submit]}
+                 :aria-label "Submit question"
+                 :style {:position "absolute" :right "10px" :top "50%"
+                         :transform "translateY(-50%)"
+                         :background "none" :border "none" :cursor "pointer"
+                         :color (:accent styles/tokens) :font-size "16px"
+                         :padding "4px 8px" :z-index 2}}
+        "\u2192"]))
+   (when (seq completions)
+     [:div {:id "ask-completions"
+            :role "listbox"
+            :style {:position "absolute" :top "100%" :left 0 :right 0
+                    :margin-top "4px"
+                    :background "rgba(10,14,23,0.95)"
+                    :backdrop-filter "blur(12px)"
+                    :-webkit-backdrop-filter "blur(12px)"
+                    :border (str "1px solid " (:border styles/tokens))
+                    :border-radius (:radius styles/tokens)
+                    :box-shadow "0 4px 12px rgba(0,0,0,0.4)"
+                    :max-height "240px" :overflow-y "auto" :z-index 200}}
+      (for [[i item] (map-indexed vector completions)]
+        [:div {:key (:value item)
+               :id (str "ask-completion-" i)
+               :role "option"
+               :aria-label (str (:type item) " " (:value item))
+               :aria-selected (= i (or completion-idx 0))
+               :on {:click [:action/ask-complete (:value item)]}
+               :style {:padding "8px 14px" :cursor "pointer"
+                       :display "flex" :align-items "center" :gap "10px"
+                       :background (when (= i (or completion-idx 0))
+                                     (:bg-tertiary styles/tokens))
+                       :font-size "13px"}}
+         [:span {:style {:font-size "10px" :color (:text-muted styles/tokens)
+                         :min-width "44px" :text-transform "uppercase"}}
+          (:type item)]
+         [:span {:style {:font-family (:font-mono styles/tokens)
+                         :color (:text-primary styles/tokens)
+                         :white-space "nowrap" :overflow "hidden"
+                         :text-overflow "ellipsis"}}
+          (:value item)]
+         (when-let [label (:label item)]
+           [:span {:style {:color (:text-secondary styles/tokens)
+                           :font-size "12px" :overflow "hidden"
+                           :text-overflow "ellipsis" :white-space "nowrap"}}
+            label])])])])
+
+(defn- ask-hint []
+  [:div {:style {:width "100%" :margin-top "6px"
+                 :font-size "11px" :color (:text-muted styles/tokens)}}
+   "Type @ to reference a file or author. Press Enter to ask. "
+   (let [mac? (or (some-> js/navigator .-userAgentData .-platform (= "macOS"))
+                  (some-> js/navigator .-userAgent (re-find #"Mac")))]
+     [:span {:style {:color "rgba(255,255,255,0.2)"}}
+      (if mac? "\u2318K to focus" "Ctrl+K to focus")])])
+
+(defn- ask-results-section
+  "Scrollable results area with reasoning trace, history, and controls."
+  [{:keys [loading? steps progress reasoning-expanded? history last-steps
+           show-post-reasoning?]}]
+  [:div {:style {:max-height "55vh" :overflow-y "auto" :width "100%"}}
+   (when (and loading? (or (seq steps) progress))
+     (reasoning-trace steps progress reasoning-expanded?))
+   (when (seq history)
+     (into [:div {:style {:width "100%" :margin-top "24px"}}]
+           (concat
+            (for [item (reverse history)]
+              [:div {:key (hash (:question item))} (history-item item)])
+            (let [step-items (filterv #(= "step" (:type %)) (or last-steps []))]
+              (when (and (seq step-items) (not loading?))
+                [[:div {:style {:margin-top "4px"}}
+                  [:button {:on {:click [:action/ask-toggle-post-reasoning]}
+                            :style {:background "none" :border "none" :cursor "pointer"
+                                    :font-size "12px" :color (:text-muted styles/tokens)
+                                    :padding "0" :display "flex" :align-items "center"
+                                    :gap "4px"}}
+                   [:span (if show-post-reasoning? "\u25BC" "\u25B6")]
+                   (str "Show reasoning (" (count step-items) " steps)")]
+                  (when show-post-reasoning?
+                    (reasoning-trace step-items nil reasoning-expanded?))]]))
+            [[:div {:style {:margin-top "12px" :text-align "center"}}
+              [:button {:on {:click [:action/ask-clear]}
+                        :style {:background "none" :border "none" :cursor "pointer"
+                                :font-size "13px" :color (:text-muted styles/tokens)
+                                :padding "4px 12px"}}
+               "New question"]]])))])
+
 (defn ask-view [state]
-  (let [{:keys [ask/query ask/loading? ask/result ask/history ask/progress
-                ask/steps ask/past-sessions ask/expanded-session
-                ask/expanded-detail ask/completions ask/completion-idx
-                ask/reasoning-expanded? ask/visible-suggestions
-                databases/list db-name]} state
-        has-results? (or (seq history) result loading?)]
-    [:div {:style {:display "flex"
-                   :flex-direction "column"
-                   :align-items "center"
-                   :width "100%"}}
-     [:div {:style {:width "100%"
-                    :position "relative"}}
-      [:input {:type "text"
-               :id "ask-input"
-               :placeholder "Ask anything about your codebase..."
-               :value (or query "")
-               :on {:input [:action/ask-input]
-                    :keydown [:action/ask-keydown]}
-               :role "combobox"
-               :aria-expanded (boolean (seq completions))
-               :aria-autocomplete "list"
-               :aria-haspopup "listbox"
-               :aria-controls "ask-completions"
-               :style {:width "100%"
-                       :padding "14px 18px"
-                       :padding-right "44px"
-                       :background "rgba(15,20,30,0.8)"
-                       :backdrop-filter "blur(12px)"
-                       :-webkit-backdrop-filter "blur(12px)"
-                       :border "1px solid rgba(255,255,255,0.08)"
-                       :border-radius "12px"
-                       :color "#e6edf3"
-                       :font-size "15px"}}]
-      ;; Submit / Stop button
-      (if loading?
-        [:button {:on {:click [:action/ask-cancel]}
-                  :style {:position "absolute" :right "12px" :top "50%"
-                          :transform "translateY(-50%)"
-                          :background "none" :border "none" :cursor "pointer"
-                          :color (:danger styles/tokens) :font-size "13px"
-                          :padding "4px 8px"
-                          :z-index 2}}
-         "Stop"]
-        (when (seq query)
-          [:button {:on {:click [:action/ask-submit]}
-                    :style {:position "absolute" :right "10px" :top "50%"
-                            :transform "translateY(-50%)"
-                            :background "none" :border "none" :cursor "pointer"
-                            :color (:accent styles/tokens) :font-size "16px"
-                            :padding "4px 8px"
-                            :z-index 2}}
-           "\u2192"]))
-      ;; @-mention autocomplete dropdown
-      (when (seq completions)
-        [:div {:id "ask-completions"
-               :role "listbox"
-               :style {:position "absolute"
-                       :top "100%"
-                       :left 0
-                       :right 0
-                       :margin-top "4px"
-                       :background "rgba(10,14,23,0.95)"
-                       :backdrop-filter "blur(12px)"
-                       :-webkit-backdrop-filter "blur(12px)"
-                       :border (str "1px solid " (:border styles/tokens))
-                       :border-radius (:radius styles/tokens)
-                       :box-shadow "0 4px 12px rgba(0,0,0,0.4)"
-                       :max-height "240px"
-                       :overflow-y "auto"
-                       :z-index 200}}
-         (for [[i item] (map-indexed vector completions)]
-           [:div {:key (:value item)
-                  :id (str "ask-completion-" i)
-                  :role "option"
-                  :aria-label (str (:type item) " " (:value item))
-                  :aria-selected (= i (or completion-idx 0))
-                  :on {:click [:action/ask-complete (:value item)]}
-                  :style {:padding "8px 14px"
-                          :cursor "pointer"
-                          :display "flex"
-                          :align-items "center"
-                          :gap "10px"
-                          :background (when (= i (or completion-idx 0))
-                                        (:bg-tertiary styles/tokens))
-                          :font-size "13px"}}
-            [:span {:style {:font-size "10px"
-                            :color (:text-muted styles/tokens)
-                            :min-width "44px"
-                            :text-transform "uppercase"}}
-             (:type item)]
-            [:span {:style {:font-family (:font-mono styles/tokens)
-                            :color (:text-primary styles/tokens)
-                            :white-space "nowrap"
-                            :overflow "hidden"
-                            :text-overflow "ellipsis"}}
-             (:value item)]
-            (when-let [label (:label item)]
-              [:span {:style {:color (:text-secondary styles/tokens)
-                              :font-size "12px"
-                              :overflow "hidden"
-                              :text-overflow "ellipsis"
-                              :white-space "nowrap"}}
-               label])])])]
-     ;; Hint
-     [:div {:style {:width "100%" :margin-top "6px"
-                    :font-size "11px" :color (:text-muted styles/tokens)}}
-      "Type @ to reference a file or author. Press Enter to ask. "
-      (let [mac? (and (exists? js/navigator)
-                      (re-find #"Mac" (.-platform js/navigator)))]
-        [:span {:style {:color "rgba(255,255,255,0.2)"}}
-         (if mac? "\u2318K to focus" "Ctrl+K to focus")])]
-     ;; Scrollable content below input (doesn't clip the completions dropdown)
-     [:div {:style {:max-height "55vh" :overflow-y "auto" :width "100%"}}
-      (when (and loading? (or (seq steps) progress))
-        (reasoning-trace steps progress reasoning-expanded?))
-      (when (seq history)
-        (into [:div {:style {:width "100%" :margin-top "24px"}}]
-              (concat
-               (for [[i item] (map-indexed vector (reverse history))]
-                 [:div {:key i} (history-item item)])
-               (let [last-steps (filterv #(= "step" (:type %)) (or (:ask/last-steps state) []))]
-                 (when (and (seq last-steps) (not loading?))
-                   (let [showing? (:ask/show-post-reasoning? state)]
-                     [[:div {:style {:margin-top "4px"}}
-                       [:button {:on {:click [:action/ask-toggle-post-reasoning]}
-                                 :style {:background "none" :border "none" :cursor "pointer"
-                                         :font-size "12px" :color (:text-muted styles/tokens)
-                                         :padding "0" :display "flex" :align-items "center"
-                                         :gap "4px"}}
-                        [:span (if showing? "\u25BC" "\u25B6")]
-                        (str "Show reasoning (" (count last-steps) " steps)")]
-                       (when showing?
-                         (reasoning-trace last-steps nil reasoning-expanded?))]])))
-               [[:div {:style {:margin-top "12px" :text-align "center"}}
-                 [:button {:on {:click [:action/ask-clear]}
-                           :style {:background "none" :border "none" :cursor "pointer"
-                                   :font-size "13px" :color (:text-muted styles/tokens)
-                                   :padding "4px 12px"}}
-                  "New question"]]])))]]))
+  (let [{:keys [ask/query ask/loading? ask/history ask/progress
+                ask/steps ask/completions ask/completion-idx
+                ask/reasoning-expanded?]} state]
+    [:div {:style {:display "flex" :flex-direction "column"
+                   :align-items "center" :width "100%"}}
+     (ask-input-field {:query query :loading? loading?
+                       :completions completions :completion-idx completion-idx})
+     (ask-hint)
+     (ask-results-section {:loading? loading? :steps steps :progress progress
+                           :reasoning-expanded? reasoning-expanded?
+                           :history history
+                           :last-steps (:ask/last-steps state)
+                           :show-post-reasoning? (:ask/show-post-reasoning? state)})]))
 
 (defn past-questions-panel [state]
   (let [{:keys [ask/past-sessions ask/expanded-session ask/expanded-detail]} state]
-    (when (seq past-sessions)
+    (cond
+      (nil? past-sessions)
+      [:div {:style {:font-size "11px" :color (:text-muted styles/tokens)
+                     :padding "8px 0"}}
+       "Loading past questions..."]
+
+      (empty? past-sessions) nil
+
+      :else
       (let [expanded-list? (:ask/history-open? state)]
         [:div
          [:button {:on {:click [:action/ask-toggle-history]}

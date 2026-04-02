@@ -126,9 +126,18 @@
       (log! (str "Marked " n " file(s) for re-analysis (scope: " reanalyze ")"))
       n)))
 
+(defn- build-analyze-opts
+  "Build the options map for analyze-repo! from CLI opts."
+  [{:keys [concurrency min-delay max-files]} model-id meta-db]
+  (cond-> {:meta-db      meta-db
+           :model-id     model-id
+           :concurrency  (or concurrency 3)
+           :min-delay-ms (or min-delay 0)}
+    max-files (assoc :max-files max-files)))
+
 (defn do-analyze
   "Run the analyze subcommand. Returns {:exit n :result map-or-nil}."
-  [{:keys [repo-path model provider concurrency min-delay max-files reanalyze] :as opts}]
+  [{:keys [repo-path model provider reanalyze] :as opts}]
   (when (and reanalyze (not (valid-reanalyze-scopes reanalyze)))
     (print-error! (str "Invalid --reanalyze scope: " reanalyze
                        ". Must be one of: all, prompt-changed, model-changed, stale"))
@@ -146,11 +155,7 @@
               (prepare-reanalysis! conn (d/db conn) reanalyze
                                    {:prompt-hash prompt-hash :model-id model-id})
               (let [result (analyze/analyze-repo! conn repo-path prompt-fn
-                                                  (cond-> {:meta-db      meta-db
-                                                           :model-id     model-id
-                                                           :concurrency  (or concurrency 3)
-                                                           :min-delay-ms (or min-delay 0)}
-                                                    max-files (assoc :max-files max-files)))]
+                                                  (build-analyze-opts opts model-id meta-db))]
                 (log! (str "Next: run '" cli/program-name " query <query-name> " repo-path
                            "' or '" cli/program-name " ask -q \"...\" " repo-path
                            "' to explore the knowledge graph."))
@@ -240,6 +245,19 @@
                      "' to enrich with semantic metadata.")))
         {:exit 0 :result result}))))
 
+(defn- classify-watch-result
+  "Derive watch-loop state from an update result and prior failure count."
+  [result failures]
+  (let [failed? (= result ::error)]
+    {:failed?      failed?
+     :had-changes? (and (not failed?) (not= :up-to-date (:status result)))
+     :new-failures (if failed? (inc failures) 0)}))
+
+(defn- backoff-multiplier
+  "Sleep multiplier: 1 for 0-2 failures, capped at 10 thereafter."
+  [failures]
+  (if (>= failures 3) (min failures 10) 1))
+
 (defn do-watch
   "Run the watch subcommand. Polls git HEAD and syncs on changes."
   [{:keys [interval analyze] :as opts}]
@@ -252,23 +270,19 @@
             interval-s (or interval 30)
             base-opts  (build-sync-opts opts)]
         (log! (str "Watching " repo-path " (polling every " interval-s "s)"))
-        (loop [failures 0
-               last-had-changes? true]
+        (loop [failures 0, last-had-changes? true]
           (let [sync-opts (cond-> base-opts
                             analyze (assoc :meta-db (d/db meta-conn)))
-                result  (try
-                          (sync/update-repo! conn repo-path repo-uri
-                                             (assoc sync-opts :quiet? (not last-had-changes?)))
-                          (catch Exception e
-                            (log! (str "Update error: " (.getMessage e)))
-                            ::error))
-                failed?      (= result ::error)
-                idle?        (and (not failed?) (= :up-to-date (:status result)))
-                had-changes? (and (not failed?) (not idle?))
-                new-failures (if failed? (inc failures) 0)]
+                result (try
+                         (sync/update-repo! conn repo-path repo-uri
+                                            (assoc sync-opts :quiet? (not last-had-changes?)))
+                         (catch Exception e
+                           (log! (str "Update error: " (.getMessage e)))
+                           ::error))
+                {:keys [failed? had-changes? new-failures]} (classify-watch-result result failures)]
             (when (and failed? (= new-failures 5))
               (log! (str "WARNING: 5 consecutive failures. Check database and repository.")))
-            (Thread/sleep (* interval-s 1000 (if (>= new-failures 3) (min new-failures 10) 1)))
+            (Thread/sleep (* interval-s 1000 (backoff-multiplier new-failures)))
             (recur new-failures (or had-changes? failed?))))))))
 
 (defn- do-query-list
@@ -305,6 +319,40 @@
                     {:exit 1})
                 {:exit 0 :result ok}))))))))
 
+(defn- log-verbose-steps
+  "Log each step of the ask agent's reasoning."
+  [result max-iterations]
+  (let [max-iters (or max-iterations 10)]
+    (doseq [step (:steps result)]
+      (let [i   (:iteration step)
+            tag (cond
+                  (:answer step)      "answer"
+                  (:error step)       (str "error: " (:error step))
+                  (:tool-result step) (str "tool: " (or (some-> (:parsed step) :tool name) "unknown")
+                                           " (" (count (:tool-result step)) " chars)")
+                  :else               "thinking")]
+        (log! (str "  [" i "/" max-iters "] " tag))))))
+
+(defn- format-ask-result
+  "Format an ask agent result into {:exit n :result map}."
+  [result]
+  (let [exhausted? (= :budget-exhausted (:status result))
+        answer     (:answer result)
+        session-id (:session-id result)]
+    (if exhausted?
+      (do (if answer
+            (do (log! answer)
+                (log! (str "\n[Session " session-id " saved — re-run with"
+                           " --continue-from " session-id " to resume]")))
+            (log! "Budget exhausted — no answer found."))
+          {:exit   2
+           :result (cond-> {:status :budget-exhausted :usage (:usage result)}
+                     answer     (assoc :answer answer)
+                     session-id (assoc :session-id session-id))})
+      (do (when answer (log! answer))
+          {:exit   0
+           :result {:answer answer :status (:status result) :usage (:usage result)}}))))
+
 (defn do-ask
   "Run the ask subcommand. Returns {:exit n :result map-or-nil}."
   [{:keys [question model provider max-iterations continue-from verbose] :as opts}]
@@ -324,41 +372,8 @@
                                     (cond-> {:invoke-fn invoke-fn :repo-name db-name}
                                       max-iterations (assoc :max-iterations max-iterations)
                                       continue-from  (assoc :continue-from continue-from)))]
-              (when verbose
-                (let [max-iters (or max-iterations 10)]
-                  (doseq [step (:steps result)]
-                    (let [i   (:iteration step)
-                          tag (cond
-                                (:answer step)      "answer"
-                                (:error step)       (str "error: " (:error step))
-                                (:tool-result step) (let [parsed (:parsed step)
-                                                          tool   (some-> parsed :tool name)]
-                                                      (str "tool: " (or tool "unknown")
-                                                           " (" (count (:tool-result step))
-                                                           " chars)"))
-                                :else               "thinking")]
-                      (log! (str "  [" i "/" max-iters "] " tag))))))
-              (let [exhausted? (= :budget-exhausted (:status result))
-                    answer     (:answer result)
-                    session-id (:session-id result)]
-                (cond
-                  (and exhausted? (not answer))
-                  (do (log! "Budget exhausted — no answer found.")
-                      {:exit 2 :result {:status :budget-exhausted :usage (:usage result)}})
-
-                  exhausted?
-                  (do (log! answer)
-                      (log! (str "\n[Session " session-id " saved — re-run with"
-                                 " --continue-from " session-id " to resume]"))
-                      {:exit   2
-                       :result {:answer answer :status :budget-exhausted
-                                :session-id session-id :usage (:usage result)}})
-
-                  :else
-                  (do (when answer (log! answer))
-                      {:exit   0
-                       :result {:answer answer :status (:status result)
-                                :usage (:usage result)}}))))))
+              (when verbose (log-verbose-steps result max-iterations))
+              (format-ask-result result))))
         (catch clojure.lang.ExceptionInfo e
           (print-error! (.getMessage e))
           {:exit 1})))))
@@ -436,12 +451,12 @@
               (log! (str "Re-import: " cli/program-name " import <repo-path>"))
               {:exit 0})))
       (let [names (db/list-db-dirs db-dir)]
-        (if (empty? names)
-          (do (log! (str "No databases found in " db-dir)) {:exit 0 :result []})
+        (if (seq names)
           (let [client (db/create-client db-dir)
                 stats  (mapv #(db/db-stats client %) names)]
             (doseq [s stats] (print-db-stats s))
-            {:exit 0 :result stats}))))))
+            {:exit 0 :result stats})
+          (do (log! (str "No databases found in " db-dir)) {:exit 0 :result []}))))))
 
 ;; --- Benchmark ---
 
@@ -790,6 +805,70 @@
 
 ;; --- Entry point ---
 
+(defn- handle-parse-error
+  "Display error message and usage help for a failed parse. Returns {:exit 1}."
+  [{:keys [error subcommand] :as parsed}]
+  (when-let [msg-or-fn (error-messages error)]
+    (let [msg (if (fn? msg-or-fn) (msg-or-fn parsed) msg-or-fn)]
+      (print-error! msg)))
+  (cond
+    (errors-with-global-usage error)
+    (print-usage!)
+    (and (errors-with-subcommand-usage error)
+         subcommand
+         (cli/format-subcommand-help subcommand))
+    (do (log!) (log! (cli/format-subcommand-help subcommand)))
+    (errors-with-subcommand-usage error)
+    (print-usage!))
+  {:exit 1})
+
+(defn- do-serve
+  "Start the MCP server."
+  [parsed]
+  (let [user-db (str (System/getProperty "user.home") "/.noumenon/data")]
+    (mcp/serve! (update parsed :db-dir #(or % user-db)))
+    {:exit 0}))
+
+(defn- do-daemon
+  "Start the HTTP daemon."
+  [parsed]
+  (let [daemon-db-dir (or (:db-dir parsed)
+                          (str (System/getProperty "user.home") "/.noumenon/data"))
+        port (http/start! {:port     (:port parsed 0)
+                           :bind     (:bind parsed "127.0.0.1")
+                           :db-dir   daemon-db-dir
+                           :provider (:provider parsed)
+                           :model    (:model parsed)
+                           :token    (:token parsed)})]
+    (log! (str "Daemon running on port " port ". Press Ctrl+C to stop."))
+    (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable http/stop!))
+    @(promise)
+    {:exit 0}))
+
+(def ^:private suppressed-output-subcommands
+  #{"benchmark" "serve" "status" "list-databases" "show-schema" "watch" "introspect"})
+
+(defn- dispatch-subcommand [parsed]
+  (case (:subcommand parsed)
+    "import"           (do-import parsed)
+    "analyze"          (do-analyze parsed)
+    "enrich"           (do-enrich parsed)
+    "synthesize"       (do-synthesize parsed)
+    "update"           (do-update parsed)
+    "watch"            (do-watch parsed)
+    "query"            (do-query parsed)
+    "ask"              (do-ask parsed)
+    "show-schema"      (do-show-schema parsed)
+    "status"           (do-status parsed)
+    "list-databases"   (do-list-databases parsed)
+    "benchmark"        (do-benchmark parsed)
+    "digest"           (do-digest parsed)
+    "introspect"       (do-introspect parsed)
+    "reseed"           (do-reseed parsed)
+    "artifact-history" (do-artifact-history parsed)
+    "serve"            (do-serve parsed)
+    "daemon"           (do-daemon parsed)))
+
 (defn run
   "Main dispatch. Returns {:exit n :result map-or-nil}."
   [args]
@@ -806,62 +885,13 @@
         {:exit 0})
 
       (:error parsed)
-      (do (when-let [msg-or-fn (error-messages (:error parsed))]
-            (let [msg (if (fn? msg-or-fn) (msg-or-fn parsed) msg-or-fn)]
-              (print-error! msg)))
-          (cond
-            (errors-with-global-usage (:error parsed))
-            (print-usage!)
-            (and (errors-with-subcommand-usage (:error parsed))
-                 (:subcommand parsed)
-                 (cli/format-subcommand-help (:subcommand parsed)))
-            (do (log!)
-                (log! (cli/format-subcommand-help (:subcommand parsed))))
-            (errors-with-subcommand-usage (:error parsed))
-            (print-usage!))
-          {:exit 1})
+      (handle-parse-error parsed)
 
       :else
-      (let [result (case (:subcommand parsed)
-                     "import"         (do-import parsed)
-                     "analyze"        (do-analyze parsed)
-                     "enrich"         (do-enrich parsed)
-                     "synthesize"     (do-synthesize parsed)
-                     "update"         (do-update parsed)
-                     "watch"          (do-watch parsed)
-                     "query"          (do-query parsed)
-                     "ask"            (do-ask parsed)
-                     "show-schema"    (do-show-schema parsed)
-                     "status"         (do-status parsed)
-                     "list-databases" (do-list-databases parsed)
-                     "benchmark"      (do-benchmark parsed)
-                     "digest"         (do-digest parsed)
-                     "introspect"     (do-introspect parsed)
-                     "reseed"         (do-reseed parsed)
-                     "artifact-history" (do-artifact-history parsed)
-                     "serve"          (let [user-db (str (System/getProperty "user.home")
-                                                         "/.noumenon/data")]
-                                        (mcp/serve! (update parsed :db-dir #(or % user-db)))
-                                        {:exit 0})
-                     "daemon"         (do (let [daemon-db-dir (or (:db-dir parsed)
-                                                                  (str (System/getProperty "user.home")
-                                                                       "/.noumenon/data"))
-                                                port (http/start!
-                                                      {:port     (:port parsed 0)
-                                                       :bind     (:bind parsed "127.0.0.1")
-                                                       :db-dir   daemon-db-dir
-                                                       :provider (:provider parsed)
-                                                       :model    (:model parsed)
-                                                       :token    (:token parsed)})]
-                                            (log! (str "Daemon running on port " port ". Press Ctrl+C to stop."))
-                                            (.addShutdownHook (Runtime/getRuntime)
-                                                              (Thread. ^Runnable http/stop!))
-                                            @(promise))
-                                          {:exit 0}))]
+      (let [result (dispatch-subcommand parsed)]
         (when (and (:result result)
                    (zero? (:exit result))
-                   (not (#{"benchmark" "serve" "status" "list-databases"
-                           "show-schema" "watch" "introspect"} (:subcommand parsed))))
+                   (not (suppressed-output-subcommands (:subcommand parsed))))
           (prn (:result result)))
         result))))
 

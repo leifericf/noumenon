@@ -25,7 +25,7 @@
                  :usage   "noum watch <repo> [--interval N]"
                  :min-args 1}
    "ask"        {:summary "Ask a question about a repository using AI"
-                 :usage   "noum ask <repo> \"question\" [options]"
+                 :usage   "noum ask <repo> <question...> [options]"
                  :api-path "/api/ask" :api-method :post :min-args 2
                  :positional-map :ask}
    "query"      {:summary "Run a named Datalog query"
@@ -128,7 +128,7 @@
   "Extract --flag value pairs from args. Returns [flags-map remaining-args]."
   [args]
   (loop [remaining args, flags {}, positional []]
-    (if (empty? remaining)
+    (if-not (seq remaining)
       [flags positional]
       (let [[arg & more] remaining]
         (cond
@@ -150,7 +150,7 @@
 (defn parse-args
   "Parse CLI args. Returns {:command 'name' :flags {} :positional [] :error nil}."
   [args]
-  (if (empty? args)
+  (if-not (seq args)
     {:error :no-args}
     (let [[cmd & rest-args] args
           [flags positional] (extract-flags rest-args)]

@@ -4,7 +4,7 @@
   :wrong    0.0}
 
  :judge-template
- "You are an expert judge evaluating AI answers about the Ring Clojure library.
+ "You are an expert judge evaluating AI answers about a software codebase.
 
 Question: {{question}}
 
@@ -19,8 +19,22 @@ Score this answer as one of:
 - partial (0.5): Partially correct or missing key details
 - wrong (0.0): Incorrect, irrelevant, or too vague to be useful
 
+Calibration examples:
+
+Q: Which files are rated as complex or very-complex?
+A: The files src/core.clj and src/adapter.clj are rated as complex.
+Score: {:score :correct :reasoning \"Lists the specific files with correct complexity ratings from the analysis data.\"}
+
+Q: What design patterns are prevalent across the codebase?
+A: The codebase uses some common patterns.
+Score: {:score :wrong :reasoning \"Too vague — does not name any specific patterns found in the actual analysis data.\"}
+
+Q: Which components have the most dependencies?
+A: The HTTP handler component depends on middleware and routing, but I'm not sure about others.
+Score: {:score :partial :reasoning \"Identifies one component correctly but acknowledges incomplete coverage.\"}
+
 Respond with ONLY a raw EDN map:
 {:score :correct | :partial | :wrong
  :reasoning \"1-2 sentence explanation of the score\"}"
 
- :version "0.2.0"}
+ :version "0.3.0"}

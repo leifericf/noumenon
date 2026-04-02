@@ -249,9 +249,7 @@
   (let [start-ms (System/currentTimeMillis)
         db       (d/db conn)
         data     (prefetch-codebase-data db)]
-    (if (empty? (:files data))
-      (do (log! "synthesize" "No analyzed files found — run analyze first")
-          {:components 0 :files-classified 0 :elapsed-ms 0})
+    (if (seq (:files data))
       (let [meta-db   (or meta-db db)
             template  (artifacts/load-prompt meta-db "synthesize")
             _         (when-not template
@@ -295,4 +293,6 @@
           (do (log! "synthesize/error" "Failed to parse synthesis response")
               {:components 0 :files-classified 0
                :elapsed-ms (- (System/currentTimeMillis) start-ms)
-               :error "Failed to parse synthesis response"}))))))
+               :error "Failed to parse synthesis response"})))
+      (do (log! "synthesize" "No analyzed files found — run analyze first")
+          {:components 0 :files-classified 0 :elapsed-ms 0}))))

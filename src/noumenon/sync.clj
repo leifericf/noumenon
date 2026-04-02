@@ -106,9 +106,10 @@
          (mapcat (fn [attr]
                    (let [v (get entity attr)]
                      (cond
-                       (nil? v)  nil
-                       (coll? v) (mapv (fn [item] [:db/retract eid attr (unwrap-ref item)]) v)
-                       :else     [[:db/retract eid attr (unwrap-ref v)]]))))
+                       (nil? v)    nil
+                       (map? v)   [[:db/retract eid attr (unwrap-ref v)]]
+                       (coll? v)  (mapv (fn [item] [:db/retract eid attr (unwrap-ref item)]) v)
+                       :else      [[:db/retract eid attr v]]))))
          vec)))
 
 (defn- retract-code-segments

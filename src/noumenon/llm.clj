@@ -1,5 +1,6 @@
 (ns noumenon.llm
   (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [noumenon.util :refer [log! truncate]]
             [org.httpkit.client :as http])
@@ -162,6 +163,8 @@
                     (:model opts) (into ["--model" (:model opts)])
                     true          (into ["-p" prompt]))
          pb       (ProcessBuilder. ^java.util.List (vec cmd))
+         _        (when (:isolation opts)
+                    (.directory pb (io/file (System/getProperty "java.io.tmpdir"))))
          _        (when-let [extra (:env opts)]
                     (let [env (.environment pb)]
                       (doseq [[k v] extra]
@@ -368,3 +371,14 @@
     (-> resolved
         (assoc :prompt-fn (wrap-as-prompt-fn invoke-fn))
         (dissoc :invoke-fn))))
+
+(defn make-isolated-prompt-fn
+  "Build an isolated prompt-fn that prevents MCP discovery. For CLI providers,
+   runs from /tmp to avoid .mcp.json. For API providers, returns the normal fn."
+  [opts]
+  (let [{:keys [provider-kw model-id]} (resolve-opts opts)]
+    (if (= :claude-cli provider-kw)
+      (fn [prompt]
+        (invoke-claude-cli prompt (cond-> {:isolation true}
+                                    model-id (assoc :model model-id))))
+      (:prompt-fn (wrap-as-prompt-fn-from-opts opts)))))

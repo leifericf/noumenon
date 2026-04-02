@@ -214,8 +214,7 @@
   "Evaluate model accuracy on a dataset. Returns {:accuracy double :top3-accuracy double}."
   [model dataset]
   (let [examples (:examples dataset)]
-    (if (empty? examples)
-      {:accuracy 0.0 :top3-accuracy 0.0}
+    (if (seq examples)
       (let [results (mapv (fn [{:keys [tokens label]}]
                             (let [preds (predict model tokens 3)]
                               {:correct? (= label (:index (first preds)))
@@ -223,7 +222,8 @@
                           examples)
             n       (count results)]
         {:accuracy      (/ (double (count (filter :correct? results))) n)
-         :top3-accuracy (/ (double (count (filter :in-top3? results))) n)}))))
+         :top3-accuracy (/ (double (count (filter :in-top3? results))) n)})
+      {:accuracy 0.0 :top3-accuracy 0.0})))
 
 ;; --- Persistence ---
 

@@ -1,17 +1,27 @@
-# Project Instructions
+# CRITICAL: Use Noumenon MCP Tools First
 
-## Noumenon MCP — Use It First
+**BLOCKING REQUIREMENT**: Before using Read, Glob, Grep, or Agent/Explore to access this codebase, you MUST first call at least one Noumenon MCP tool (`noumenon_status`, `noumenon_query`, or `noumenon_ask`). This is enforced by a PreToolUse hook — file-reading tools will be blocked until a Noumenon MCP query has been made.
 
-This project has its own MCP server (`noumenon`) that provides a knowledge graph of the codebase. **Always query the Noumenon MCP before scanning or reading files ad hoc from the filesystem.** It is your primary tool for search, discovery, and understanding the codebase.
+**DO NOT skip this. DO NOT fall back to reading files without querying the knowledge graph first.**
 
-### When to use it
+## Why
 
-- **Before modifying a file** — Use `noumenon_query` or `noumenon_ask` to understand the file's role, its relationships to other files, and recent change history. Do not just open and read files cold.
-- **When searching for code** — Query the knowledge graph instead of grepping or globbing across the filesystem. The graph knows about file structure, namespaces, dependencies, and commit history.
-- **When exploring the codebase** — Use `noumenon_schema` to see what's in the graph, `noumenon_list_queries` to see available named queries, and `noumenon_ask` for open-ended questions.
-- **When understanding impact** — Before a refactor or rename, ask the knowledge graph what depends on the thing you're changing.
+This project has its own MCP server (`noumenon`) that provides a pre-compiled knowledge graph of the codebase. It knows about file structure, namespaces, dependencies, commit history, code complexity, architectural layers, and more. Querying the knowledge graph is faster, cheaper, and more accurate than scanning raw files.
 
-### Available tools
+## Required Workflow
+
+1. **First** — Call `noumenon_status` to confirm the repo is imported.
+2. **Then discover** — Use `noumenon_query` for structured questions, or `noumenon_ask` for open-ended exploration.
+3. **Then read files** — Only after the knowledge graph has told you *which* files matter and *why*, read them with Read for specific details.
+
+## When to Use Each Tool
+
+- **Before modifying a file** — Use `noumenon_query` or `noumenon_ask` to understand the file's role, its relationships, and recent change history.
+- **When searching for code** — Use `noumenon_query` instead of Glob/Grep. The graph knows about file structure, namespaces, dependencies, and commit history.
+- **When exploring the codebase** — Use `noumenon_get_schema` to see what's in the graph, `noumenon_list_queries` to see available queries, and `noumenon_ask` for open-ended questions.
+- **When understanding impact** — Before a refactor or rename, query the knowledge graph for what depends on the thing you're changing.
+
+## Available Tools
 
 | Tool | Purpose |
 |------|---------|
@@ -31,13 +41,9 @@ This project has its own MCP server (`noumenon`) that provides a knowledge graph
 | `noumenon_benchmark_results` | Get benchmark results (latest run or by ID) |
 | `noumenon_benchmark_compare` | Compare two benchmark runs by score differences per layer |
 
-### Workflow
+After querying the knowledge graph, use Read/Glob/Grep surgically on specific files for details the graph doesn't contain (exact implementation, line-level edits). The MCP gives you direction; file tools give you precision.
 
-1. **Start** — Call `noumenon_status` to confirm the repo is imported. If not, call `noumenon_import`.
-2. **Discover** — Use `noumenon_list_queries` and `noumenon_query` for structured questions, or `noumenon_ask` for open-ended exploration.
-3. **Then read files** — Once you know *which* files matter and *why*, read them with the Read tool for the specific details you need.
-
-**Do not skip this.** Filesystem scanning (Glob, Grep, Agent/Explore) is a fallback for when the knowledge graph doesn't have what you need — not the default approach.
+# Project Instructions
 
 ## Security
 

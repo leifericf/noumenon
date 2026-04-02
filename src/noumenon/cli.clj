@@ -491,7 +491,7 @@
   [flags args initial]
   (let [lookup (flag-map flags)]
     (loop [remaining args, opts initial, positional []]
-      (if (empty? remaining)
+      (if-not (seq remaining)
         [opts positional]
         (let [[arg & more] remaining]
           (if-let [spec (lookup arg)]

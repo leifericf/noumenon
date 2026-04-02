@@ -308,8 +308,19 @@ Run Noumenon as an [MCP](https://modelcontextprotocol.io) server so AI agents ca
 
 ```bash
 noum setup desktop    # Configure Claude Desktop
-noum setup code       # Write .mcp.json for Claude Code
+noum setup code       # Configure Claude Code (MCP + hook + CLAUDE.md)
 ```
+
+`noum setup code` writes four files in the current directory:
+
+| File | Purpose |
+|------|---------|
+| `.mcp.json` | MCP server registration for Claude Code |
+| `.claude/hooks/noumenon-mcp-first.sh` | PreToolUse hook enforcing MCP-first workflow |
+| `.claude/settings.local.json` | Hook activation (merged with existing settings) |
+| `CLAUDE.md` | MCP-first instructions for AI agents (appended to existing) |
+
+All writes are idempotent — safe to re-run.
 
 ### Manual configuration
 
@@ -452,9 +463,26 @@ noum update data/repos/project
 
 If your server has [Helix4Git](https://www.perforce.com/products/helix-core-git-connector), point Noumenon at the Git URL directly — no `git-p4` needed.
 
+## Limitations & Workarounds
+
+### AI agents may not use MCP tools consistently
+
+AI agents — including Claude — have strong trained-in preferences for reading files directly (Read, Glob, Grep) and may ignore MCP tools even when configured and explicitly instructed via CLAUDE.md. This is not a Noumenon bug; it reflects current LLM behavior with runtime-discovered tools.
+
+**What helps:**
+- **Enable the enforcement hook** (Claude Code): Noumenon includes a PreToolUse hook that blocks file-reading tools until at least one Noumenon query has been made in the session. Run `noum setup code` to configure it.
+- **Be explicit in prompts**: Say "use the noumenon MCP tools" or "query the knowledge graph first" rather than generic phrasing like "explore the codebase," which triggers file-reading defaults.
+- **Prefer `noumenon_ask`**: Natural-language questions have the lowest friction. Agents are more likely to use a tool that takes a plain question than one requiring query names and parameters.
+
+The intended workflow is: **query the knowledge graph first** to understand which files matter and why, **then** use Read/Glob/Grep surgically on specific files for the details the graph doesn't contain (e.g., exact implementation, line-level edits).
+
+### Benchmark measures context quality, not agent behavior
+
+The benchmark compares LLM answers given raw source files vs. pre-fetched knowledge graph data. It does **not** test whether an agent can effectively discover and use MCP tools interactively. The benchmark score is a floor estimate — real-world value is higher when agents use the tools iteratively.
+
 ## Status
 
-This project is under active development and currently optimized for CLI workflows.
+**Experimental — early beta, under rapid development.** APIs, data formats, and CLI interfaces may change between releases. This project is currently optimized for CLI workflows.
 
 This project was developed using [leifericf's Claude Code Toolkit](https://github.com/leifericf/claude-code-toolkit).
 

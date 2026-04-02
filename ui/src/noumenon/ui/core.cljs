@@ -18,6 +18,114 @@
 (defn ^:dev/after-load reload! []
   (render!))
 
+(def ^:private click-hit-distance 35)
+(def ^:private hover-base-distance 20)
+(def ^:private min-zoom-scale 0.1)
+(def ^:private graph-init-delay-ms 100)
+(defonce ^:private draw-fn-atom (atom nil))
+
+(defn- create-draw-fn
+  "Create a draw callback that renders the current graph state."
+  [hover-atom transform-atom]
+  (fn []
+    (when-let [c @graph/canvas-ref]
+      (let [s @state/app-state]
+        (grender/draw! c @graph/simulation-atom
+                       {:selected-id   (:graph/selected s)
+                        :hover-id      @hover-atom
+                        :transform     @transform-atom
+                        :focused-ids   (:graph/focused-ids s)
+                        :depth         (:graph/depth s)
+                        :expanded-comp (:graph/expanded-comp s)
+                        :expanded-file (:graph/expanded-file s)
+                        :expand-time   (:graph/expand-time s)})))))
+
+(defn- setup-zoom-handler!
+  "Attach zoom/pan controls to a canvas element."
+  [canvas transform-atom draw-fn]
+  (let [raf-pending (atom false)]
+    (controls/setup-zoom! canvas
+                          (fn [t]
+                            (reset! transform-atom t)
+                            (when-not @raf-pending
+                              (reset! raf-pending true)
+                              (js/requestAnimationFrame
+                               (fn []
+                                 (reset! raf-pending false)
+                                 (draw-fn))))))))
+
+(defn- handle-canvas-click
+  "Handle click on canvas: select node or clear selection."
+  [canvas sim transform-atom e]
+  (let [rect  (.getBoundingClientRect canvas)
+        mx    (- (.-clientX e) (.-left rect))
+        my    (- (.-clientY e) (.-top rect))
+        t     @transform-atom
+        [gx gy] (if t
+                  [(/ (- mx (.-x t)) (.-k t)) (/ (- my (.-y t)) (.-k t))]
+                  [mx my])
+        node  (controls/find-nearest-node (.nodes sim) gx gy click-hit-distance)
+        s     @state/app-state
+        depth (:graph/depth s)]
+    (if node
+      (let [id    (.-id node)
+            ntype (keyword (or (.-type node) "file"))
+            sx    (.-clientX e)
+            sy    (.-clientY e)
+            gx    (.-x node)
+            gy    (.-y node)]
+        (when-not (:graph/loading? s)
+          (case [depth ntype]
+            [:components :component]
+            (state/dispatch! [:action/graph-expand-component {:id id :cx gx :cy gy}])
+            [:files :file]
+            (state/dispatch! [:action/graph-expand-file {:id id :cx gx :cy gy}])
+            [:files :component]
+            (state/dispatch! [:action/graph-expand-component {:id id :cx gx :cy gy}])
+            [:segments :segment]
+            (state/dispatch! [:action/graph-select-node {:id id :x sx :y sy}])
+            (state/dispatch! [:action/graph-select-node {:id id :x sx :y sy}]))))
+      (cond
+        (seq (:graph/focused-ids s))
+        (state/dispatch! [:action/graph-clear-focus])
+        (= depth :components)
+        (state/dispatch! [:action/graph-select nil])
+        :else
+        (state/dispatch! [:action/graph-collapse])))))
+
+(defn- handle-canvas-mousemove
+  "Handle mousemove on canvas: update hover state and cursor."
+  [canvas sim hover-atom transform-atom draw-fn e]
+  (let [rect  (.getBoundingClientRect canvas)
+        mx    (- (.-clientX e) (.-left rect))
+        my    (- (.-clientY e) (.-top rect))
+        t     @transform-atom
+        [gx gy] (if t
+                  [(/ (- mx (.-x t)) (.-k t)) (/ (- my (.-y t)) (.-k t))]
+                  [mx my])
+        zoom-k   (if t (.-k t) 1)
+        hit-dist (/ hover-base-distance (max min-zoom-scale zoom-k))
+        node     (controls/find-nearest-node (.nodes sim) gx gy hit-dist)
+        new-id   (when node (.-id node))]
+    (set! (.. canvas -style -cursor) (if new-id "pointer" "default"))
+    (when (not= new-id @hover-atom)
+      (reset! hover-atom new-id)
+      (draw-fn))))
+
+(defn- setup-graph-redraw-watch!
+  "Register once: redraw the graph canvas when relevant state keys change.
+   Reads the current draw-fn from draw-fn-atom so the watch never goes stale."
+  []
+  (add-watch state/app-state :graph-redraw
+             (fn [_ _ old new]
+               (when (or (not= (:graph/selected old) (:graph/selected new))
+                         (not= (:graph/focused-ids old) (:graph/focused-ids new))
+                         (not= (:graph/depth old) (:graph/depth new))
+                         (not= (:graph/expanded-comp old) (:graph/expanded-comp new))
+                         (not= (:graph/expanded-file old) (:graph/expanded-file new)))
+                 (when-let [f @draw-fn-atom]
+                   (f))))))
+
 (defn- maybe-init-graph!
   "When graph nodes/edges change, rebuild simulation and canvas."
   [state]
@@ -29,8 +137,7 @@
            (let [fresh  (.cloneNode old-canvas false)
                  parent (.-parentElement old-canvas)]
              (.replaceChild parent fresh old-canvas)
-             (let [w (.-clientWidth parent)
-                   h (.-clientHeight parent)]
+             (let [w (.-clientWidth parent) h (.-clientHeight parent)]
                (set! (.-width fresh) w)
                (set! (.-height fresh) h))
              (reset! graph/canvas-ref fresh)
@@ -38,121 +145,29 @@
                (force/stop-simulation old))
              (let [transform-atom (atom nil)
                    hover-atom     (atom nil)
-                   draw-fn (fn []
-                             (when-let [c @graph/canvas-ref]
-                               (let [s @state/app-state]
-                                 (grender/draw! c @graph/simulation-atom
-                                                {:selected-id   (:graph/selected s)
-                                                 :hover-id      @hover-atom
-                                                 :transform     @transform-atom
-                                                 :focused-ids   (:graph/focused-ids s)
-                                                 :depth         (:graph/depth s)
-                                                 :expanded-comp (:graph/expanded-comp s)
-                                                 :expanded-file (:graph/expanded-file s)
-                                                 :expand-time   (:graph/expand-time s)}))))
-                   ;; Choose simulation type based on depth
+                   draw-fn        (create-draw-fn hover-atom transform-atom)
                    w (.-width fresh) h (.-height fresh)
                    sim (case (or depth :components)
                          :components (force/create-component-simulation
-                                      nodes edges
-                                      {:width w :height h :on-tick draw-fn})
-                         ;; Files/segments — tighter cluster centered on screen
+                                      nodes edges {:width w :height h :on-tick draw-fn})
                          (force/create-cluster-simulation
-                          nodes edges
-                          {:cx (/ w 2) :cy (/ h 2) :on-tick draw-fn}))]
+                          nodes edges {:cx (/ w 2) :cy (/ h 2) :on-tick draw-fn}))]
                (reset! graph/simulation-atom sim)
-               ;; Zoom
-               (let [raf-pending (atom false)]
-                 (controls/setup-zoom! fresh
-                                       (fn [t]
-                                         (reset! transform-atom t)
-                                         (when-not @raf-pending
-                                           (reset! raf-pending true)
-                                           (js/requestAnimationFrame
-                                            (fn []
-                                              (reset! raf-pending false)
-                                              (draw-fn)))))))
-               ;; Click — depth-aware routing
-               (letfn [(mouse->graph [e]
-                         (let [rect (.getBoundingClientRect fresh)
-                               mx   (- (.-clientX e) (.-left rect))
-                               my   (- (.-clientY e) (.-top rect))
-                               t    @transform-atom]
-                           (if t
-                             [(/ (- mx (.-x t)) (.-k t))
-                              (/ (- my (.-y t)) (.-k t))]
-                             [mx my])))]
-                 (.addEventListener fresh "click"
-                                    (fn [e]
-                                      (let [[gx gy] (mouse->graph e)
-                                            node    (controls/find-nearest-node
-                                                     (.nodes sim) gx gy 35)
-                                            s       @state/app-state
-                                            depth   (:graph/depth s)]
-                                        (if node
-                                          (let [id    (.-id node)
-                                                ntype (keyword (or (.-type node) "file"))
-                                                sx    (.-clientX e)
-                                                sy    (.-clientY e)
-                                                ;; Graph-space position from d3 simulation
-                                                gx    (.-x node)
-                                                gy    (.-y node)]
-                                            ;; Guard: ignore expand clicks while loading
-                                            (when-not (:graph/loading? s)
-                                              (case [depth ntype]
-                                                [:components :component]
-                                                (state/dispatch! [:action/graph-expand-component
-                                                                  {:id id :cx gx :cy gy}])
-                                                [:files :file]
-                                                (state/dispatch! [:action/graph-expand-file
-                                                                  {:id id :cx gx :cy gy}])
-                                                [:files :component]
-                                                (state/dispatch! [:action/graph-expand-component
-                                                                  {:id id :cx gx :cy gy}])
-                                                [:segments :segment]
-                                                (state/dispatch! [:action/graph-select-node {:id id :x sx :y sy}])
-                                                (state/dispatch! [:action/graph-select-node {:id id :x sx :y sy}]))))
-                                          ;; Click background → clear focus, collapse, or deselect
-                                          (cond
-                                            (seq (:graph/focused-ids s))
-                                            (state/dispatch! [:action/graph-clear-focus])
-                                            (= depth :components)
-                                            (state/dispatch! [:action/graph-select nil])
-                                            :else
-                                            (state/dispatch! [:action/graph-collapse]))))))
-                 (.addEventListener fresh "mousemove"
-                                    (fn [e]
-                                      (let [[gx gy] (mouse->graph e)
-                                            ;; Scale hit distance by inverse zoom so it stays
-                                            ;; consistent in screen pixels
-                                            zoom-k  (if-let [t @transform-atom] (.-k t) 1)
-                                            hit-dist (/ 20 (max 0.1 zoom-k))
-                                            node    (controls/find-nearest-node
-                                                     (.nodes sim) gx gy hit-dist)
-                                            new-id  (when node (.-id node))]
-                                        ;; Pointer cursor when hovering a node
-                                        (set! (.. fresh -style -cursor)
-                                              (if new-id "pointer" "default"))
-                                        (when (not= new-id @hover-atom)
-                                          (reset! hover-atom new-id)
-                                          (draw-fn))))))
-               ;; Redraw on state changes
-               (add-watch state/app-state :graph-redraw
-                          (fn [_ _ old new]
-                            (when (or (not= (:graph/selected old) (:graph/selected new))
-                                      (not= (:graph/focused-ids old) (:graph/focused-ids new))
-                                      (not= (:graph/depth old) (:graph/depth new))
-                                      (not= (:graph/expanded-comp old) (:graph/expanded-comp new))
-                                      (not= (:graph/expanded-file old) (:graph/expanded-file new)))
-                              (draw-fn))))))))
-       100))))
+               (setup-zoom-handler! fresh transform-atom draw-fn)
+               (.addEventListener fresh "click"
+                                  (partial handle-canvas-click fresh sim transform-atom))
+               (.addEventListener fresh "mousemove"
+                                  (partial handle-canvas-mousemove fresh sim hover-atom
+                                           transform-atom draw-fn))
+               (reset! draw-fn-atom draw-fn)))))
+       graph-init-delay-ms))))
 
 (defn- extract-value [dom-event]
   (.. dom-event -target -value))
 
-(defn ^:export init []
-  (styles/inject-styles!)
-  (skeleton/inject-keyframes!)
+(defn- setup-replicant-dispatcher!
+  "Wire up Replicant DOM event dispatch to app state handlers."
+  []
   (r/set-dispatch!
    (fn [replicant-data handler-data]
      (let [dom-event (:replicant/dom-event replicant-data)]
@@ -207,6 +222,21 @@
          (when (= "Enter" (.-key dom-event))
            (state/dispatch! [:action/db-import-new]))
 
+         :action/schema-select-attr-key
+         (when (#{"Enter" " "} (.-key dom-event))
+           (.preventDefault dom-event)
+           (state/dispatch! [:action/schema-select-attr (second handler-data)]))
+
+         :action/schema-select-query-key
+         (when (#{"Enter" " "} (.-key dom-event))
+           (.preventDefault dom-event)
+           (state/dispatch! [:action/schema-select-query (second handler-data)]))
+
+         :action/bench-toggle-select-key
+         (when (#{"Enter" " "} (.-key dom-event))
+           (.preventDefault dom-event)
+           (state/dispatch! [:action/bench-toggle-select (second handler-data)]))
+
          :action/query-history-select-input
          (let [v (extract-value dom-event)]
            (when (seq v)
@@ -230,30 +260,35 @@
          (state/dispatch! [:action/backend-switch (extract-value dom-event)])
 
          ;; Default
-         (state/dispatch! handler-data)))))
-  ;; Watch for graph data readiness — rebuild simulation on nodes/edges change
+         (state/dispatch! handler-data))))))
+
+(defn- setup-graph-init-watch!
+  "Watch for graph data readiness — rebuild simulation on nodes/edges change."
+  []
   (add-watch state/app-state :graph-init
              (fn [_ _ old new]
                (when (or (not= (:graph/nodes old) (:graph/nodes new))
                          (not= (:graph/edges old) (:graph/edges new)))
-                 (maybe-init-graph! new))))
-  ;; Resize canvas on window resize
-  (let [resize-and-redraw! (fn []
-                             (when-let [canvas @graph/canvas-ref]
-                               (when-let [parent (.-parentElement canvas)]
-                                 (let [w (.-clientWidth parent)
-                                       h (.-clientHeight parent)]
-                                   (set! (.-width canvas) w)
-                                   (set! (.-height canvas) h)
-                                   (when-let [sim @graph/simulation-atom]
-                                     (grender/draw! canvas sim
-                                                    {:selected-id  (:graph/selected @state/app-state)
-                                                     :focused-ids  (:graph/focused-ids @state/app-state)
-                                                     :depth        (:graph/depth @state/app-state)
-                                                     :expanded-comp (:graph/expanded-comp @state/app-state)
-                                                     :expanded-file (:graph/expanded-file @state/app-state)}))))))]
-    (.addEventListener js/window "resize" resize-and-redraw!))
-  ;; Keyboard shortcuts — Escape pops graph level
+                 (maybe-init-graph! new)))))
+
+(defn- setup-resize-handler!
+  "Resize canvas and redraw on window resize."
+  []
+  (let [resize-and-redraw!
+        (fn []
+          (when-let [canvas @graph/canvas-ref]
+            (when-let [parent (.-parentElement canvas)]
+              (let [w (.-clientWidth parent)
+                    h (.-clientHeight parent)]
+                (set! (.-width canvas) w)
+                (set! (.-height canvas) h)
+                (when-let [f @draw-fn-atom]
+                  (f))))))]
+    (.addEventListener js/window "resize" resize-and-redraw!)))
+
+(defn- setup-keyboard-shortcuts!
+  "Global keyboard shortcuts: Cmd+K to focus ask, Escape to pop graph."
+  []
   (.addEventListener js/document "keydown"
                      (fn [e]
                        (cond
@@ -261,24 +296,23 @@
                               (= "k" (.-key e)))
                          (do (.preventDefault e)
                              (js/setTimeout
-                              #(some-> (.getElementById js/document "ask-input")
-                                       .focus)
+                              #(some-> (.getElementById js/document "ask-input") .focus)
                               100))
 
                          (= "Escape" (.-key e))
                          (let [s     @state/app-state
                                depth (:graph/depth s)]
                            (cond
-                             ;; First: dismiss card if open
                              (:graph/selected s)
                              (state/dispatch! [:action/graph-select nil])
-                             ;; Second: clear focus if active
                              (seq (:graph/focused-ids s))
                              (state/dispatch! [:action/graph-clear-focus])
-                             ;; Third: collapse level if deeper than components
                              (not= depth :components)
-                             (state/dispatch! [:action/graph-collapse]))))))
-  ;; Draggable ask panel
+                             (state/dispatch! [:action/graph-collapse])))))))
+
+(defn- setup-draggable-ask-panel!
+  "Make the ask panel draggable via its drag handle."
+  []
   (let [drag-state (atom nil)]
     (.addEventListener js/document "mousedown"
                        (fn [e]
@@ -295,8 +329,17 @@
                                              {:x (- (.-clientX e) offset-x)
                                               :y (- (.-clientY e) offset-y)}]))))
     (.addEventListener js/document "mouseup"
-                       (fn [_] (reset! drag-state nil))))
-  ;; Initialize
+                       (fn [_] (reset! drag-state nil)))))
+
+(defn ^:export init []
+  (styles/inject-styles!)
+  (skeleton/inject-keyframes!)
+  (setup-replicant-dispatcher!)
+  (setup-graph-redraw-watch!)
+  (setup-graph-init-watch!)
+  (setup-resize-handler!)
+  (setup-keyboard-shortcuts!)
+  (setup-draggable-ask-panel!)
   (state/dispatch! [:action/ask-init-suggestions])
   (add-watch state/app-state :render (fn [_ _ _ _] (render!)))
   (state/init!)

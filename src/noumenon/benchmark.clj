@@ -116,7 +116,7 @@
       (loop [remaining files
              parts     []
              total     0]
-        (if (empty? remaining)
+        (if-not (seq remaining)
           (str/join "\n" parts)
           (let [path (first remaining)
                 {:keys [out]} (shell/sh "git" "-C" (str repo-path)
@@ -164,6 +164,16 @@
    Callers must pass (or answer-text \"\") — nil answer-text is treated as empty."
   (fn [question _meta-db _db _answer-text] (:id question)))
 
+(defn- path-match?
+  "Check if answer-text mentions a file path. Matches full path or filename,
+   using word-boundary-like patterns to avoid false positives."
+  [answer-text path]
+  (let [filename (last (str/split path #"/"))
+        boundary "(?:^|[\\s,;:`\"'(\\[{/])"
+        pat      (fn [s] (re-pattern (str boundary (java.util.regex.Pattern/quote s))))]
+    (boolean (or (re-find (pat path) answer-text)
+                 (re-find (pat filename) answer-text)))))
+
 (defmethod deterministic-score :q01
   [question meta-db db answer-text]
   (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
@@ -172,7 +182,7 @@
                                      (#{:complex :very-complex} complexity)))
                            (map first)
                            set)
-        found         (count (filter #(str/includes? answer-text %) complex-files))
+        found         (count (filter #(path-match? answer-text %) complex-files))
         total         (count complex-files)
         ratio         (if (pos? total) (/ (double found) total) 0.0)]
     (cond
@@ -226,19 +236,22 @@
 (defn- top-n-match-score
   "Score by checking how many of the top-n items from a ranked list appear in answer-text.
    `ranked` is a seq of names already sorted and truncated to n.
-   `label` describes what's being matched for reasoning strings."
-  [ranked answer-text n label]
-  (let [found (count (filter #(str/includes? answer-text %) ranked))]
-    (cond
-      (= n found) {:score :correct :reasoning (str "All " n " " label " listed")}
-      (>= found (max 1 (quot n 2))) {:score :partial :reasoning (str found "/" n " " label " listed")}
-      :else {:score :wrong :reasoning (str found "/" n " " label " listed")})))
+   `label` describes what's being matched for reasoning strings.
+   Optional `match-fn` overrides the default str/includes? matcher."
+  ([ranked answer-text n label]
+   (top-n-match-score ranked answer-text n label str/includes?))
+  ([ranked answer-text n label match-fn]
+   (let [found (count (filter #(match-fn answer-text %) ranked))]
+     (cond
+       (= n found) {:score :correct :reasoning (str "All " n " " label " listed")}
+       (>= found (max 1 (quot n 2))) {:score :partial :reasoning (str found "/" n " " label " listed")}
+       :else {:score :wrong :reasoning (str found "/" n " " label " listed")}))))
 
 (defmethod deterministic-score :q11
   [question meta-db db answer-text]
   (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by second #(compare %2 %1)) (take 3) (mapv first))]
-    (top-n-match-score ranked answer-text 3 "top bug-hotspot files")))
+    (top-n-match-score ranked answer-text 3 "top bug-hotspot files" path-match?)))
 
 (defmethod deterministic-score :q12
   [question meta-db db answer-text]
@@ -250,7 +263,7 @@
   [question meta-db db answer-text]
   (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         low-bus (->> ok (filter (fn [[_ cnt]] (<= cnt 2))) (mapv first))
-        found   (count (filter #(str/includes? answer-text %) (take 5 low-bus)))]
+        found   (count (filter #(path-match? answer-text %) (take 5 low-bus)))]
     (cond
       (>= found 3) {:score :correct :reasoning (str found " low-bus-factor files identified")}
       (>= found 1) {:score :partial :reasoning (str found " low-bus-factor files identified")}
@@ -270,25 +283,22 @@
   [question meta-db db answer-text]
   (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by second #(compare %2 %1)) (take 3) (mapv first))]
-    (top-n-match-score ranked answer-text 3 "top import hotspots")))
+    (top-n-match-score ranked answer-text 3 "top import hotspots" path-match?)))
 
 (defmethod deterministic-score :q28
-  [_question _meta-db db answer-text]
-  (let [result (d/q '[:find ?a ?b
-                      :where [?fa :file/imports ?fb] [?fb :file/imports ?fa]
-                      [?fa :file/path ?a] [?fb :file/path ?b]
-                      [(!= ?fa ?fb)] [(< ?a ?b)]] db)
-        has-cycles? (seq result)
+  [question meta-db db answer-text]
+  (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
+        has-cycles? (seq ok)
         answer-says-yes? (or (str/includes? answer-text "circular")
                              (str/includes? answer-text "cycle")
                              (re-find #"(?i)yes.*circular" answer-text))
         answer-says-no?  (re-find #"(?i)(no|none|zero).*circular" answer-text)]
     (cond
       (and has-cycles? answer-says-yes?)
-      {:score :correct :reasoning (str (count result) " circular pair(s) found, answer acknowledges them")}
+      {:score :correct :reasoning (str (count ok) " circular pair(s) found, answer acknowledges them")}
 
       (and (not has-cycles?) (or answer-says-no? (not answer-says-yes?)))
-      {:score :correct :reasoning "No circular imports exist, answer correctly reports none"}
+      {:score :skipped :reasoning "No circular imports in repo — question not applicable"}
 
       :else
       {:score :wrong :reasoning (str "Answer doesn't match reality: "
@@ -298,11 +308,11 @@
   [question meta-db db answer-text]
   (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         orphans (mapv first ok)
-        found   (count (filter #(str/includes? answer-text %) (take 5 orphans)))]
+        found   (count (filter #(path-match? answer-text %) (take 5 orphans)))]
     (cond
       (empty? orphans)
       (if (re-find #"(?i)(no|none|zero).*orphan" answer-text)
-        {:score :correct :reasoning "No orphan files exist, answer correctly reports none"}
+        {:score :skipped :reasoning "No orphan files in repo — question not applicable"}
         {:score :partial :reasoning "No orphan files exist but answer is unclear"})
 
       (>= found 3)
@@ -322,7 +332,7 @@
       (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question)
                                                 {:file-path target-path})
             imports (mapv first ok)
-            found   (count (filter #(str/includes? answer-text %) imports))
+            found   (count (filter #(path-match? answer-text %) imports))
             total   (count imports)
             ratio   (if (pos? total) (/ (double found) total) 0.0)]
         (cond
@@ -342,11 +352,11 @@
         trivial  (into #{} (comp (filter (fn [[_ c]] (= :trivial c))) (map first)) cx)
         core     (into #{} (comp (filter (fn [[_ l]] (= :core l))) (map first)) ly)
         matches  (set/intersection trivial core)]
-    (if (empty? matches)
+    (if-not (seq matches)
       (if (re-find #"(?i)(no|none|zero)" answer-text)
-        {:score :correct :reasoning "No trivial+core files exist, answer correctly reports none"}
+        {:score :skipped :reasoning "No trivial+core files in repo — question not applicable"}
         {:score :wrong :reasoning "No trivial+core files exist but answer doesn't say so"})
-      (let [found (count (filter #(str/includes? answer-text %) matches))
+      (let [found (count (filter #(path-match? answer-text %) matches))
             total (count matches)
             ratio (/ (double found) total)]
         (cond
@@ -362,7 +372,7 @@
                   (key (apply max-key val by-comp)))]
     (if (nil? top)
       (if (re-find #"(?i)(no|none|zero)" answer-text)
-        {:score :correct :reasoning "No components found, answer correctly reports none"}
+        {:score :skipped :reasoning "No components in repo — question not applicable"}
         {:score :wrong :reasoning "No components found but answer doesn't say so"})
       (if (str/includes? answer-text top)
         {:score :correct :reasoning (str "Correctly identified top component: " top)}
@@ -375,11 +385,11 @@
         top-churn  (->> hs (sort-by second #(compare %2 %1)) (take 5) (map first) set)
         complex    (->> cx (filter (fn [[_ c]] (#{:complex :very-complex} c))) (map first) set)
         matches    (set/intersection top-churn complex)]
-    (if (empty? matches)
+    (if-not (seq matches)
       (if (re-find #"(?i)(no|none|zero)" answer-text)
-        {:score :correct :reasoning "No files are both high-churn and high-complexity"}
+        {:score :skipped :reasoning "No files are both high-churn and high-complexity — question not applicable"}
         {:score :wrong :reasoning "No overlap exists but answer doesn't say so"})
-      (let [found (count (filter #(str/includes? answer-text %) matches))]
+      (let [found (count (filter #(path-match? answer-text %) matches))]
         (cond
           (= found (count matches))
           {:score :correct :reasoning (str "All " (count matches) " overlapping files listed")}
@@ -392,9 +402,9 @@
   [question meta-db db answer-text]
   (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         names (mapv second ok)]
-    (if (empty? names)
+    (if-not (seq names)
       (if (re-find #"(?i)(no|none|zero)" answer-text)
-        {:score :correct :reasoning "No uncalled segments exist, answer correctly reports none"}
+        {:score :skipped :reasoning "No uncalled segments in repo — question not applicable"}
         {:score :wrong :reasoning "No uncalled segments exist but answer doesn't say so"})
       (top-n-match-score (take 5 names) answer-text (min 5 (count names))
                          "uncalled segments"))))
@@ -403,15 +413,15 @@
   [question meta-db db answer-text]
   (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         ranked (->> ok (sort-by second #(compare %2 %1)) (take 5) (mapv first))]
-    (top-n-match-score ranked answer-text (count ranked) "top dependency-heavy files")))
+    (top-n-match-score ranked answer-text (count ranked) "top dependency-heavy files" path-match?)))
 
 (defmethod deterministic-score :q26
   [question meta-db db answer-text]
   (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         names (mapv second ok)]
-    (if (empty? names)
+    (if-not (seq names)
       (if (re-find #"(?i)(no|none|zero)" answer-text)
-        {:score :correct :reasoning "No pure segments exist, answer correctly reports none"}
+        {:score :skipped :reasoning "No pure segments in repo — question not applicable"}
         {:score :wrong :reasoning "No pure segments exist but answer doesn't say so"})
       (top-n-match-score (take 5 names) answer-text (min 5 (count names))
                          "pure segments"))))
@@ -426,12 +436,12 @@
   [question meta-db db answer-text]
   (let [{:keys [ok]} (query/run-named-query meta-db db (:query-name question))
         paths (take 5 (distinct (map first ok)))]
-    (if (empty? paths)
+    (if-not (seq paths)
       (if (re-find #"(?i)(no|none|zero)" answer-text)
-        {:score :correct :reasoning "No cross-directory imports exist"}
-        {:score :wrong :reasoning "No cross-directory imports but answer doesn't say so"})
+        {:score :skipped :reasoning "No cross-directory imports in repo — question not applicable"}
+        {:score :wrong :reasoning "No cross-directory imports but answer did not acknowledge their absence"})
       (top-n-match-score (vec paths) answer-text (count paths)
-                         "cross-directory import sources"))))
+                         "cross-directory import sources" path-match?))))
 
 (defmethod deterministic-score :q38
   [question meta-db db answer-text]
@@ -496,7 +506,8 @@
 ;; --- Scoring ---
 
 (def ^:private score-values
-  {:correct 1.0 :partial 0.5 :wrong 0.0})
+  "Numeric values for score keywords. :skipped is excluded from means."
+  {:correct 1.0 :partial 0.5 :wrong 0.0 :skipped nil})
 
 (defn parse-judge-response
   "Parse judge LLM response into {:score keyword :reasoning string}.
@@ -516,15 +527,22 @@
                          str/trim))))))
 
 (defn score-value
-  "Convert a score keyword to its numeric value."
+  "Convert a score keyword to its numeric value. Returns nil for :skipped."
   [score-kw]
-  (get score-values score-kw 0.0))
+  (if (= :skipped score-kw) nil (get score-values score-kw 0.0)))
 
 (defn- resolve-layers
   "Resolve layers from mode map, handling :skip-raw backward compat."
   [mode]
   (or (:layers mode)
       (if (:skip-raw mode) [:full] default-layers)))
+
+(def ^:private category-weights
+  "Weights for question categories. Architectural questions require synthesis
+   and are weighted more heavily than factual lookups."
+  {:single-hop     1.0
+   :multi-hop      1.5
+   :architectural  2.0})
 
 (defn aggregate-scores
   "Compute aggregate statistics from a seq of result maps.
@@ -533,11 +551,25 @@
   ([results] (aggregate-scores results nil))
   ([results mode]
    (let [layers     (resolve-layers (or mode {}))
-         mean       (fn [xs] (if (seq xs) (/ (reduce + xs) (count xs)) 0.0))
+         mean       (fn [xs] (let [v (vec xs)] (if (seq v) (/ (reduce + v) (count v)) 0.0)))
+         wmean      (fn [rs score-fn]
+                      (let [pairs (keep (fn [r]
+                                          (when-let [s (score-fn r)]
+                                            [(get category-weights (:category r) 1.0) s]))
+                                        rs)
+                            total-w (reduce + 0.0 (map first pairs))]
+                        (if (zero? total-w) 0.0
+                            (/ (reduce + 0.0 (map (fn [[w s]] (* w s)) pairs)) total-w))))
          layer-key  (fn [layer] (keyword (str (name layer) "-score")))
          layer-mean (fn [layer rs]
-                      (let [scored (filterv #(contains? % (layer-key layer)) rs)]
-                        (mean (mapv #(score-value (get % (layer-key layer))) scored))))
+                      (let [scored (filterv #(contains? % (layer-key layer)) rs)
+                            vals   (keep #(score-value (get % (layer-key layer))) scored)]
+                        (mean vals)))
+         layer-wmean (fn [layer rs]
+                       (let [scored (filterv #(and (contains? % (layer-key layer))
+                                                   (some? (score-value (get % (layer-key layer)))))
+                                             rs)]
+                         (wmean scored #(score-value (get % (layer-key layer))))))
          by-cat     (group-by :category results)
          det-rs     (filterv #(= :deterministic (:scoring %)) results)
          llm-rs     (filterv #(not= :deterministic (:scoring %)) results)
@@ -548,15 +580,24 @@
          primary-layer (if (some #{:full} layers) :full (last layers))]
      (reduce (fn [agg layer]
                (assoc agg (keyword (str (name layer) "-mean"))
-                      (layer-mean layer results)))
+                      (layer-mean layer results)
+                      (keyword (str "weighted-" (name layer) "-mean"))
+                      (layer-wmean layer results)))
              {:question-count      (count results)
               :canonical           canonical?
               :deterministic-count (count det-rs)
               :deterministic-mean  (let [scored (filterv #(contains? % (layer-key primary-layer)) det-rs)]
-                                     (mean (mapv #(score-value (get % (layer-key primary-layer))) scored)))
+                                     (mean (keep #(score-value (get % (layer-key primary-layer))) scored)))
               :llm-judged-count    (count llm-rs)
               :llm-judged-mean     (let [scored (filterv #(contains? % (layer-key primary-layer)) llm-rs)]
-                                     (mean (mapv #(score-value (get % (layer-key primary-layer))) scored)))
+                                     (mean (keep #(score-value (get % (layer-key primary-layer))) scored)))
+              :empty-context-count (count (filter (fn [r]
+                                                    (some (fn [layer]
+                                                            (when-not (= :raw layer)
+                                                              (when-let [cc (get r (keyword (str (name layer) "-context-chars")))]
+                                                                (< cc 100))))
+                                                          layers))
+                                                  results))
               :per-category        (into {}
                                          (map (fn [[cat rs]]
                                                 [cat (reduce (fn [m layer]
@@ -639,6 +680,9 @@
           (:completed-count aggregate)
           (assoc :bench.run/completed-count (long (:completed-count aggregate)))
 
+          (pos? (:empty-context-count aggregate 0))
+          (assoc :bench.run/empty-context-count (long (:empty-context-count aggregate)))
+
           stop-reason
           (assoc :bench.run/stop-reason stop-reason)
 
@@ -681,6 +725,19 @@
 
           (:full-mean aggregate)
           (assoc :bench.run/full-mean (double (:full-mean aggregate)))
+
+          ;; Weighted per-layer means
+          (:weighted-raw-mean aggregate)
+          (assoc :bench.run/weighted-raw-mean (double (:weighted-raw-mean aggregate)))
+
+          (:weighted-import-mean aggregate)
+          (assoc :bench.run/weighted-import-mean (double (:weighted-import-mean aggregate)))
+
+          (:weighted-enrich-mean aggregate)
+          (assoc :bench.run/weighted-enrich-mean (double (:weighted-enrich-mean aggregate)))
+
+          (:weighted-full-mean aggregate)
+          (assoc :bench.run/weighted-full-mean (double (:weighted-full-mean aggregate)))
 
           (:deterministic-count aggregate)
           (assoc :bench.run/deterministic-count (long (:deterministic-count aggregate))
@@ -928,7 +985,7 @@
 
 (defn run-stage
   "Execute a single benchmark stage. Returns {:status :ok :result ... :usage ... :completed-at ...}."
-  [stage-key {:keys [question meta-db db stages invoke-llm judge-llm] :as opts}]
+  [stage-key {:keys [question meta-db db stages invoke-llm isolated-llm judge-llm] :as opts}]
   (let [[qid condition stage-type] stage-key
         deterministic? (and (= :judge stage-type)
                             (= :deterministic (:scoring question)))]
@@ -941,11 +998,17 @@
         {:status :ok :result score :usage llm/zero-usage :resolved-model nil
          :completed-at (java.util.Date.)})
       (try
-        (let [llm-fn (if (= :judge stage-type) judge-llm invoke-llm)
-              {:keys [text usage resolved-model]} (llm-fn (stage-prompt stage-key opts))
+        (let [llm-fn (cond
+                       (= :judge stage-type)  judge-llm
+                       (and (= :raw condition) isolated-llm) isolated-llm
+                       :else invoke-llm)
+              prompt (stage-prompt stage-key opts)
+              {:keys [text usage resolved-model]} (llm-fn prompt)
               result (if (= :judge stage-type) (parse-judge-response text) text)]
-          {:status :ok :result result :usage usage :resolved-model resolved-model
-           :completed-at (java.util.Date.)})
+          (cond-> {:status :ok :result result :usage usage :resolved-model resolved-model
+                   :completed-at (java.util.Date.)}
+            (= :answer stage-type)
+            (assoc :context-chars (count prompt))))
         (catch clojure.lang.ExceptionInfo e
           (let [{:keys [status]} (ex-data e)]
             (if (#{413 400} status)
@@ -985,11 +1048,18 @@
                                   layers)]
            :when (seq complete-layers)]
        (reduce (fn [result layer]
-                 (let [judge-key [qid layer :judge]
-                       judge  (get-in stages [judge-key :result])
-                       answer (get-in stages [[qid layer :answer] :result])]
+                 (let [judge-key  [qid layer :judge]
+                       answer-key [qid layer :answer]
+                       judge   (get-in stages [judge-key :result])
+                       answer  (get-in stages [answer-key :result])
+                       ans-ctx (get-in stages [answer-key :context-chars])
+                       ans-dur (get-in stages [answer-key :usage :duration-ms])
+                       ans-in  (get-in stages [answer-key :usage :input-tokens])]
                    (cond-> result
-                     answer (assoc (keyword (str (name layer) "-answer")) answer)
+                     answer  (assoc (keyword (str (name layer) "-answer")) answer)
+                     ans-ctx (assoc (keyword (str (name layer) "-context-chars")) ans-ctx)
+                     ans-dur (assoc (keyword (str (name layer) "-duration-ms")) ans-dur)
+                     ans-in  (assoc (keyword (str (name layer) "-input-tokens")) ans-in)
                      (contains? stages judge-key)
                      (assoc (keyword (str (name layer) "-score"))
                             (or (:score judge) :wrong)
@@ -1217,7 +1287,7 @@
 ;; --- Report generation ---
 
 (def ^:private score-symbol
-  {:correct "pass" :partial "partial" :wrong "fail"})
+  {:correct "pass" :partial "partial" :wrong "fail" :skipped "skip"})
 
 (defn- format-pct [v] (format "%.1f%%" (* 100.0 (double v))))
 
@@ -1252,14 +1322,17 @@
       (.append (str "**Mode:** " (pr-str mode) "\n"))
       (.append (str "**Status:** " status "\n"))
       (.append "\n## Summary\n\n")
-      (.append "| Condition | Mean Score | Delta vs Raw |\n")
-      (.append "|-----------|-----------|-------------|\n"))
+      (.append "| Condition | Mean | Weighted Mean | Delta vs Raw |\n")
+      (.append "|-----------|------|--------------|-------------|\n"))
     (doseq [layer layers]
-      (let [mean-key (keyword (str (name layer) "-mean"))
-            mean-val (get aggregate mean-key)]
+      (let [mean-key  (keyword (str (name layer) "-mean"))
+            wmean-key (keyword (str "weighted-" (name layer) "-mean"))
+            mean-val  (get aggregate mean-key)
+            wmean-val (get aggregate wmean-key)]
         (when mean-val
           (.append sb (str "| " (name layer)
                            " | " (format-pct mean-val)
+                           " | " (if wmean-val (format-pct wmean-val) "—")
                            " | " (if (and raw-base (not= layer :raw))
                                    (format-delta raw-base mean-val)
                                    "—")
@@ -1274,6 +1347,21 @@
       (.append sb (str "| LLM-judged | "
                        (format-pct (:llm-judged-mean aggregate))
                        " | " (:llm-judged-count aggregate) " |\n")))
+    (when-let [per-cat (:per-category aggregate)]
+      (.append sb "\n## Results by Category\n\n")
+      (.append sb (str "| Category | Count | "
+                       (str/join " | " (map name layers)) " |\n"))
+      (.append sb (str "|----------|-------|"
+                       (str/join "|" (repeat (count layers) "------")) "|\n"))
+      (doseq [[cat stats] (sort-by key per-cat)]
+        (.append sb (str "| " (name cat) " | " (:count stats)
+                         " | " (str/join " | "
+                                         (map (fn [layer]
+                                                (let [mk (keyword (str (name layer) "-mean"))]
+                                                  (if-let [v (get stats mk)]
+                                                    (format-pct v) "—")))
+                                              layers))
+                         " |\n"))))
     (.append sb "\n## Per-Question Results\n\n")
     (.append sb (str "| # | Category | Scoring | "
                      (str/join " | " (map name layers)) " |\n"))
@@ -1290,6 +1378,26 @@
                                           (get score-symbol score "—")))
                                       layers))
                        " |\n")))
+    (when (> (count layers) 1)
+      (let [ctx-key  (fn [layer] (keyword (str (name layer) "-context-chars")))
+            dur-key  (fn [layer] (keyword (str (name layer) "-duration-ms")))
+            in-key   (fn [layer] (keyword (str (name layer) "-input-tokens")))
+            avg      (fn [k rs] (let [vs (keep k rs)]
+                                  (when (seq vs)
+                                    (long (/ (reduce + vs) (count vs))))))]
+        (.append sb "\n## Context & Efficiency\n\n")
+        (.append sb "| Layer | Avg Context (chars) | Avg Input Tokens | Avg Latency (ms) |\n")
+        (.append sb "|-------|--------------------:|------------------:|------------------:|\n")
+        (doseq [layer layers]
+          (let [ac (avg (ctx-key layer) results)
+                ai (avg (in-key layer) results)
+                ad (avg (dur-key layer) results)]
+            (when (or ac ai ad)
+              (.append sb (str "| " (name layer)
+                               " | " (or ac "—")
+                               " | " (or ai "—")
+                               " | " (or ad "—")
+                               " |\n")))))))
     (.append sb "\n## Usage\n\n")
     (.append sb "| Metric | Value |\n")
     (.append sb "|--------|-------|\n")
@@ -1464,6 +1572,8 @@
         (when-let [mq (:max-questions budget)]
           (count (all-stage-keys (take mq questions) mode)))
         has-raw?       (some #{:raw} layers)
+        isolated-llm   (when has-raw? (llm/make-isolated-prompt-fn
+                                       (select-keys model-config [:provider :model])))
         raw-ctx        (when (and has-remaining? has-raw?) (raw-context repo-path))
         checkpoint     (atom (make-initial-checkpoint
                               (build-run-metadata
@@ -1478,7 +1588,7 @@
         pairs          (for [q questions, layer layers] [(:id q) layer q])
         shared         {:rubric-map rubric-map :meta-db meta-db :db db :raw-ctx raw-ctx
                         :checkpoint checkpoint :cp-path cp-path
-                        :invoke-llm invoke-llm :judge-llm judge-llm
+                        :invoke-llm invoke-llm :isolated-llm isolated-llm :judge-llm judge-llm
                         :session-cost session-cost :budget budget :start-ms start-ms
                         :stop-flag stop-flag :error-atom error-atom
                         :rate-gate rate-gate :min-delay-ms min-delay-ms

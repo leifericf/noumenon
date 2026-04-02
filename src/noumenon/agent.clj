@@ -124,7 +124,7 @@
   [text]
   (let [cleaned (analyze/strip-markdown-fences text)]
     (try
-      (let [parsed (edn/read-string cleaned)]
+      (let [parsed (edn/read-string {:readers {}} cleaned)]
         (cond
           (map? parsed)
           [parsed]
@@ -398,106 +398,92 @@
                       :steps []
                       :iterations 0
                       :total-usage llm/zero-usage
-                      :max-iterations max-iterations})]
-    (let [start-ms (System/currentTimeMillis)]
-      ;; Immediate feedback before first LLM call
-      (when on-iteration
-        (on-iteration {:type "progress" :current 0 :total max-iterations
-                       :message "Analyzing question..."}))
-      (loop [state initial]
-        (let [step-start (System/currentTimeMillis)
-              nxt        (next-state context state)]
-          (if-let [done (:done nxt)]
-            (do (when on-iteration
-                  (on-iteration {:type      "done"
-                                 :current   (get-in done [:usage :iterations])
-                                 :total     (get-in done [:usage :iterations])
-                                 :message   "Composing answer"
-                                 :elapsed   (- (System/currentTimeMillis) start-ms)}))
-                done)
-            (let [elapsed (- (System/currentTimeMillis) step-start)
-                  nxt     (update nxt :steps
-                                  (fn [ss] (if (seq ss)
-                                             (update ss (dec (count ss)) assoc :elapsed-ms elapsed)
-                                             ss)))]
-              (when on-iteration
-                (let [iteration (:iterations nxt)
-                      step    (peek (:steps nxt))]
-                  (when step
-                    (let [parsed  (:parsed step)
-                          tools   (when (sequential? parsed) (mapv :tool parsed))
-                          args    (when (sequential? parsed) (mapv :args parsed))
-                          result  (:tool-result step)
-                          raw     (:raw-text step)
-                          lines   (when result (str/split-lines result))
-                          n       (count (or lines []))
+                      :max-iterations max-iterations})
+        start-ms (System/currentTimeMillis)]
+    ;; Immediate feedback before first LLM call
+    (when on-iteration
+      (on-iteration {:type "progress" :current 0 :total max-iterations
+                     :message "Analyzing question..."}))
+    (loop [state initial]
+      (let [step-start (System/currentTimeMillis)
+            nxt        (next-state context state)]
+        (if-let [done (:done nxt)]
+          (do (when on-iteration
+                (on-iteration {:type      "done"
+                               :current   (get-in done [:usage :iterations])
+                               :total     (get-in done [:usage :iterations])
+                               :message   "Composing answer"
+                               :elapsed   (- (System/currentTimeMillis) start-ms)}))
+              done)
+          (let [elapsed (- (System/currentTimeMillis) step-start)
+                nxt     (update nxt :steps
+                                (fn [ss] (if (seq ss)
+                                           (update ss (dec (count ss)) assoc :elapsed-ms elapsed)
+                                           ss)))]
+            (when on-iteration
+              (let [step (peek (:steps nxt))]
+                (when step
+                  (let [parsed  (:parsed step)
+                        tools   (when (sequential? parsed) (mapv :tool parsed))
+                        args    (when (sequential? parsed) (mapv :args parsed))
+                        result  (:tool-result step)
+                        raw     (:raw-text step)
+                        lines   (when result (str/split-lines result))
+                        n       (count (or lines []))
                           ;; Extract 2-3 sample rows for display
-                          samples (when (> n 1)
-                                    (->> lines (remove str/blank?) (take 3)
-                                         (mapv #(subs % 0 (min 100 (count %))))))
+                        samples (when (> n 1)
+                                  (->> lines (remove str/blank?) (take 3)
+                                       (mapv #(subs % 0 (min 100 (count %))))))
                           ;; Extract a one-line reasoning summary from the LLM's raw text
                           ;; The LLM often starts with reasoning before the EDN tool call
-                          reasoning (when raw
-                                      (let [trimmed (str/trim raw)
+                        reasoning (when raw
+                                    (let [trimmed (str/trim raw)
                                             ;; Text before the first { or [ is reasoning
-                                            idx (min (or (str/index-of trimmed "{") 9999)
-                                                     (or (str/index-of trimmed "[") 9999))]
-                                        (when (and (pos? idx) (< idx 9999))
-                                          (let [text (str/trim (subs trimmed 0 idx))]
-                                            (when (seq text)
-                                              (subs text 0 (min 150 (count text))))))))
-                          ;; Humanize attribute names from query
-                          humanize (fn [kw] (str/replace (name kw) #"[-_]" " "))
-                          attrs    (when (and (= 1 (count tools)) (= :query (first tools)))
-                                     (->> (when-let [q (:query (first args))]
-                                            (when (sequential? q) q))
-                                          (filter sequential?)
-                                          (keep (fn [clause]
-                                                  (some #(when (and (keyword? %)
-                                                                    (namespace %))
-                                                           %)
-                                                        clause)))
-                                          distinct
-                                          (take 3)))
+                                          idx (min (or (str/index-of trimmed "{") 9999)
+                                                   (or (str/index-of trimmed "[") 9999))]
+                                      (when (and (pos? idx) (< idx 9999))
+                                        (let [text (str/trim (subs trimmed 0 idx))]
+                                          (when (seq text)
+                                            (subs text 0 (min 150 (count text))))))))
                           ;; Extract query summary for display
-                          query-summary
-                          (when (and (= 1 (count tools)) (= :query (first tools)))
-                            (let [q (:query (first args))]
-                              (when (sequential? q)
-                                (let [find-idx (.indexOf q :find)
-                                      where-idx (.indexOf q :where)
-                                      find-vars (when (and (>= find-idx 0) (> where-idx find-idx))
-                                                  (->> (subvec (vec q) (inc find-idx) where-idx)
-                                                       (filter symbol?)
-                                                       (map #(str/replace (name %) #"^\?" ""))
-                                                       (take 3)
-                                                       (str/join ", ")))]
-                                  find-vars))))
-                          desc     (cond
-                                     (:error step)
-                                     "Query error — retrying with different approach"
+                        query-summary
+                        (when (and (= 1 (count tools)) (= :query (first tools)))
+                          (let [q (:query (first args))]
+                            (when (sequential? q)
+                              (let [find-idx (.indexOf q :find)
+                                    where-idx (.indexOf q :where)
+                                    find-vars (when (and (>= find-idx 0) (> where-idx find-idx))
+                                                (->> (subvec (vec q) (inc find-idx) where-idx)
+                                                     (filter symbol?)
+                                                     (map #(str/replace (name %) #"^\?" ""))
+                                                     (take 3)
+                                                     (str/join ", ")))]
+                                find-vars))))
+                        desc     (cond
+                                   (:error step)
+                                   "Query error — retrying with different approach"
 
-                                     (and (= 1 (count tools)) (= :query (first tools)))
-                                     (if (seq query-summary)
-                                       (str "Datalog query — :find " query-summary)
-                                       "Datalog query")
+                                   (and (= 1 (count tools)) (= :query (first tools)))
+                                   (if (seq query-summary)
+                                     (str "Datalog query — :find " query-summary)
+                                     "Datalog query")
 
-                                     (and (= 1 (count tools)) (= :schema (first tools)))
-                                     "Schema lookup"
+                                   (and (= 1 (count tools)) (= :schema (first tools)))
+                                   "Schema lookup"
 
-                                     (and (= 1 (count tools)) (= :rules (first tools)))
-                                     "Rules lookup"
+                                   (and (= 1 (count tools)) (= :rules (first tools)))
+                                   "Rules lookup"
 
-                                     (seq tools)
-                                     (str (count tools) " parallel queries")
+                                   (seq tools)
+                                   (str (count tools) " parallel queries")
 
-                                     :else "Processing")]
-                      (on-iteration {:type      "step"
-                                     :current   (:iterations nxt)
-                                     :total     (:max-iterations nxt)
-                                     :message   desc
-                                     :reasoning reasoning
-                                     :results   n
-                                     :samples   samples
-                                     :elapsed   elapsed})))))
-              (recur nxt))))))))
+                                   :else "Processing")]
+                    (on-iteration {:type      "step"
+                                   :current   (:iterations nxt)
+                                   :total     (:max-iterations nxt)
+                                   :message   desc
+                                   :reasoning reasoning
+                                   :results   n
+                                   :samples   samples
+                                   :elapsed   elapsed})))))
+            (recur nxt)))))))

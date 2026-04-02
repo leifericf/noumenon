@@ -35,7 +35,7 @@
   :rubric     "Must list files that are both trivial complexity and core layer, or correctly state none exist."}
 
  {:id         :q06
-  :question   "Which component has the most transitive dependencies?"
+  :question   "Which component has the most direct dependencies?"
   :category   :single-hop
   :query-name "component-dependencies"
   :scoring    :deterministic
