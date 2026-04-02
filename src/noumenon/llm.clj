@@ -284,12 +284,11 @@
           (str/split-lines (slurp env-file)))))
 
 (def ^:private trusted-env-paths
-  "Trusted directories for .env files: user home and project root (where deps.edn lives).
+  "Trusted directories for .env files: user home and (if set) the project install dir.
    Never reads .env from cwd, which could be an untrusted repo directory."
-  [(java.io.File. (System/getProperty "user.home") ".env")
-   (java.io.File. (str (System/getProperty "noumenon.project.dir"
-                                           (System/getProperty "user.dir")))
-                  ".env")])
+  (cond-> [(java.io.File. (System/getProperty "user.home") ".env")]
+    (System/getProperty "noumenon.project.dir")
+    (conj (java.io.File. (System/getProperty "noumenon.project.dir") ".env"))))
 
 (defn- read-env-var
   "Read an environment variable, falling back to .env in trusted locations only.
