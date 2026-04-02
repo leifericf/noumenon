@@ -6,6 +6,7 @@
                 :error   (:danger styles/tokens)
                 :success (:success styles/tokens)
                 :warning (:warning styles/tokens)
+                :info    (:accent styles/tokens)
                 (:text-primary styles/tokens))]
     [:div {:style {:padding "12px 20px"
                    :background (:bg-secondary styles/tokens)
