@@ -120,11 +120,11 @@
     session-id))
 
 (defn set-feedback!
-  "Store user feedback comment on a session."
-  [meta-conn session-id comment]
+  "Store user feedback on a session. `polarity` is :positive or :negative."
+  [meta-conn session-id polarity comment]
   (d/transact meta-conn
               {:tx-data [{:ask.session/id              session-id
-                          :ask.session/feedback         :negative
+                          :ask.session/feedback         polarity
                           :ask.session/feedback-comment (or comment "")}]}))
 
 (defn list-sessions

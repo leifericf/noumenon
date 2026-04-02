@@ -388,7 +388,7 @@
         ctx
         (fn [{:keys [db]}]
           (let [summary (query/schema-summary db)]
-            (log! summary)
+            (println summary)
             {:exit 0 :result summary}))))))
 
 (defn do-status

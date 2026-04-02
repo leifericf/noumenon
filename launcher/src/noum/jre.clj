@@ -3,10 +3,12 @@
   (:require [babashka.fs :as fs]
             [babashka.http-client :as http]
             [babashka.process :as proc]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [noum.paths :as paths]
             [noum.tui.core :as tui]
-            [noum.tui.spinner :as spinner]))
+            [noum.tui.spinner :as spinner])
+  (:import [java.security MessageDigest]))
 
 (def ^:private jre-version "21")
 
@@ -31,6 +33,50 @@
   (str "https://api.adoptium.net/v3/binary/latest/"
        jre-version "/ga/" os "/" arch
        "/jre/hotspot/normal/eclipse"))
+
+(defn- adoptium-checksum-url [os arch]
+  (str "https://api.adoptium.net/v3/checksum/latest/"
+       jre-version "/ga/" os "/" arch
+       "/jre/hotspot/normal/eclipse"))
+
+(defn- sha256-file [path]
+  (let [digest (MessageDigest/getInstance "SHA-256")
+        buf    (byte-array 8192)]
+    (with-open [in (io/input-stream (str path))]
+      (loop []
+        (let [n (.read in buf)]
+          (when (pos? n)
+            (.update digest buf 0 n)
+            (recur)))))
+    (apply str (map #(format "%02x" (bit-and % 0xff)) (.digest digest)))))
+
+(defn- verify-checksum!
+  "Verify archive SHA256 against Adoptium checksum API. Throws on mismatch."
+  [archive-path os arch]
+  (let [s (spinner/start "Verifying JRE integrity...")]
+    (try
+      (let [resp     (http/get (adoptium-checksum-url os arch)
+                               {:throw false :follow-redirects true})
+            expected (when (= 200 (:status resp))
+                       (first (re-seq #"[0-9a-f]{64}" (:body resp))))
+            actual   (sha256-file archive-path)]
+        (cond
+          (nil? expected)
+          (do ((:stop s) "Warning: could not fetch checksum from Adoptium API")
+              (tui/eprintln "  Continuing without checksum verification."))
+
+          (= expected actual)
+          ((:stop s) "SHA256 verified")
+
+          :else
+          (do ((:stop s) "FAILED")
+              (throw (ex-info "SHA256 mismatch -- JRE download may be corrupted. Try again."
+                              {:expected expected :actual actual})))))
+      (catch Exception e
+        (if (= "SHA256 mismatch -- JRE download may be corrupted. Try again." (.getMessage e))
+          (throw e)
+          (do ((:stop s) "Warning: checksum verification failed")
+              (tui/eprintln (str "  " (.getMessage e) ". Continuing without verification."))))))))
 
 (defn installed?
   "Check if a JRE is available at the expected location."
@@ -69,9 +115,10 @@
     (try
       (let [resp (http/get url {:as :stream :follow-redirects true})]
         (with-open [in (:body resp)
-                    out (clojure.java.io/output-stream archive)]
-          (clojure.java.io/copy in out)))
+                    out (io/output-stream archive)]
+          (io/copy in out)))
       ((:stop s) "JRE downloaded.")
+      (verify-checksum! archive os arch)
       (let [s2 (spinner/start "Extracting JRE...")]
         (reset! s2-atom s2)
         (fs/create-dirs paths/jre-dir)
