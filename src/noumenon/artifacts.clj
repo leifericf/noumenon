@@ -282,7 +282,7 @@
   "Return all settings as a map of {key-string value-edn}."
   [meta-db]
   (->> (d/q '[:find ?k ?v :where [?e :setting/key ?k] [?e :setting/value ?v]] meta-db)
-       (into {} (map (fn [[k v]] [k (edn/read-string v)])))))
+       (into {} (map (fn [[k v]] [k (edn/read-string {:readers {}} v)])))))
 
 (defn get-setting
   "Get a single setting value by key. Returns nil if not found."
@@ -290,7 +290,7 @@
   (some-> (d/q '[:find ?v :in $ ?k :where [?e :setting/key ?k] [?e :setting/value ?v]]
                meta-db key)
           ffirst
-          edn/read-string))
+          (edn/read-string {:readers {}})))
 
 (defn set-setting!
   "Upsert a setting. Value is stored as pr-str EDN."
