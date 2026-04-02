@@ -100,7 +100,9 @@
    Content is escaped and wrapped in delimiters to prevent prompt injection."
   [template {:keys [file-path lang line-count content repo-name imports imported-by]}]
   (let [safe-content (str "<file-content>\n"
-                          (escape-double-mustache content)
+                          (-> content
+                              escape-double-mustache
+                              (str/replace "</file-content>" "&lt;/file-content&gt;"))
                           "\n</file-content>")
         imports-section (if (str/blank? imports)
                           ""
