@@ -370,12 +370,12 @@
     (do (tui/eprintln "Usage: noum delete <name> [--force]")
         (tui/eprintln "Use `noum databases` to see available database names.")
         1)
-    (let [db-name (path->db-name (first positional))]
+    (let [db-name (path->db-name (first positional))
+          conn    (ensure-backend! flags)]
       (if (and (not (:force flags))
                (not (confirm/ask (str "Delete database '" db-name "'? This cannot be undone.") false)))
         (do (tui/eprintln "Aborted.") 0)
-        (let [conn (ensure-backend! flags)
-              resp (try
+        (let [resp (try
                      (let [r (http/delete (str (base-url conn) "/api/databases/" (url-encode db-name))
                                           {:headers (auth-headers conn)
                                            :timeout 30000
@@ -446,7 +446,8 @@
         (let [resp (api-get! conn "/health")]
           (when (:ok resp)
             (tui/eprintln (str "noumenon " (get-in resp [:data :version]))))))
-      (catch Exception _)))
+      (catch Exception _
+        (tui/eprintln "  (daemon not reachable)"))))
   0)
 
 (defn- do-open [{:keys [flags]}]
