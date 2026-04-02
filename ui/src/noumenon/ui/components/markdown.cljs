@@ -74,6 +74,25 @@
         1 (first tokens)
         (into [:span] tokens)))))
 
+(defn- list-item? [line]
+  (or (str/starts-with? line "- ")
+      (str/starts-with? line "* ")
+      (re-matches #"^\d+\.\s.*" line)))
+
+(defn- ordered-item? [line]
+  (boolean (re-matches #"^\d+\.\s.*" line)))
+
+(defn- parse-list-item [line]
+  (cond
+    (or (str/starts-with? line "- ")
+        (str/starts-with? line "* "))
+    [:li {:style {:margin-bottom "4px"}}
+     (process-inline (subs line 2))]
+
+    (re-matches #"^\d+\.\s.*" line)
+    [:li {:style {:margin-bottom "4px"}}
+     (process-inline (subs line (inc (str/index-of line " "))))]))
+
 (defn- parse-line [line]
   (cond
     (str/starts-with? line "### ") [:h3 {:style {:margin "16px 0 8px"
@@ -85,16 +104,6 @@
     (str/starts-with? line "# ")   [:h1 {:style {:margin "16px 0 8px"
                                                  :font-size "20px"}}
                                     (subs line 2)]
-    (str/starts-with? line "- ")   [:li {:style {:margin-left "16px"
-                                                 :margin-bottom "4px"}}
-                                    (process-inline (subs line 2))]
-    (str/starts-with? line "* ")   [:li {:style {:margin-left "16px"
-                                                 :margin-bottom "4px"}}
-                                    (process-inline (subs line 2))]
-    (re-matches #"^\d+\.\s.*" line) [:li {:style {:margin-left "16px"
-                                                  :margin-bottom "4px"
-                                                  :list-style-type "decimal"}}
-                                     (process-inline (subs line (inc (str/index-of line " "))))]
     (str/blank? line)              [:br]
     :else                          [:p {:style {:margin "4px 0"}}
                                     (process-inline line)]))
@@ -131,6 +140,22 @@
                     (recur (rest ls) result true code-lang (conj code-lines line))
 
                ;; Normal line
+                    ;; List items — collect consecutive items
+                    (list-item? line)
+                    (let [ordered? (ordered-item? line)
+                          [items remaining]
+                          (loop [items [line] rest-lines (rest ls)]
+                            (if (and (seq rest-lines) (list-item? (first rest-lines)))
+                              (recur (conj items (first rest-lines)) (rest rest-lines))
+                              [items rest-lines]))
+                          tag (if ordered? :ol :ul)]
+                      (recur remaining
+                             (conj result (into [tag {:style {:margin "4px 0 4px 16px"
+                                                              :padding-left "16px"}}]
+                                                (map parse-list-item items)))
+                             false nil []))
+
+                    ;; Normal line
                     :else
                     (recur (rest ls) (conj result (parse-line line))
                            false nil [])))))))))

@@ -92,6 +92,12 @@
                  :daemon/status :error)
    :fx    [[:dispatch [:action/toast {:message error :type :error}]]]})
 
+(defmethod handle-event :action/connection-timeout [state _]
+  (if (= :unknown (:daemon/status state))
+    {:state (assoc state :daemon/status :error)
+     :fx    [[:dispatch [:action/toast {:message "Cannot reach daemon — is it running?" :type :error}]]]}
+    {:state state}))
+
 (defmethod handle-event :action/db-delete [state [_ db-name]]
   {:state state
    :fx    [[:confirm/then
@@ -1269,6 +1275,7 @@
   (dispatch! [:action/backends-load])
   (dispatch! [:action/settings-load])
   (dispatch! [:action/db-refresh])
+  (js/setTimeout #(dispatch! [:action/connection-timeout]) 10000)
   ;; Load graph immediately — it's always visible
   (dispatch! [:action/ask-load-history])
   (dispatch! [:action/graph-load]))
