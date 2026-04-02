@@ -208,13 +208,24 @@
    :query (fn [pos] {:query_name (first pos)
                      :repo_path (canonicalize-path (second pos))})})
 
+(defn- parse-param-flag
+  "Convert --param 'key=value' string into a map entry, or nil."
+  [s]
+  (when (string? s)
+    (let [idx (str/index-of s "=")]
+      (when (and idx (pos? idx))
+        {(subs s 0 idx) (subs s (inc idx))}))))
+
 (defn- build-api-body
-  "Build the API request body from flags and positional args."
+  "Build the API request body from flags and positional args.
+   Converts --param key=value into nested {:params {key value}}."
   [flags positional cmd-def]
   (let [mapper (get positional-maps (:positional-map cmd-def)
                     (fn [pos] (when-let [repo (first pos)]
-                                {:repo_path (canonicalize-path repo)})))]
-    (merge flags (mapper positional))))
+                                {:repo_path (canonicalize-path repo)})))
+        param-map (some-> (:param flags) parse-param-flag)]
+    (cond-> (merge (dissoc flags :param) (mapper positional))
+      param-map (assoc :params param-map))))
 
 (def ^:private progress-commands
   "Commands that benefit from SSE progress streaming."

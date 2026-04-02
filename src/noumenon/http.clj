@@ -426,7 +426,7 @@
       (fn [{:keys [db meta-db]}]
         (let [query-name (:query_name params)
               raw-params (or (:params params) {})
-              kw-params  (into {} (map (fn [[k v]] [(keyword (name k)) v])) raw-params)
+              kw-params  (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
               _          (validate-query-params! kw-params)
               result     (query/run-named-query meta-db db query-name kw-params)]
           (if (:ok result)
@@ -467,7 +467,7 @@
         (let [as-of-str  (:as_of params)
               query-name (:query_name params)
               raw-params (or (:params params) {})
-              kw-params  (into {} (map (fn [[k v]] [(keyword (name k)) v])) raw-params)
+              kw-params  (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
               _          (validate-query-params! kw-params)
               limit      (min (or (:limit params) 500) 10000)]
           (when-not as-of-str
