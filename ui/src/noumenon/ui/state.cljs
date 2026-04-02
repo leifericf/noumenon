@@ -186,6 +186,9 @@
 (defmethod handle-event :action/ask-panel-toggle-collapse [state _]
   {:state (update state :ask/panel-collapsed? not)})
 
+(defmethod handle-event :action/ask-panel-toggle-collapse [state _]
+  {:state (update state :ask/panel-collapsed? not)})
+
 (def ^:private suggestion-catalog
   [;; Temporal & churn
    "Which files have had the most bug fixes recently?"
