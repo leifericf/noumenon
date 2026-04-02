@@ -632,11 +632,12 @@
   {:state (assoc-in state [:graph/comp-authors comp-name] (:results data))})
 
 (defmethod handle-event :action/graph-file-cluster-ready [state [_ comp-name]]
-  (let [cached (get-in state [:graph/file-cache comp-name])]
-    ;; Show only the expanded component's files — hide other components
-    {:state (assoc state
-                   :graph/nodes (:nodes cached)
-                   :graph/edges (:edges cached))}))
+  (if (= comp-name (:graph/expanded-comp state))
+    (let [cached (get-in state [:graph/file-cache comp-name])]
+      {:state (assoc state
+                     :graph/nodes (:nodes cached)
+                     :graph/edges (:edges cached))})
+    {:state state}))
 
 (defmethod handle-event :action/graph-expand-file [state [_ {:keys [id cx cy]}]]
   (let [file-path id
@@ -720,11 +721,12 @@
      :fx [[:dispatch [:action/graph-segment-cluster-ready file-path]]]}))
 
 (defmethod handle-event :action/graph-segment-cluster-ready [state [_ file-path]]
-  (let [cached (get-in state [:graph/segment-cache file-path])]
-    ;; Show only the expanded file's segments — hide other files
-    {:state (assoc state
-                   :graph/nodes (:nodes cached)
-                   :graph/edges (:edges cached))}))
+  (if (= file-path (:graph/expanded-file state))
+    (let [cached (get-in state [:graph/segment-cache file-path])]
+      {:state (assoc state
+                     :graph/nodes (:nodes cached)
+                     :graph/edges (:edges cached))})
+    {:state state}))
 
 (defmethod handle-event :action/graph-collapse [state _]
   (case (:graph/depth state)

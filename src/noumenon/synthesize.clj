@@ -210,15 +210,11 @@
 
 ;; --- Retraction ---
 
-(defn retract-synthesis!
-  "Retract all component entities and synthesis-assigned file attributes.
-   Single atomic transaction to avoid partial retraction states."
-  [conn]
-  (let [db (d/db conn)
-        ;; Only retract synthesis-owned attrs from files that have arch/component
-        ;; (the definitive synthesis marker). Preserve analyze-written :sem/purpose
-        ;; on files not assigned to any component.
-        synth-attrs [:arch/component :arch/layer :sem/category :sem/patterns :sem/purpose]
+(defn retraction-tx-data
+  "Build tx-data to retract all component entities and synthesis-assigned file attributes.
+   Does not transact — returns a vector of retraction datoms for composition."
+  [db]
+  (let [synth-attrs [:arch/component :arch/layer :sem/category :sem/patterns :sem/purpose]
         file-eids   (d/q '[:find ?e :where [?e :arch/component _]] db)
         comp-eids   (d/q '[:find ?e :where [?e :component/name _]] db)
         file-retractions
@@ -232,10 +228,16 @@
                            (:sem/patterns e)   (into (mapv #(vector :db/retract eid :sem/patterns %) (:sem/patterns e)))
                            (:sem/purpose e)    (conj [:db/retract eid :sem/purpose (:sem/purpose e)])))))
              vec)
-        comp-retractions (mapv (fn [[eid]] [:db/retractEntity eid]) comp-eids)
-        all-tx (into file-retractions comp-retractions)]
-    (when (seq all-tx)
-      (d/transact conn {:tx-data all-tx}))))
+        comp-retractions (mapv (fn [[eid]] [:db/retractEntity eid]) comp-eids)]
+    (into file-retractions comp-retractions)))
+
+(defn retract-synthesis!
+  "Retract all component entities and synthesis-assigned file attributes.
+   Single atomic transaction to avoid partial retraction states."
+  [conn]
+  (let [tx (retraction-tx-data (d/db conn))]
+    (when (seq tx)
+      (d/transact conn {:tx-data tx}))))
 
 ;; --- Main orchestration ---
 
@@ -264,7 +266,7 @@
                         (log! "synthesize/tail" (subs text (max 0 (- (count text) 200)))))
             parsed    (parse-response text)]
         (if (and parsed (seq (:components parsed)))
-          (let [_          (retract-synthesis! conn)
+          (let [retract-tx (retraction-tx-data db)
                 comp-txs   (components->tx-data (:components parsed))
                 n-files    (->> (:components parsed) (mapcat :files) distinct count)
                 prompt-hash (subs (sha256-hex template) 0 16)
@@ -280,7 +282,7 @@
                              (:input-tokens usage)  (assoc :tx/input-tokens (:input-tokens usage))
                              (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
                              (pos? cost)            (assoc :tx/cost-usd cost))
-                tx-data    (vec (conj (vec comp-txs) prov-tx))]
+                tx-data    (vec (concat retract-tx comp-txs [prov-tx]))]
             (d/transact conn {:tx-data tx-data})
             (let [elapsed (- (System/currentTimeMillis) start-ms)]
               (log! "synthesize" (str "Done. " (count (:components parsed)) " components, "
