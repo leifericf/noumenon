@@ -406,8 +406,8 @@
           opts      (if analyze?
                       (let [{:keys [prompt-fn model-id]}
                             (llm/wrap-as-prompt-fn-from-opts
-                             {:provider (:provider defaults)
-                              :model    (:model defaults)})]
+                             {:provider (or (args "provider") (:provider defaults))
+                              :model    (or (args "model") (:model defaults))})]
                         {:concurrency 8 :analyze? true
                          :meta-db (d/db meta-conn)
                          :model-id model-id :invoke-llm prompt-fn})

@@ -298,8 +298,7 @@
         (let [opts (if (:analyze params)
                      (let [{:keys [prompt-fn model-id]}
                            (llm/wrap-as-prompt-fn-from-opts
-                            {:provider (:provider config)
-                             :model    (:model config)})]
+                            (resolve-provider params config))]
                        {:concurrency 8 :analyze? true
                         :meta-db meta-db :model-id model-id :invoke-llm prompt-fn})
                      {:concurrency 8})
