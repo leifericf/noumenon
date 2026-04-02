@@ -35,11 +35,28 @@
 
 ;; --- HTTP client ---
 
+(defn- private-address?
+  "True if the host resolves to a private, loopback, or link-local IP."
+  [host-str]
+  (try
+    (let [host (first (str/split host-str #":"))
+          addr (java.net.InetAddress/getByName host)]
+      (or (.isLoopbackAddress addr)
+          (.isLinkLocalAddress addr)
+          (.isSiteLocalAddress addr)))
+    (catch Exception _ false)))
+
 (defn- base-url
   "Build base URL from connection info. Supports remote --host.
-   Remote hosts default to https:// unless --insecure is set."
+   Remote hosts default to https:// unless --insecure is set.
+   Rejects hosts that resolve to private/link-local addresses (SSRF protection)."
   [{:keys [port host insecure]}]
   (or (when host
+        (when (and (not insecure)
+                   (not (re-find #"^(localhost|127\.0\.0\.1)(:|$)" host))
+                   (private-address? host))
+          (throw (ex-info "Blocked: --host resolves to a private/internal address"
+                          {:host host})))
         (if (or insecure (re-find #"^(localhost|127\.0\.0\.1)(:|$)" host))
           (str "http://" host)
           (str "https://" host)))
