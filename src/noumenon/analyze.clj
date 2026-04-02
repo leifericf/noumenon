@@ -514,6 +514,7 @@
    :javascript {:input 3572 :output 648 :ms 2047}
    :typescript {:input 3441 :output 476 :ms 1724}
    :c          {:input 4927 :output 801 :ms 3297}
+   :cpp        {:input 4927 :output 801 :ms 3297}
    :go         {:input 5469 :output 840 :ms 3535}
    :rust       {:input 6038 :output 932 :ms 5193}
    :java       {:input 4567 :output 743 :ms 2966}})

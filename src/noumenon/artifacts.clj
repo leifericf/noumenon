@@ -56,11 +56,6 @@
 
 ;; --- Seeding ---
 
-(defn seeded?
-  "True if the meta database already contains artifact entities."
-  [db]
-  (boolean (seq (d/q '[:find ?e :where [?e :artifact.query/name _]] db))))
-
 (defn- do-seed!
   "Upsert all classpath EDN resources into the meta database."
   [conn source]
@@ -86,10 +81,10 @@
         (d/transact conn {:tx-data [tx tx-meta]})))))
 
 (defn seed-from-classpath!
-  "Load all classpath EDN resources into Datomic. Idempotent — skips if already seeded."
+  "Upsert all classpath EDN resources into Datomic on every startup.
+   Identity attributes make unchanged entities no-ops, so this is fast and safe."
   [conn]
-  (when-not (seeded? (d/db conn))
-    (do-seed! conn :bootstrap)))
+  (do-seed! conn :bootstrap))
 
 (defn reseed!
   "Unconditionally upsert all classpath resources into Datomic.

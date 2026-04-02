@@ -28,7 +28,17 @@
    "c"      :c
    "h"      :c
    "cpp"    :cpp
+   "cc"     :cpp
+   "cxx"    :cpp
+   "c++"    :cpp
    "hpp"    :cpp
+   "hh"     :cpp
+   "hxx"    :cpp
+   "h++"    :cpp
+   "inl"    :cpp
+   "ipp"    :cpp
+   "tpp"    :cpp
+   "tcc"    :cpp
    "cs"     :csharp
    "csproj" :msbuild-project
    "vcxproj" :msbuild-project
@@ -184,7 +194,7 @@
 
 ;; --- Tx-data builders ---
 
-(defn- file-ext
+(defn file-ext
   "Extract file extension from a path, or nil if none."
   [path]
   (let [filename (last (str/split path #"/"))
@@ -192,7 +202,7 @@
     (when (and dot-idx (pos? dot-idx))
       (subs filename (inc dot-idx)))))
 
-(defn- dir-of
+(defn dir-of
   "Return the directory portion of a file path, or \".\" for root-level files."
   [path]
   (let [slash-idx (str/last-index-of path "/")]

@@ -236,6 +236,60 @@
     (testing "returns nil for external include"
       (is (nil? (imports/resolve-import :erlang "kernel/include/file.hrl" "src/my_server.erl" paths))))))
 
+;; --- Lua extraction ---
+
+(deftest extract-imports-lua-test
+  (testing "extracts require with double quotes"
+    (let [result (imports/extract-imports :lua "local m = require(\"foo.bar\")")]
+      (is (= ["foo.bar"] (vec result)))))
+
+  (testing "extracts require with single quotes"
+    (is (= ["foo.bar"] (vec (imports/extract-imports :lua "local m = require('foo.bar')")))))
+
+  (testing "extracts bare require without parens"
+    (is (= ["foo"] (vec (imports/extract-imports :lua "local m = require 'foo'")))))
+
+  (testing "extracts dofile"
+    (is (= ["config.lua"] (vec (imports/extract-imports :lua "dofile(\"config.lua\")")))))
+
+  (testing "extracts loadfile"
+    (is (= ["lib.lua"] (vec (imports/extract-imports :lua "loadfile('lib.lua')")))))
+
+  (testing "extracts multiple imports"
+    (let [src "local a = require('foo')\nlocal b = require('bar')\ndofile('baz.lua')"
+          result (imports/extract-imports :lua src)]
+      (is (= #{"foo" "bar" "baz.lua"} (set result)))))
+
+  (testing "deduplicates"
+    (let [result (imports/extract-imports :lua "require('foo')\nrequire('foo')")]
+      (is (= 1 (count result)))))
+
+  (testing "returns empty for no imports"
+    (is (empty? (imports/extract-imports :lua "print('hello')"))))
+
+  (testing "returns empty for empty string"
+    (is (empty? (imports/extract-imports :lua "")))))
+
+;; --- Lua resolution ---
+
+(deftest resolve-import-lua-test
+  (let [paths #{"main.lua" "mylib/core.lua" "mylib/utils.lua" "mylib/init.lua"
+                "config.lua" "scripts/helper.lua"}]
+    (testing "resolves dotted module to .lua file"
+      (is (= "mylib/core.lua"
+             (imports/resolve-import :lua "mylib.core" "main.lua" paths))))
+
+    (testing "resolves dotted module to init.lua"
+      (is (= "mylib/init.lua"
+             (imports/resolve-import :lua "mylib" "main.lua" paths))))
+
+    (testing "resolves literal file path"
+      (is (= "config.lua"
+             (imports/resolve-import :lua "config.lua" "scripts/helper.lua" paths))))
+
+    (testing "returns nil for external module"
+      (is (nil? (imports/resolve-import :lua "os" "main.lua" paths))))))
+
 ;; --- C# extraction ---
 
 (deftest extract-imports-csharp-test
@@ -415,6 +469,35 @@
     (testing "my_server includes my_header"
       (is (= ["include/my_header.hrl"] (:resolved result))))))
 
+(deftest enrich-fixture-lua-test
+  (let [paths #{"main.lua" "mylib/core.lua" "mylib/utils.lua"
+                "mylib/init.lua" "config.lua" "scripts/helper.lua"}
+        read-fixture (fn [path] (slurp (str "test-fixtures/lua/" path)))
+        result-main   (imports/enrich-file :lua (read-fixture "main.lua")
+                                           "main.lua" paths)
+        result-core   (imports/enrich-file :lua (read-fixture "mylib/core.lua")
+                                           "mylib/core.lua" paths)
+        result-utils  (imports/enrich-file :lua (read-fixture "mylib/utils.lua")
+                                           "mylib/utils.lua" paths)
+        result-init   (imports/enrich-file :lua (read-fixture "mylib/init.lua")
+                                           "mylib/init.lua" paths)
+        result-helper (imports/enrich-file :lua (read-fixture "scripts/helper.lua")
+                                           "scripts/helper.lua" paths)
+        result-config (imports/enrich-file :lua (read-fixture "config.lua")
+                                           "config.lua" paths)]
+    (testing "main requires utils and core"
+      (is (= #{"mylib/utils.lua" "mylib/core.lua"} (set (:resolved result-main)))))
+    (testing "core requires utils"
+      (is (= ["mylib/utils.lua"] (:resolved result-core))))
+    (testing "utils has no internal deps (os is external)"
+      (is (empty? (:resolved result-utils))))
+    (testing "init requires core"
+      (is (= ["mylib/core.lua"] (:resolved result-init))))
+    (testing "helper resolves dofile and require"
+      (is (= #{"config.lua" "mylib/utils.lua"} (set (:resolved result-helper)))))
+    (testing "config has no imports"
+      (is (empty? (:resolved result-config))))))
+
 (deftest enrich-fixture-csharp-test
   (let [paths #{"src/MyApp/Program.cs" "src/MyApp/Models/User.cs"
                 "src/MyApp/Services/UserService.cs"}
@@ -457,3 +540,73 @@
                                     "MyProject.vcxproj" paths)]
     (testing ".vcxproj imports source and header files"
       (is (= #{"src/main.cpp" "src/util.cpp" "include/util.h"} (set (:resolved result)))))))
+
+;; --- C/C++ pure function tests ---
+
+(deftest detect-include-dirs-test
+  (testing "extracts header directories sorted by depth"
+    (is (= ["include" "src/engine/core/Public"]
+           (imports/detect-include-dirs
+            #{"src/main.cpp" "include/util.h" "src/engine/core/Public/Engine.h"}))))
+
+  (testing "handles .hpp, .hh, .hxx, .h++ extensions"
+    (is (= #{"a" "b" "c" "d"}
+           (set (imports/detect-include-dirs
+                 #{"a/foo.hpp" "b/bar.hh" "c/baz.hxx" "d/qux.h++"})))))
+
+  (testing "returns empty for no headers"
+    (is (= [] (imports/detect-include-dirs #{"src/main.cpp" "lib/util.cpp"}))))
+
+  (testing "deduplicates directories"
+    (is (= ["include"]
+           (imports/detect-include-dirs #{"include/a.h" "include/b.h"})))))
+
+(deftest include-dirs->flags-test
+  (testing "produces flat -I flag vector"
+    (is (= ["-I" "/repo/include" "-I" "/repo/src"]
+           (imports/include-dirs->flags "/repo" ["include" "src"]))))
+
+  (testing "returns empty for no dirs"
+    (is (= [] (imports/include-dirs->flags "/repo" [])))))
+
+(deftest parse-compile-commands-test
+  (testing "parses arguments-style entries"
+    (let [json "[{\"directory\":\"/repo\",\"file\":\"/repo/src/main.cpp\",\"arguments\":[\"clang++\",\"-Iinclude\",\"-isystem\",\"/usr/include\",\"-c\",\"src/main.cpp\"]}]"
+          result (imports/parse-compile-commands json "/repo")]
+      (is (= {"src/main.cpp" ["-I" "include" "-isystem" "/usr/include"]}
+             result))))
+
+  (testing "parses command-style entries"
+    (let [json "[{\"directory\":\"/repo\",\"file\":\"src/util.cpp\",\"command\":\"g++ -I include -c src/util.cpp\"}]"
+          result (imports/parse-compile-commands json "/repo")]
+      (is (= {"src/util.cpp" ["-I" "include"]}
+             result))))
+
+  (testing "strips repo prefix from file paths"
+    (let [json "[{\"directory\":\"/repo\",\"file\":\"/repo/a.cpp\",\"arguments\":[\"cc\",\"-c\",\"a.cpp\"]}]"
+          result (imports/parse-compile-commands json "/repo")]
+      (is (contains? result "a.cpp")))))
+
+;; --- C/C++ integration tests (require clang or gcc) ---
+
+(deftest extract-one-c-integration-test
+  (when (#'imports/find-c-compiler)
+    (let [extract-one-c #'imports/extract-one-c
+          abs           (fn [rel] (str (System/getProperty "user.dir") "/" rel))]
+      (testing "C fixture: resolves include/util.h via auto-detected -I flags"
+        (let [repo    (abs "test-fixtures/c")
+              paths   #{"src/main.c" "src/util.c" "include/util.h"}
+              flags   (imports/include-dirs->flags repo (imports/detect-include-dirs paths))
+              context {:fallback-flags flags :compile-commands nil}
+              result  (extract-one-c repo paths context {:file/path "src/main.c"})]
+          (is (some? result))
+          (is (some #(= [:file/path "include/util.h"] %) (:file/imports result)))))
+
+      (testing "C++ fixture: resolves include/util.h via auto-detected -I flags"
+        (let [repo    (abs "test-fixtures/cpp")
+              paths   #{"src/main.cpp" "src/util.cpp" "include/util.h"}
+              flags   (imports/include-dirs->flags repo (imports/detect-include-dirs paths))
+              context {:fallback-flags flags :compile-commands nil}
+              result  (extract-one-c repo paths context {:file/path "src/main.cpp"})]
+          (is (some? result))
+          (is (some #(= [:file/path "include/util.h"] %) (:file/imports result))))))))

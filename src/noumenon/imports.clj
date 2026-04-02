@@ -251,25 +251,104 @@ console.log(JSON.stringify(imports))")
         repo-root (.getCanonicalPath (java.io.File. (str repo-path)))]
     (.startsWith canon (str repo-root "/"))))
 
+(def ^:private header-exts
+  "File extensions that indicate a C/C++ header."
+  #{"h" "hpp" "hh" "hxx" "h++"})
+
+(def ^:private max-include-dirs
+  "Cap auto-detected include dirs to avoid absurdly long compiler invocations."
+  50)
+
+(defn detect-include-dirs
+  "Find directories containing C/C++ headers from a set of repo-relative paths.
+   Returns a sorted vec of directory paths, shallowest first, capped at max-include-dirs."
+  [all-paths]
+  (->> all-paths
+       (filter #(header-exts (files/file-ext %)))
+       (map files/dir-of)
+       distinct
+       (sort-by #(count (str/split % #"/")))
+       (take max-include-dirs)
+       vec))
+
+(defn include-dirs->flags
+  "Convert relative include dirs to flat `-I` flag vector with absolute paths."
+  [repo-path dirs]
+  (into [] (mapcat #(vector "-I" (str repo-path "/" %))) dirs))
+
+;; --- compile_commands.json support ---
+
+(def ^:private compile-commands-search-dirs
+  "Directories to search for compile_commands.json, in priority order."
+  ["" "build" "cmake-build-release" "cmake-build-debug" "out"])
+
+(defn find-compile-commands
+  "Find compile_commands.json in the repo. Returns absolute path or nil."
+  [repo-path]
+  (->> compile-commands-search-dirs
+       (map #(str repo-path "/" (when (seq %) (str % "/")) "compile_commands.json"))
+       (filter #(.isFile (java.io.File. %)))
+       first))
+
+(defn- extract-include-flags
+  "Extract -I, -isystem, and -include flags from a compiler argument list."
+  [args]
+  (loop [[arg & more] args flags []]
+    (cond
+      (nil? arg)                              flags
+      (#{"-I" "-isystem" "-include"} arg)     (recur (rest more) (conj flags arg (first more)))
+      (str/starts-with? arg "-I")             (recur more (conj flags "-I" (subs arg 2)))
+      :else                                   (recur more flags))))
+
+(defn parse-compile-commands
+  "Parse compile_commands.json content. Returns {relative-source-path -> [include-flags]}.
+   Normalizes file paths relative to repo-path."
+  [json-str repo-path]
+  (let [entries (json/read-str json-str :key-fn keyword)
+        prefix  (str repo-path "/")]
+    (->> entries
+         (map (fn [{:keys [file arguments command]}]
+                (let [args (or arguments (when command (str/split command #"\s+")))
+                      rel  (if (str/starts-with? file prefix)
+                             (subs file (count prefix))
+                             file)]
+                  [rel (extract-include-flags args)])))
+         (into {}))))
+
+(defn- c-include-flags-for-file
+  "Get include flags for a C/C++ file: compile-commands entry if available, else fallback."
+  [compile-commands fallback-flags source-path]
+  (or (get compile-commands source-path) fallback-flags))
+
+(defn- parse-mm-output
+  "Parse makefile-format output from cc -MM into a seq of dependency paths."
+  [out repo-path]
+  (->> (str/replace out #"\\\r?\n" " ")
+       (re-seq #"\S+")
+       rest                             ; skip target: prefix
+       (remove #(str/ends-with? % ":"))
+       (map #(str/replace % (str repo-path "/") ""))
+       (remove #(str/starts-with? % "/"))))
+
 (defn- extract-c-includes-from-compiler
-  "Run clang/gcc -MM on a file and parse the makefile output into dependency paths."
-  [repo-path source-path]
+  "Run clang/gcc -MM on a file and parse the makefile output into dependency paths.
+   Returns {:status :ok :deps [...]} on success, {:status :error :stderr \"...\"} on
+   compiler failure, or nil if no compiler is available."
+  [repo-path source-path include-flags]
   (when-let [cc (find-c-compiler)]
     (try
       (let [full-path (str repo-path "/" source-path)
             _         (when-not (under-repo-path? repo-path full-path)
                         (throw (ex-info "Path traversal blocked"
                                         {:source-path source-path})))
-            {:keys [exit out]} (shell/sh cc "-MM" full-path
-                                         :dir (str repo-path))]
-        (when (zero? exit)
-          (->> (str/replace out #"\\\n" " ")
-               (re-seq #"\S+")
-               rest                     ; skip target: prefix
-               (remove #(str/ends-with? % ":"))
-               (map #(str/replace % (str repo-path "/") ""))
-               (remove #(str/starts-with? % "/")))))
-      (catch Exception _ nil))))
+            {:keys [exit out err]}
+            (apply shell/sh cc "-MM" full-path
+                   (concat include-flags [:dir (str repo-path)]))]
+        (if (zero? exit)
+          {:status :ok :deps (parse-mm-output out repo-path)}
+          {:status :error :stderr (first (str/split-lines err))}))
+      (catch Exception e
+        {:status :error :stderr (.getMessage e)}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Elixir — AST parser via Code.string_to_quoted + Macro.prewalk
@@ -350,6 +429,37 @@ end")
 
 (defmethod resolve-import :erlang [_ import-name _source-path all-paths]
   (resolve-erlang-import import-name all-paths))
+
+;; ---------------------------------------------------------------------------
+;; Lua — require / dofile / loadfile
+;; ---------------------------------------------------------------------------
+
+(defmethod extract-imports :lua [_ text]
+  (let [requires (->> (re-seq #"(?<!\w)require\s*\(?[\"']([^\"']+)[\"']\)?" text)
+                      (mapv second))
+        loads    (->> (re-seq #"(?:dofile|loadfile)\s*\(\s*[\"']([^\"']+)[\"']\s*\)" text)
+                      (mapv second))]
+    (distinct (into requires loads))))
+
+(defn- resolve-lua-import [import-name source-path all-paths]
+  (if (or (str/includes? import-name "/") (str/ends-with? import-name ".lua"))
+    ;; Literal file path (dofile/loadfile) — resolve relative to source dir
+    (let [dir  (str/join "/" (butlast (str/split source-path #"/")))
+          rel  (if (seq dir) (str dir "/" import-name) import-name)]
+      (or (all-paths rel) (all-paths import-name)))
+    ;; Dot-separated module name (require) — convert dots to path separators
+    (let [base     (str/replace import-name "." "/")
+          suffixes [(str base ".lua") (str base "/init.lua")]
+          prefixed (mapcat (fn [s] [s (str "src/" s) (str "lib/" s)]) suffixes)
+          direct   (first (filter all-paths prefixed))]
+      (or direct
+          (first (for [suffix (map #(str "/" %) suffixes)
+                       p      all-paths
+                       :when  (str/ends-with? p suffix)]
+                   p))))))
+
+(defmethod resolve-import :lua [_ import-name source-path all-paths]
+  (resolve-lua-import import-name source-path all-paths))
 
 ;; ---------------------------------------------------------------------------
 ;; Go — go list -json
@@ -534,11 +644,17 @@ end")
 
 (defn- extract-one-c
   "Extract includes for a C/C++ file via compiler. Returns tx-data map or nil."
-  [repo-path all-paths {:keys [file/path]}]
+  [repo-path all-paths c-context {:keys [file/path]}]
   (try
-    (when-let [deps (extract-c-includes-from-compiler repo-path path)]
-      (let [resolved (->> deps (filter all-paths) (remove #{path}) distinct vec)]
-        (file->tx-data path {:resolved resolved :raw (vec deps)})))
+    (let [flags  (c-include-flags-for-file
+                  (:compile-commands c-context) (:fallback-flags c-context) path)
+          result (extract-c-includes-from-compiler repo-path path flags)]
+      (case (:status result)
+        :ok  (let [deps     (:deps result)
+                   resolved (->> deps (filter all-paths) (remove #{path}) distinct vec)]
+               (file->tx-data path {:resolved resolved :raw (vec deps)}))
+        :error {:error? true :file/path path :stderr (:stderr result)}
+        nil))
     (catch Exception _
       {:error? true :file/path path})))
 
@@ -588,8 +704,8 @@ end")
 
 (defn- extract-all-c
   "Extract includes for C/C++ files via compiler. Returns vec of results."
-  [repo-path all-paths files concurrency]
-  (run-extraction #(extract-one-c repo-path all-paths %) files concurrency))
+  [repo-path all-paths c-context files concurrency]
+  (run-extraction #(extract-one-c repo-path all-paths c-context %) files concurrency))
 
 (defn- tally-and-transact!
   "Tally results and transact in batches. Returns summary map."
@@ -628,6 +744,28 @@ end")
                                        (not (get-in tools [lang :available?]))))))]
     {:std-files std-files :c-files c-files}))
 
+(def ^:private compile-commands-hint
+  (str "  To improve C/C++ coverage, generate compile_commands.json and re-run enrich:\n"
+       "    CMake:  cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -B build\n"
+       "    Meson:  meson setup build  (generates by default)\n"
+       "    SCons:  pip install compiledb && compiledb make\n"
+       "    Unreal: UnrealBuildTool -mode=GenerateClangDatabase\n"
+       "    Other:  bear -- <your-build-command>"))
+
+(defn- log-c-errors!
+  "Log a summary of C/C++ compiler failures if any occurred.
+   Shows build-system hints when the failure rate is high."
+  [c-results c-total has-compile-commands?]
+  (let [errors (->> c-results (filter :error?) (keep :stderr) frequencies)]
+    (when (seq errors)
+      (let [n-failed   (reduce + (vals errors))
+            [top-msg top-n] (apply max-key val errors)
+            fail-pct   (if (pos? c-total) (quot (* 100 n-failed) c-total) 0)]
+        (log! (str "  C/C++ compiler failures: " n-failed "/" c-total " files (" fail-pct "%)"
+                   " — most common: " top-msg " (" top-n " files)"))
+        (when (and (> fail-pct 50) (not has-compile-commands?))
+          (log! compile-commands-hint))))))
+
 (defn- log-enrich-summary!
   "Log the enrichment summary and skipped-tool warnings."
   [{:keys [files-processed imports-resolved files-errored]} concurrency skipped-tools]
@@ -658,12 +796,24 @@ end")
          _         (log! (str "  Extracting imports from " total " files"
                               (when (> concurrency 1) (str " (concurrency=" concurrency ")"))
                               "..."))
+         cc-path     (when (seq c-files) (find-compile-commands repo-path))
+         c-context   (when (seq c-files)
+                       {:compile-commands (when cc-path
+                                            (parse-compile-commands (slurp cc-path) repo-path))
+                        :fallback-flags   (include-dirs->flags repo-path
+                                                               (detect-include-dirs all-paths))})
+         _           (when (and (seq c-files) cc-path)
+                       (log! (str "  Using compile_commands.json from " cc-path)))
+         _           (when (and (seq c-files) (not cc-path))
+                       (log! "  No compile_commands.json found — using auto-detected include dirs"))
          std-results (extract-all repo-path all-paths std-files concurrency)
          c-results   (when (and (seq c-files) (get-in tools [:c :available?]))
-                       (extract-all-c repo-path all-paths c-files concurrency))
+                       (extract-all-c repo-path all-paths c-context c-files concurrency))
          _           (when (and (seq c-files) (not (get-in tools [:c :available?])))
                        (log! (str "  Warning: skipping " (count c-files)
                                   " C/C++ files — no clang or gcc found on PATH")))
+         _           (when (seq c-results)
+                       (log-c-errors! c-results (count c-files) (some? cc-path)))
          final       (-> (tally-and-transact! conn (into std-results c-results))
                          (update :batch #(flush-batch! conn %)))]
      (when (zero? (:imports-resolved final))
