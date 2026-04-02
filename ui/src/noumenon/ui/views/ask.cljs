@@ -343,7 +343,9 @@
 (defn- suggestion-ticker [visible-set paused?]
   (when (seq visible-set)
     (let [items (vec (concat visible-set visible-set))]
-      [:div {:on {:mouseenter [:action/ask-ticker-pause true]
+      [:div {:role "region"
+             :aria-label "Suggested questions"
+             :on {:mouseenter [:action/ask-ticker-pause true]
                   :mouseleave [:action/ask-ticker-pause false]}
              :style {:width "100%"
                      :margin-top "20px"
@@ -357,19 +359,24 @@
                       :white-space "nowrap"
                       :animation (str "tickerScroll " (* (count visible-set) 10) "s linear infinite")
                       :width "max-content"}}
-        (for [[i q] (map-indexed vector items)]
-          [:button {:key (str i "-" q)
-                    :on {:click [:action/ask-run-suggestion q]}
-                    :style {:background "rgba(15,20,30,0.75)"
-                            :border (str "1px solid " (:border styles/tokens))
-                            :border-radius "16px"
-                            :color (:text-secondary styles/tokens)
-                            :cursor "pointer"
-                            :font-size "12px"
-                            :padding "6px 16px"
-                            :white-space "nowrap"
-                            :flex-shrink 0}}
-           q])]])))
+        (let [n (count visible-set)]
+          (for [[i q] (map-indexed vector items)]
+            (let [duplicate? (>= i n)]
+              [:button {:key (str i "-" q)
+                        :on {:click [:action/ask-run-suggestion q]}
+                        :tab-index (if duplicate? -1 0)
+                        :aria-hidden (when duplicate? "true")
+                        :aria-label (str "Ask: " q)
+                        :style {:background "rgba(15,20,30,0.75)"
+                                :border (str "1px solid " (:border styles/tokens))
+                                :border-radius "16px"
+                                :color (:text-secondary styles/tokens)
+                                :cursor "pointer"
+                                :font-size "12px"
+                                :padding "6px 16px"
+                                :white-space "nowrap"
+                                :flex-shrink 0}}
+               q])))]])))
 
 (defn ask-view [state]
   (let [{:keys [ask/query ask/loading? ask/result ask/history ask/progress

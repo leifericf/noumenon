@@ -218,7 +218,8 @@
   {:state (assoc state :ask/ticker-paused? paused?)})
 
 (defmethod handle-event :action/ask-run-suggestion [state [_ question]]
-  {:state (assoc state :ask/query question)})
+  {:state (assoc state :ask/query question)
+   :fx [[:dispatch [:action/ask-submit]]]})
 
 (defmethod handle-event :action/ask-init-suggestions [state _]
   (let [shuffled (sort-by (fn [_] (js/Math.random)) suggestion-catalog)]
