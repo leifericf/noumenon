@@ -215,15 +215,11 @@
    Single atomic transaction to avoid partial retraction states."
   [conn]
   (let [db (d/db conn)
-        ;; Find files with ANY synthesis-assigned attr (not just arch/component)
+        ;; Only retract synthesis-owned attrs from files that have arch/component
+        ;; (the definitive synthesis marker). Preserve analyze-written :sem/purpose
+        ;; on files not assigned to any component.
         synth-attrs [:arch/component :arch/layer :sem/category :sem/patterns :sem/purpose]
-        file-eids   (d/q '[:find ?e :where
-                           (or [?e :arch/component _]
-                               [?e :arch/layer _]
-                               [?e :sem/category _]
-                               [?e :sem/patterns _]
-                               [?e :sem/purpose _])]
-                         db)
+        file-eids   (d/q '[:find ?e :where [?e :arch/component _]] db)
         comp-eids   (d/q '[:find ?e :where [?e :component/name _]] db)
         file-retractions
         (->> file-eids
