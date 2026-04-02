@@ -443,7 +443,8 @@
                             (catch Exception e
                               (throw (ex-info "Invalid EDN"
                                               {:status 400 :message (str "Invalid EDN: " (.getMessage e))}))))
-                _       (agent/validate-query parsed)
+                _       (when-let [err (agent/validate-query parsed)]
+                          (throw (ex-info err {:status 400 :message err})))
                 args    (or (:args params) [])
                 results (try (apply d/q parsed db args)
                              (catch Exception e
