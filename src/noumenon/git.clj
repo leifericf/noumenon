@@ -111,7 +111,9 @@
          (.parse DateTimeFormatter/ISO_OFFSET_DATE_TIME)
          Instant/from
          Date/from)
-    (catch Exception _ nil)))
+    (catch Exception e
+      (log! (str "git/warn: Skipping commit with unparseable date: " s " — " (.getMessage e)))
+      nil)))
 
 (defn- resolve-rename-path
   "Resolve git rename syntax '{old => new}/rest' to the destination path.

@@ -196,7 +196,8 @@
                     "Access-Control-Allow-Origin" origin-header
                     "X-Content-Type-Options" "nosniff"
                     "X-Frame-Options" "DENY"
-                    "Referrer-Policy" "no-referrer")))))
+                    "Referrer-Policy" "no-referrer"
+                    "Content-Security-Policy" "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")))))
 
 (defn- with-sse
   "Run body-fn in a future, streaming progress via SSE. body-fn receives a progress-fn.
@@ -445,7 +446,7 @@
           (when-not query-edn
             (throw (ex-info "Missing query" {:status 400 :message "query is required (EDN string)"})))
           (validate-string-length! "query" query-edn max-param-value-len)
-          (let [parsed (try (edn/read-string query-edn)
+          (let [parsed (try (edn/read-string {:readers {}} query-edn)
                             (catch Exception e
                               (throw (ex-info "Invalid EDN"
                                               {:status 400 :message (str "Invalid EDN: " (.getMessage e))}))))
@@ -876,7 +877,7 @@
       (validate-string-length! "value" value max-param-value-len))
     (let [meta-conn (db/ensure-meta-db (:db-dir config))
           edn-value (if (string? value)
-                      (try (edn/read-string value) (catch Exception _ value))
+                      (try (edn/read-string {:readers {}} value) (catch Exception _ value))
                       value)]
       (artifacts/set-setting! meta-conn key edn-value)
       (ok {:key key}))))

@@ -266,7 +266,7 @@
                         (log! "synthesize/tail" (subs text (max 0 (- (count text) 200)))))
             parsed    (parse-response text)]
         (if (and parsed (seq (:components parsed)))
-          (let [retract-tx (retraction-tx-data db)
+          (let [retract-tx (retraction-tx-data (d/db conn))
                 comp-txs   (components->tx-data (:components parsed))
                 n-files    (->> (:components parsed) (mapcat :files) distinct count)
                 prompt-hash (subs (sha256-hex template) 0 16)
