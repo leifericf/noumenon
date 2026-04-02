@@ -15,7 +15,7 @@
     "d3-quadtree": "^3.0.0",
     "d3-selection": "^3.0.0",
     "d3-zoom": "^3.0.0",
-    "electron-updater": "^6.0.0",
+    "electron-updater": "~6.0.0",
     "snabbdom": "3.5.1"
   },
   "devDependencies": {

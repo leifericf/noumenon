@@ -10,7 +10,7 @@
 
 | Bug | Commit First Seen | Status |
 |-----|-------------------|--------|
-| BUG-06 | bb174fd | Open |
+| BUG-06 | bb174fd | Fixed |
 | BUG-07 | bb174fd | Fixed |
 | BUG-08 | bb174fd | Open |
 | BUG-09 | bb174fd | Fixed |
@@ -43,7 +43,7 @@
 | BUG-N27 | 3432391 | Fixed |
 | BUG-N28 | 3432391 | Fixed |
 | BUG-N29 | 3432391 | Fixed |
-| BUG-N30 | 3432391 | Open |
+| BUG-N30 | 3432391 | Fixed |
 
 ---
 
@@ -52,10 +52,8 @@
 | severity | priority | fix_complexity | category | area | summary | repro | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | High | High | Easy | Core Functional Correctness | ui/state | `maybe-cache-file-card` caches partial cards — importers/authors/history never re-fetched | Click file node quickly after imports arrive; revisit node; observe importers/authors/history absent | BUG-N17: fix for N09 added caching calls in all 5 handlers but condition still only checks `:summary` and `:imports`; cards cached with 2/5 fields populated |
-| Normal | Medium | Easy | Reliability/Consistency | mcp/sessions | Race condition in `handle-introspect-start`: session count checked before `with-conn`, session registered after `with-conn` — two concurrent calls can both pass the `max-sessions` guard | Send two simultaneous `noumenon_introspect_start` calls when session count is `max-sessions - 1`; both pass the guard at line 754 and both register, exceeding the limit | BUG-N30: `src/noumenon/mcp.clj:753-787` — `sessions/running-count` check (line 754) and `sessions/register!` (line 787) are separated by `with-conn` which can take several seconds (auto-update). The HTTP layer has the identical pattern at `src/noumenon/http.clj:657-670`. Fix: move the guard and registration into a single atomic `compare-and-swap` on a counter, or re-check after `with-conn` |
-| Normal | Medium | Easy | Core Functional Correctness | benchmark | `:q37` deterministic-score returns `:skipped` on all non-empty-answer paths when no cross-directory imports exist | Run benchmark on repo with no cross-dir imports; any answer scores `:skipped` regardless of whether answer acknowledges absence | BUG-N25 (new at 3432391): `src/noumenon/benchmark.clj:439-442` — both branches of `(if (re-find …) {:score :skipped …} {:score :skipped …})` are identical; second branch should return `{:score :wrong …}` |
+| Normal | Medium | Easy | Core Functional Correctness | benchmark | `:q37` deterministic-score returns `:skipped` on all non-empty-answer paths when no cross-directory imports exist | Run benchmark on repo with no cross-dir imports; any answer scores `:skipped` regardless of whether answer acknowledges absence | BUG-N25: NEEDS_REPRO: Code at lines 429-432 already returns `:correct` and `:wrong` (not `:skipped`). The described bug pattern does not exist in the current code. Line numbers 439-442 referenced in the report are actually in `:q38`, not `:q37`. |
 | Normal | Medium | Easy | Core Functional Correctness | ui/state | Graph segment `graph-segment-cluster-ready` overwrites nodes/edges without staleness guard | Expand file; navigate away before all 4 concurrent requests complete; stale file's graph appears | BUG-N06: `state.cljs:721-726` — no guard that `file-path` still matches `(:graph/expanded-file state)` |
-| Normal | Medium | Trivial | Core Functional Correctness | ask-store | `set-feedback!` hardcodes `:negative` polarity — positive feedback never recorded | Submit feedback from UI or API; DB always stores `:negative` regardless of user intent | BUG-06: `src/noumenon/ask_store.clj:122-128` — `:ask.session/feedback :negative` is hardcoded; HTTP handler passes no polarity arg |
 | Normal | Low | Easy | Core Functional Correctness | ui/state | `action/ask-cancel` does not clear `:ask/steps` — stale reasoning shown on next run | Start ask; cancel mid-run; submit new question; old step traces visible in "Show reasoning" | BUG-08: `ui/src/noumenon/ui/state.cljs:377-379` |
 | Minor | Low | Easy | Observability/Operator Experience | imports | C/C++ enrichment skipped silently when compiler absent — no per-file error in tally | Import a repo with C/C++ files on system without gcc/clang; no warning that C files were skipped | BUG-N15: `src/noumenon/imports.clj:661-665` — `c-results` is nil when compiler absent; `into std-results nil` is safe but silent |
 
@@ -122,3 +120,6 @@ Partial fix applied: caching calls added to all five response handlers. However 
 
 ### BUG-N28 (fixed) — `ensure-meta-db` bypasses connection cache
 `db.clj:53-59` — now delegates to `get-or-create-conn` instead of calling `connect-and-ensure-schema` directly.
+
+### BUG-06 (fixed) — `set-feedback!` hardcoded `:negative` polarity
+`ask_store.clj:122-128` — now accepts a `polarity` parameter. HTTP handler reads `:feedback` from request body and validates it as `:positive` or `:negative`.

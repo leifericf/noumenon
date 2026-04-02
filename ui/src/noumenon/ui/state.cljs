@@ -7,6 +7,8 @@
 
 (defonce ^:private active-sse-cancels (atom {}))
 
+(defonce ^:private connection-timer (atom nil))
+
 (defonce app-state
   (atom {:route            :ask
          :db-name          nil
@@ -80,6 +82,9 @@
 (defmethod handle-event :action/db-loaded [state [_ data]]
   (let [had-db? (some? (:db-name state))
         new-db  (or (:db-name state) (:name (first data)))]
+    (when-let [t @connection-timer]
+      (js/clearTimeout t)
+      (reset! connection-timer nil))
     {:state (assoc state :databases/list data :databases/loading? false
                    :daemon/status :connected
                    :db-name new-db)
@@ -136,7 +141,7 @@
    :fx    [[:dispatch [:action/db-refresh]]]})
 
 (defmethod handle-event :action/db-new-repo-set [state [_ value]]
-  {:state (assoc state :databases/new-repo value)})
+  {:state (assoc state :databases/new-repo value :databases/error nil)})
 
 (defmethod handle-event :action/db-import-new [state _]
   (let [repo-path (:databases/new-repo state)]
@@ -168,10 +173,10 @@
   {:state (update state :ask/show-post-reasoning? not)})
 
 (defmethod handle-event :action/ask-clear [state _]
-  {:state (assoc state :ask/history [] :ask/last-steps nil :ask/steps [] :ask/result nil
-                 :ask/show-post-reasoning? false :ask/reasoning-expanded? false
-                 :ask/expanded-session nil :ask/expanded-detail nil
-                 :graph/focused-ids nil)})
+  {:state (assoc state :ask/query "" :ask/history [] :ask/last-steps nil :ask/steps []
+                 :ask/result nil :ask/show-post-reasoning? false
+                 :ask/reasoning-expanded? false :ask/expanded-session nil
+                 :ask/expanded-detail nil :graph/focused-ids nil)})
 
 (defmethod handle-event :action/ask-panel-move [state [_ {:keys [x y]}]]
   (let [x (max 0 (min x (- js/window.innerWidth 640)))
@@ -424,12 +429,8 @@
    :fx    [[:sse/cancel "/api/ask"]]})
 
 (defmethod handle-event :action/ask-error [state [_ error]]
-  (let [query (:ask/query state)]
-    {:state (-> state
-                (assoc :ask/loading? false :ask/result nil)
-                (update :ask/history conj {:question query
-                                           :answer (str "**Error:** " error)}))
-     :fx    [[:dispatch [:action/toast {:message (str "Ask failed: " error) :type :error}]]]}))
+  {:state (assoc state :ask/loading? false :ask/result nil)
+   :fx    [[:dispatch [:action/toast {:message (str "Ask failed: " error) :type :error}]]]})
 
 (defmethod handle-event :action/select-db-value [state [_ db-name]]
   {:state (assoc state :db-name db-name
@@ -1112,8 +1113,15 @@
    :fx    [[:http/get "/api/settings"
             {:on-ok :action/settings-loaded}]]})
 
+(defn- os-preferred-theme []
+  (if (and (exists? js/window)
+           (.-matchMedia js/window)
+           (.-matches (.matchMedia js/window "(prefers-color-scheme: dark)")))
+    :dark
+    :light))
+
 (defmethod handle-event :action/settings-loaded [state [_ settings]]
-  (let [theme    (get settings "theme" :dark)
+  (let [theme    (get settings "theme" (os-preferred-theme))
         sidebar  (get settings "sidebar-collapsed" false)
         db-name  (get settings "default-db")]
     {:state (assoc state
@@ -1288,7 +1296,9 @@
   (dispatch! [:action/backends-load])
   (dispatch! [:action/settings-load])
   (dispatch! [:action/db-refresh])
-  (js/setTimeout #(dispatch! [:action/connection-timeout]) 10000)
+  (when-let [t @connection-timer] (js/clearTimeout t))
+  (reset! connection-timer
+          (js/setTimeout #(dispatch! [:action/connection-timeout]) 10000))
   ;; Load graph immediately — it's always visible
   (dispatch! [:action/ask-load-history])
   (dispatch! [:action/graph-load]))

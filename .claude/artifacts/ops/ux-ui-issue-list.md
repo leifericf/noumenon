@@ -88,7 +88,7 @@
 
 ---
 
-### UX-009: SSE error from `/api/ask` appends a broken-markdown error to history
+### ~~UX-009~~ (Fixed): SSE error from `/api/ask` appends a broken-markdown error to history
 - **Severity**: Medium
 - **File**: `/Users/leif/Code/noumenon/ui/src/noumenon/ui/state.cljs:405-411`
 - **Description**: On SSE error, the answer is set to `(str "**Error:** " error)`. This is appended to `ask/history` and rendered by `history-item` via `render-markdown`. The bold markdown renders correctly, but the raw error string (e.g. `"HTTP 500: Internal server error"`) is presented in the same typography as a normal answer, mixed with a toast notification. The user receives duplicate error signals of inconsistent severity.
@@ -100,7 +100,7 @@
 
 ---
 
-### UX-011: History table `<tr>` uses position index as React key after `reverse`
+### ~~UX-011~~ (Fixed): History table `<tr>` uses position index as React key after `reverse`
 - **Severity**: Low
 - **File**: `/Users/leif/Code/noumenon/ui/src/noumenon/ui/views/ask.cljs:493`
 - **Description**: `(for [[i item] (map-indexed vector (reverse history))] [:div {:key i} ...])` — keys are positional indices on a reversed collection. Each time a new question is answered, `history` grows and the entire reversed collection shifts every index by one. Every existing history entry remounts, triggering full markdown re-renders for all previous answers.
@@ -190,7 +190,7 @@
 
 ---
 
-### UX-021: No loading skeleton for the Ask panel's past sessions section
+### ~~UX-021~~ (Fixed): No loading skeleton for the Ask panel's past sessions section
 - **Severity**: Low
 - **File**: `/Users/leif/Code/noumenon/ui/src/noumenon/ui/views/ask.cljs:515-545`
 - **Description**: `past-questions-panel` conditionally renders when `(seq past-sessions)`. On initial load, `:ask/past-sessions` is `nil` (not `[]`), so `(seq nil)` is falsy and nothing renders until the `/api/ask/sessions` response arrives. There is no loading skeleton or "Loading history..." placeholder during the fetch.
@@ -248,6 +248,7 @@
 - **Evidence code**: Completions dropdown: `{:position "absolute" :top "100%" :max-height "240px" :overflow-y "auto"}`. Ask panel: `{:max-height "75vh" :overflow "visible"}`.
 - **Impact**: On viewport heights below ~600px, the completions dropdown is cut off at the bottom of the viewport.
 - **Recommendation**: Detect available space below the input and if less than 240px, flip the dropdown to open upward (`bottom: 100%` instead of `top: 100%`).
+- **DEFERRED 2026-04-02**: Requires DOM measurement at render time (getBoundingClientRect on the input element). Replicant has no ref/useRef equivalent -- needs architectural decision on how to measure element positions (lifecycle hook, effect, or portal approach).
 
 ---
 
@@ -418,13 +419,6 @@
 
 ---
 
-### UX-045: Shell app-shell renders the ask panel unconditionally — even on non-Ask routes (Databases, Schema, History, etc.) the ask panel floats over the content
-- **Severity**: High
-- **File**: `/Users/leif/Code/noumenon/ui/src/noumenon/ui/views/shell.cljs:273-381`
-- **Description**: The `app-shell` function always renders the ask panel `<div id="ask-panel">` regardless of the current `:route`. On the Databases, Schema, History, Benchmark, and Introspect views (which are rendered inside a sidebar layout in `core.cljs`), the ask panel is not present — those views are rendered via a different root. However on the Graph/Ask view shell, the ask panel is always shown even when the user is at the graph breadcrumb level with no ask intent. There is no route-aware hide/show logic for the ask panel on the shell.
-- **Evidence**: `(defn app-shell [state] ... [:div {:id "ask-panel" ...} ...])` — no `(when (= :ask (:route state)) ...)` guard.
-- **Impact**: The floating ask panel overlaps graph navigation on the shell view even when the user has not initiated a question, reducing available space for the graph visualization.
-- **Recommendation**: Add a toggle to minimize/hide the ask panel (beyond the existing drag), or narrow it to an icon-only collapsed state when the user has not started a query and is focused on the graph. A hide button (`X`) on the panel itself distinct from the drag handle would suffice.
 
 ---
 

@@ -223,6 +223,21 @@
          (when (= "Enter" (.-key dom-event))
            (state/dispatch! [:action/db-import-new]))
 
+         :action/schema-select-attr-key
+         (when (#{"Enter" " "} (.-key dom-event))
+           (.preventDefault dom-event)
+           (state/dispatch! [:action/schema-select-attr (second handler-data)]))
+
+         :action/schema-select-query-key
+         (when (#{"Enter" " "} (.-key dom-event))
+           (.preventDefault dom-event)
+           (state/dispatch! [:action/schema-select-query (second handler-data)]))
+
+         :action/bench-toggle-select-key
+         (when (#{"Enter" " "} (.-key dom-event))
+           (.preventDefault dom-event)
+           (state/dispatch! [:action/bench-toggle-select (second handler-data)]))
+
          :action/query-history-select-input
          (let [v (extract-value dom-event)]
            (when (seq v)

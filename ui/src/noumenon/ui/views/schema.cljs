@@ -9,7 +9,11 @@
 
 (defn- attr-item [{:keys [ident value-type cardinality unique?]} selected?]
   [:div {:key (str ident)
-         :on {:click [:action/schema-select-attr ident]}
+         :tabindex 0
+         :role "option"
+         :aria-selected selected?
+         :on {:click [:action/schema-select-attr ident]
+              :keydown [:action/schema-select-attr-key ident]}
          :style {:padding "6px 12px"
                  :cursor "pointer"
                  :border-radius (:radius styles/tokens)
@@ -52,23 +56,28 @@
                                     (str/includes? (str (:ident %)) filter-text)))
                        (group-by #(namespace (:ident %)))
                        (sort-by first))]
-     (for [[ns-name ns-attrs] filtered]
-       [:div {:key ns-name :style {:margin-bottom "12px"}}
-        [:div {:style {:font-size "11px"
-                       :font-weight 600
-                       :color (:text-muted styles/tokens)
-                       :text-transform "uppercase"
-                       :padding "4px 12px"
-                       :letter-spacing "0.5px"}}
-         (or ns-name "db")]
-        (for [attr (sort-by :ident ns-attrs)]
-          (attr-item attr (= (:ident attr) selected-attr)))]))])
+     [:div {:role "listbox" :aria-label "Schema attributes"}
+      (for [[ns-name ns-attrs] filtered]
+        [:div {:key ns-name :style {:margin-bottom "12px"}}
+         [:div {:style {:font-size "11px"
+                        :font-weight 600
+                        :color (:text-muted styles/tokens)
+                        :text-transform "uppercase"
+                        :padding "4px 12px"
+                        :letter-spacing "0.5px"}}
+          (or ns-name "db")]
+         (for [attr (sort-by :ident ns-attrs)]
+           (attr-item attr (= (:ident attr) selected-attr)))])])])
 
 ;; --- Named queries panel ---
 
 (defn- query-item [{:keys [name description inputs]} selected?]
   [:div {:key name
-         :on {:click [:action/schema-select-query name]}
+         :tabindex 0
+         :role "option"
+         :aria-selected selected?
+         :on {:click [:action/schema-select-query name]
+              :keydown [:action/schema-select-query-key name]}
          :style {:padding "8px 12px"
                  :cursor "pointer"
                  :border-radius (:radius styles/tokens)
@@ -99,8 +108,9 @@
                   :padding "4px 12px"
                   :margin-bottom "8px"}}
     "Named Queries"]
-   (for [q queries]
-     (query-item q (= (:name q) selected-query)))])
+   [:div {:role "listbox" :aria-label "Named queries"}
+    (for [q queries]
+      (query-item q (= (:name q) selected-query)))]])
 
 ;; --- Results panel ---
 

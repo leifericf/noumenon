@@ -460,7 +460,7 @@
     (if-not (seq paths)
       (if (re-find #"(?i)(no|none|zero)" answer-text)
         {:score :skipped :reasoning "No cross-directory imports in repo — question not applicable"}
-        {:score :skipped :reasoning "No cross-directory imports in repo — question not applicable"})
+        {:score :wrong :reasoning "No cross-directory imports but answer did not acknowledge their absence"})
       (top-n-match-score (vec paths) answer-text (count paths)
                          "cross-directory import sources" path-match?))))
 
