@@ -55,8 +55,10 @@
   (let [canonical (.getCanonicalPath (java.io.File. (str repo-path)))
         raw       (-> canonical (str/replace #"/+$" "") (str/split #"/") last)
         sanitized (str/replace raw #"[^a-zA-Z0-9\-_.]" "")]
-    (when (and (seq sanitized) (not (re-matches #"\.+" sanitized)))
-      sanitized)))
+    (if (and (seq sanitized) (not (re-matches #"\.+" sanitized)))
+      sanitized
+      (throw (ex-info "Cannot derive database name from repo path"
+                      {:repo-path repo-path :basename raw :sanitized sanitized})))))
 
 (defn read-version
   "Read project version from version.edn on classpath."

@@ -29,7 +29,9 @@
   (is (some? (util/derive-db-name ".."))))
 
 (deftest derive-db-name-rejects-empty-after-sanitize
-  (is (nil? (util/derive-db-name "/path/to/$$$"))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"Cannot derive database name"
+                        (util/derive-db-name "/path/to/$$$"))))
 
 (deftest resolve-db-dir-default
   (let [result (util/resolve-db-dir {})]
