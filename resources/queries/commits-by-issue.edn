@@ -9,4 +9,5 @@
          [?commit :commit/author ?person]
          [?person :person/name ?name]
          [?commit :commit/authored-at ?date]]
+ :inputs [:ref]
  :params {"ref" "Issue reference to search for, e.g. #123 or PROJ-456"}}
