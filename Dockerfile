@@ -2,8 +2,9 @@
 FROM eclipse-temurin:21-jdk-alpine AS build
 WORKDIR /build
 RUN apk add --no-cache curl bash
-# Download Clojure installer to a file and verify before executing
+# Download Clojure installer and verify checksum before executing
 RUN curl -sSL -o /tmp/clj-install.sh https://download.clojure.org/install/linux-install-1.12.0.1530.sh \
+    && echo "2a113e3a4f1005e05f4d6a6dee24ca317b0115cdd7e6ca6155a76f5ffa5ba35b  /tmp/clj-install.sh" | sha256sum -c - \
     && bash /tmp/clj-install.sh \
     && rm /tmp/clj-install.sh
 COPY deps.edn build.clj ./
