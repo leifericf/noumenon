@@ -53,7 +53,6 @@
                       :color (:accent styles/tokens)}}
        "Noumenon"])
     [:button {:on {:click [:action/sidebar-toggle]}
-              :aria-label (if collapsed? "Expand sidebar" "Collapse sidebar")
               :style {:background "none"
                       :border "none"
                       :color (:text-muted styles/tokens)
@@ -72,7 +71,6 @@
      [:select {:on {:change [:action/backend-switch-input]}
                :value (or active-backend "")
                :title "Active backend"
-               :aria-label "Active backend"
                :style {:margin "4px 8px"
                        :padding "4px 8px"
                        :background (:bg-tertiary styles/tokens)
@@ -92,7 +90,6 @@
    ;; Theme toggle
    [:button {:on {:click [:action/theme-toggle]}
              :title (if (= theme :light) "Switch to dark" "Switch to light")
-             :aria-label (if (= theme :light) "Switch to dark" "Switch to light")
              :style {:background "none"
                      :border "none"
                      :color (:text-muted styles/tokens)

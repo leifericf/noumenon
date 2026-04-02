@@ -127,7 +127,7 @@
   [text]
   (let [cleaned (analyze/strip-markdown-fences text)]
     (try
-      (let [parsed (edn/read-string {:readers {}} cleaned)]
+      (let [parsed (edn/read-string cleaned)]
         (cond
           (map? parsed)
           [parsed]

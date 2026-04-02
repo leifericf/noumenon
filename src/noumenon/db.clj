@@ -52,10 +52,9 @@
 
 (defn ensure-meta-db
   "Connect to the noumenon-internal meta database, ensure schema, and seed
-   artifacts from classpath if needed. Returns the connection.
-   Uses conn-cache so repeated calls reuse the same connection."
+   artifacts from classpath if needed. Returns the connection."
   [storage-dir]
-  (let [conn (get-or-create-conn storage-dir "noumenon-internal")]
+  (let [conn (connect-and-ensure-schema storage-dir "noumenon-internal")]
     (artifacts/seed-from-classpath! conn)
     conn))
 

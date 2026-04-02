@@ -15,13 +15,10 @@
                 selected-ids]
   (let [selected? (contains? selected-ids id)]
     [:tr {:key id
-          :tabindex 0
-          :aria-selected selected?
           :style {:border-bottom (str "1px solid " (:border styles/tokens))
                   :background (when selected? (str (:accent styles/tokens) "10"))
                   :cursor "pointer"}
-          :on {:click [:action/bench-toggle-select id]
-               :keydown [:action/bench-toggle-select-key id]}}
+          :on {:click [:action/bench-toggle-select id]}}
      [:td {:style {:padding "8px 12px" :font-family (:font-mono styles/tokens)
                    :font-size "12px"}}
       (subs (str id) 0 (min 12 (count (str id))))]
@@ -53,54 +50,40 @@
       (for [run runs]
         (run-row run selected-ids))]]))
 
-(defn- compare-panel [{:keys [compare-data selected-ids]}]
+(defn- compare-panel [{:keys [compare-data]}]
   (when compare-data
-    (let [[id-a id-b] (seq selected-ids)
-          abbrev #(when % (subs (str %) 0 (min 8 (count (str %)))))]
-      (card/card {:style {:margin-top "16px"}}
-                 (card/card-header
-                  (if (and id-a id-b)
-                    (str "Comparison: " (abbrev id-a) " vs " (abbrev id-b))
-                    "Comparison"))
-                 (cond
-                   (string? compare-data)
-                   [:div {:style {:color (:danger styles/tokens) :padding "12px"
-                                  :font-size "13px"}}
-                    compare-data]
-
-                   (and (map? compare-data) (seq compare-data))
-                   [:table {:style {:width "100%" :border-collapse "collapse" :font-size "13px"}}
-                    [:thead
-                     [:tr {:style {:border-bottom (str "1px solid " (:border styles/tokens))}}
-                      (for [label ["Question/Layer"
-                                   (if id-a (str "Run " (abbrev id-a)) "Run A")
-                                   (if id-b (str "Run " (abbrev id-b)) "Run B")
-                                   "Delta"]]
-                        [:th {:key label
-                              :style {:text-align "left" :padding "8px 12px"
-                                      :color (:text-secondary styles/tokens) :font-weight 500
-                                      :font-size "12px" :text-transform "uppercase"}}
-                         label])]]
-                    [:tbody
-                     (for [[k v] (sort-by key compare-data)]
-                       (let [score-a (:score-a v)
-                             score-b (:score-b v)
-                             delta   (or (:delta v) (when (and score-a score-b) (- score-b score-a)))]
-                         [:tr {:key (str k)
-                               :style {:border-bottom (str "1px solid " (:border styles/tokens))}}
-                          [:td {:style {:padding "8px 12px"}} (str k)]
-                          [:td {:style {:padding "8px 12px"}} (format-score score-a)]
-                          [:td {:style {:padding "8px 12px"}} (format-score score-b)]
-                          [:td {:style {:padding "8px 12px"
-                                        :color (cond (and delta (pos? delta)) (:success styles/tokens)
-                                                     (and delta (neg? delta)) (:danger styles/tokens)
-                                                     :else (:text-muted styles/tokens))}}
-                           (when delta
-                             (str (when (pos? delta) "+") (format-score delta)))]]))]]
-                   :else
-                   [:div {:style {:color (:warning styles/tokens) :padding "12px"
-                                  :font-size "13px"}}
-                    "Unexpected response format."])))))
+    (card/card {:style {:margin-top "16px"}}
+               (card/card-header "Comparison")
+               (if (and (map? compare-data) (seq compare-data))
+                 [:table {:style {:width "100%" :border-collapse "collapse" :font-size "13px"}}
+                  [:thead
+                   [:tr {:style {:border-bottom (str "1px solid " (:border styles/tokens))}}
+                    (for [label ["Question/Layer" "Run A" "Run B" "Delta"]]
+                      [:th {:key label
+                            :style {:text-align "left" :padding "8px 12px"
+                                    :color (:text-secondary styles/tokens) :font-weight 500
+                                    :font-size "12px" :text-transform "uppercase"}}
+                       label])]]
+                  [:tbody
+                   (for [[k v] (sort-by key compare-data)]
+                     (let [score-a (:score-a v)
+                           score-b (:score-b v)
+                           delta   (or (:delta v) (when (and score-a score-b) (- score-b score-a)))]
+                       [:tr {:key (str k)
+                             :style {:border-bottom (str "1px solid " (:border styles/tokens))}}
+                        [:td {:style {:padding "8px 12px"}} (str k)]
+                        [:td {:style {:padding "8px 12px"}} (format-score score-a)]
+                        [:td {:style {:padding "8px 12px"}} (format-score score-b)]
+                        [:td {:style {:padding "8px 12px"
+                                      :color (cond (and delta (pos? delta)) (:success styles/tokens)
+                                                   (and delta (neg? delta)) (:danger styles/tokens)
+                                                   :else (:text-muted styles/tokens))}}
+                         (when delta
+                           (str (when (pos? delta) "+") (format-score delta)))]]))]]
+                 [:div {:style {:font-family (:font-mono styles/tokens)
+                                :font-size "13px"
+                                :white-space "pre-wrap"}}
+                  (pr-str compare-data)]))))
 
 (defn benchmark-view [state]
   (let [{:keys [bench/runs bench/loading? bench/running?
@@ -140,4 +123,4 @@
 
        :else
        (runs-table runs selected))
-     (compare-panel {:compare-data compare-data :selected-ids selected})]))
+     (compare-panel {:compare-data compare-data})]))

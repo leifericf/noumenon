@@ -69,25 +69,19 @@
                       "Refresh")]
      ;; Add repo
      [:div {:style {:display "flex" :gap "8px" :margin-bottom "20px"}}
-      (let [repo-val (or (:databases/new-repo state) "")
-            blank? (empty? repo-val)]
-        [:input {:type "text"
-                 :placeholder "Path to git repository..."
-                 :value repo-val
-                 :aria-invalid (when error true)
-                 :on {:input [:action/db-new-repo-input]
-                      :keydown [:action/db-new-repo-keydown]}
-                 :style {:flex 1
-                         :padding "10px 14px"
-                         :background (:bg-secondary styles/tokens)
-                         :border (str "1px solid "
-                                      (if error (:danger styles/tokens) (:border styles/tokens)))
-                         :border-radius (:radius styles/tokens)
-                         :color (:text-primary styles/tokens)
-                         :font-size "14px"}}])
-      (button/primary {:on {:click [:action/db-import-new]}
-                       :disabled? (empty? (or (:databases/new-repo state) ""))}
-                      "Import")]
+      [:input {:type "text"
+               :placeholder "Path to git repository..."
+               :value (or (:databases/new-repo state) "")
+               :on {:input [:action/db-new-repo-input]
+                    :keydown [:action/db-new-repo-keydown]}
+               :style {:flex 1
+                       :padding "10px 14px"
+                       :background (:bg-secondary styles/tokens)
+                       :border (str "1px solid " (:border styles/tokens))
+                       :border-radius (:radius styles/tokens)
+                       :color (:text-primary styles/tokens)
+                       :font-size "14px"}}]
+      (button/primary {:on {:click [:action/db-import-new]}} "Import")]
      (when error
        (card/card {:style {:background "#f8514920" :border-color (:danger styles/tokens)
                            :margin-bottom "16px"}}

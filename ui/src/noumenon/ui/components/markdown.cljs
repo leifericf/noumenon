@@ -108,23 +108,6 @@
     :else                          [:p {:style {:margin "4px 0"}}
                                     (process-inline line)]))
 
-(defn- collect-list-items
-  "Collect consecutive list items of the same type from the front of lines.
-   Returns [items remaining-lines]."
-  [first-line rest-lines]
-  (let [ordered? (ordered-item? first-line)]
-    (loop [items [first-line] ls rest-lines]
-      (if (and (seq ls)
-               (list-item? (first ls))
-               (= ordered? (ordered-item? (first ls))))
-        (recur (conj items (first ls)) (rest ls))
-        [items ls ordered?]))))
-
-(defn- render-list [items ordered?]
-  (let [tag (if ordered? :ol :ul)]
-    (into [tag {:style {:margin "4px 0 4px 16px" :padding-left "16px"}}]
-          (map parse-list-item items))))
-
 (defn render-markdown
   "Simple markdown to hiccup. Handles headers, code blocks, lists, inline code."
   [text]
@@ -156,11 +139,22 @@
                     in-code?
                     (recur (rest ls) result true code-lang (conj code-lines line))
 
+               ;; Normal line
                     ;; List items — collect consecutive items
                     (list-item? line)
-                    (let [[items remaining ordered?] (collect-list-items line (rest ls))]
+                    (let [ordered? (ordered-item? line)
+                          [items remaining]
+                          (loop [items [line] rest-lines (rest ls)]
+                            (if (and (seq rest-lines)
+                                     (list-item? (first rest-lines))
+                                     (= ordered? (ordered-item? (first rest-lines))))
+                              (recur (conj items (first rest-lines)) (rest rest-lines))
+                              [items rest-lines]))
+                          tag (if ordered? :ol :ul)]
                       (recur remaining
-                             (conj result (render-list items ordered?))
+                             (conj result (into [tag {:style {:margin "4px 0 4px 16px"
+                                                              :padding-left "16px"}}]
+                                                (map parse-list-item items)))
                              false nil []))
 
                     ;; Normal line

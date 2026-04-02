@@ -22,7 +22,6 @@
 (def ^:private hover-base-distance 20)
 (def ^:private min-zoom-scale 0.1)
 (def ^:private graph-init-delay-ms 100)
-(defonce ^:private draw-fn-atom (atom nil))
 
 (defn- create-draw-fn
   "Create a draw callback that renders the current graph state."
@@ -114,9 +113,8 @@
       (draw-fn))))
 
 (defn- setup-graph-redraw-watch!
-  "Register once: redraw the graph canvas when relevant state keys change.
-   Reads the current draw-fn from draw-fn-atom so the watch never goes stale."
-  []
+  "Redraw the graph canvas when relevant state keys change."
+  [draw-fn]
   (add-watch state/app-state :graph-redraw
              (fn [_ _ old new]
                (when (or (not= (:graph/selected old) (:graph/selected new))
@@ -124,8 +122,7 @@
                          (not= (:graph/depth old) (:graph/depth new))
                          (not= (:graph/expanded-comp old) (:graph/expanded-comp new))
                          (not= (:graph/expanded-file old) (:graph/expanded-file new)))
-                 (when-let [f @draw-fn-atom]
-                   (f))))))
+                 (draw-fn)))))
 
 (defn- maybe-init-graph!
   "When graph nodes/edges change, rebuild simulation and canvas."
@@ -160,7 +157,7 @@
                (.addEventListener fresh "mousemove"
                                   (partial handle-canvas-mousemove fresh sim hover-atom
                                            transform-atom draw-fn))
-               (reset! draw-fn-atom draw-fn)))))
+               (setup-graph-redraw-watch! draw-fn)))))
        graph-init-delay-ms))))
 
 (defn- extract-value [dom-event]
@@ -223,21 +220,6 @@
          (when (= "Enter" (.-key dom-event))
            (state/dispatch! [:action/db-import-new]))
 
-         :action/schema-select-attr-key
-         (when (#{"Enter" " "} (.-key dom-event))
-           (.preventDefault dom-event)
-           (state/dispatch! [:action/schema-select-attr (second handler-data)]))
-
-         :action/schema-select-query-key
-         (when (#{"Enter" " "} (.-key dom-event))
-           (.preventDefault dom-event)
-           (state/dispatch! [:action/schema-select-query (second handler-data)]))
-
-         :action/bench-toggle-select-key
-         (when (#{"Enter" " "} (.-key dom-event))
-           (.preventDefault dom-event)
-           (state/dispatch! [:action/bench-toggle-select (second handler-data)]))
-
          :action/query-history-select-input
          (let [v (extract-value dom-event)]
            (when (seq v)
@@ -283,8 +265,13 @@
                     h (.-clientHeight parent)]
                 (set! (.-width canvas) w)
                 (set! (.-height canvas) h)
-                (when-let [f @draw-fn-atom]
-                  (f))))))]
+                (when-let [sim @graph/simulation-atom]
+                  (grender/draw! canvas sim
+                                 {:selected-id    (:graph/selected @state/app-state)
+                                  :focused-ids    (:graph/focused-ids @state/app-state)
+                                  :depth          (:graph/depth @state/app-state)
+                                  :expanded-comp  (:graph/expanded-comp @state/app-state)
+                                  :expanded-file  (:graph/expanded-file @state/app-state)}))))))]
     (.addEventListener js/window "resize" resize-and-redraw!)))
 
 (defn- setup-keyboard-shortcuts!
@@ -336,7 +323,6 @@
   (styles/inject-styles!)
   (skeleton/inject-keyframes!)
   (setup-replicant-dispatcher!)
-  (setup-graph-redraw-watch!)
   (setup-graph-init-watch!)
   (setup-resize-handler!)
   (setup-keyboard-shortcuts!)

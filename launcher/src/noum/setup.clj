@@ -117,7 +117,7 @@ set -euo pipefail
 INPUT=$(cat)
 
 TOOL_NAME=$(echo \"$INPUT\" | jq -r '.tool_name // empty')
-SESSION_ID=$(echo \"$INPUT\" | jq -r '.session_id // empty' | tr -dc 'a-zA-Z0-9_-' | head -c 128)
+SESSION_ID=$(echo \"$INPUT\" | jq -r '.session_id // empty')
 TRANSCRIPT=$(echo \"$INPUT\" | jq -r '.transcript_path // empty')
 
 [ -z \"$TOOL_NAME\" ] && exit 0

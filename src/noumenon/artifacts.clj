@@ -58,9 +58,9 @@
     (when (:artifact.query/query-edn entity)
       {:name        query-name
        :description (:artifact.query/description entity)
-       :query       (edn/read-string {:readers {}} (:artifact.query/query-edn entity))
+       :query       (edn/read-string (:artifact.query/query-edn entity))
        :uses-rules  (:artifact.query/uses-rules entity false)
-       :inputs      (some-> (:artifact.query/inputs entity) (->> (edn/read-string {:readers {}})))})))
+       :inputs      (some-> (:artifact.query/inputs entity) edn/read-string)})))
 
 (defn list-active-query-names
   "Return sorted vector of active query names from Datomic."
@@ -79,7 +79,7 @@
   [meta-db]
   (some-> (d/pull meta-db '[:artifact.rules/edn] [:artifact.rules/id "default"])
           :artifact.rules/edn
-          (->> (edn/read-string {:readers {}}))))
+          edn/read-string))
 
 (defn load-prompt
   "Load a prompt template by name from Datomic. Returns the template string or nil.
