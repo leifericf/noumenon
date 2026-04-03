@@ -2,7 +2,7 @@
 
 **Precise, grounded answers about your codebase.**
 
-Noumenon compiles git repositories into a [Datomic](https://www.datomic.com) knowledge graph — git objects, code segments, files, and architectural components — so AI agents answer codebase questions more accurately, faster, and cheaper than scanning raw source into context windows.
+Noumenon compiles repositories into a [Datomic](https://www.datomic.com) knowledge graph — commits, code segments, files, and architectural components — so AI agents answer codebase questions more accurately, faster, and cheaper than scanning raw source into context windows. Supports Git repositories and Perforce depots (via [git-p4](https://git-scm.com/docs/git-p4)).
 
 See [noumenon.leifericf.com](https://noumenon.leifericf.com) for an overview.
 

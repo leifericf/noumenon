@@ -446,3 +446,67 @@
   (testing "blocked-address? catches IPv4-mapped IPv6 private"
     (let [addr (java.net.InetAddress/getByName "::ffff:192.168.1.1")]
       (is (#'git/blocked-address? addr)))))
+
+;; --- Perforce (git-p4) pure function tests ---
+
+(deftest p4-depot-path-detection
+  (testing "detects depot paths"
+    (is (git/p4-depot-path? "//depot/project/main/..."))
+    (is (git/p4-depot-path? "//stream/main/..."))
+    (is (git/p4-depot-path? "//depot/game/Source/...")))
+  (testing "rejects non-depot paths"
+    (is (not (git/p4-depot-path? "/some/local/path")))
+    (is (not (git/p4-depot-path? "https://github.com/foo/bar")))
+    (is (not (git/p4-depot-path? "git@github.com:foo/bar.git")))
+    (is (not (git/p4-depot-path? nil)))
+    (is (not (git/p4-depot-path? "")))))
+
+(deftest p4-depot-to-clone-name
+  (testing "derives clone directory name from depot path"
+    (is (= "ProjectA-main" (git/p4-depot->clone-name "//depot/ProjectA/main/...")))
+    (is (= "main" (git/p4-depot->clone-name "//stream/main/...")))
+    (is (= "game-Source" (git/p4-depot->clone-name "//depot/game/Source/...")))
+    (is (= "project" (git/p4-depot->clone-name "//depot/project/")))
+    (is (= "depot" (git/p4-depot->clone-name "//depot/..."))
+        "single-level depot falls back to depot name")))
+
+(deftest p4-clone-path-derivation
+  (testing "builds local clone path from depot path"
+    (is (= "data/repos/ProjectA-main"
+           (git/p4-clone-path "//depot/ProjectA/main/...")))))
+
+(deftest p4-clone-detection
+  (testing "non-p4 repo returns false"
+    (is (not (git/p4-clone? repo-path)))))
+
+(deftest p4-exclude-patterns-defaults
+  (testing "default excludes are loaded from EDN resource"
+    (let [patterns (git/p4-exclude-patterns {})]
+      (is (pos? (count patterns)))
+      (is (some #(= "*.fbx" %) patterns))
+      (is (some #(= "*.uasset" %) patterns))
+      (is (some #(= "*.png" %) patterns)))))
+
+(deftest p4-exclude-patterns-no-defaults
+  (testing "no-default-excludes? returns empty"
+    (is (empty? (git/p4-exclude-patterns {:no-default-excludes? true})))))
+
+(deftest p4-exclude-patterns-extra
+  (testing "extra excludes are appended"
+    (let [base  (count (git/p4-exclude-patterns {}))
+          extra (count (git/p4-exclude-patterns {:extra-excludes ["*.custom"]}))]
+      (is (= (inc base) extra)))))
+
+(deftest p4-exclude-patterns-includes
+  (testing "includes remove matching patterns"
+    (let [with-png    (git/p4-exclude-patterns {})
+          without-png (git/p4-exclude-patterns {:includes #{"*.png"}})]
+      (is (some #(= "*.png" %) with-png))
+      (is (not (some #(= "*.png" %) without-png)))
+      (is (= (dec (count with-png)) (count without-png))))))
+
+(deftest p4-exclude-patterns-combined
+  (testing "no defaults + extra excludes works"
+    (is (= ["*.foo" "*.bar"]
+           (git/p4-exclude-patterns {:no-default-excludes? true
+                                     :extra-excludes ["*.foo" "*.bar"]})))))

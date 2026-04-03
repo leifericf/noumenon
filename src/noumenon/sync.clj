@@ -237,6 +237,11 @@
      :model-id    — model identifier for analysis
      :concurrency — worker count for analyze/enrich"
   [conn repo-path repo-uri opts]
+  ;; Auto-sync git-p4 clones before checking for changes
+  (when (and (.isDirectory (java.io.File. (str repo-path)))
+             (git/p4-clone? repo-path))
+    (log! "Detected git-p4 clone, syncing from Perforce...")
+    (git/p4-sync! repo-path))
   (let [start-ms (System/currentTimeMillis)
         db       (d/db conn)
         stored   (stored-head-sha db)

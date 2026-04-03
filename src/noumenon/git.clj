@@ -1,5 +1,6 @@
 (ns noumenon.git
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
             [datomic.client.api :as d]
@@ -396,3 +397,126 @@
        {:commits-imported (count to-import)
         :commits-skipped  skipped
         :elapsed-ms       elapsed}))))
+
+;; --- Perforce via git-p4 ---
+
+(defn p4-depot-path?
+  "True if s looks like a Perforce depot path (starts with //)."
+  [s]
+  (boolean (and (string? s) (str/starts-with? s "//"))))
+
+(defn p4-available?
+  "True if git-p4 is available (git p4 subcommand works)."
+  []
+  (zero? (:exit (shell/sh "git" "p4" "--help"))))
+
+(defn p4-clone?
+  "True if repo-path is a git-p4 clone (has p4 remote refs)."
+  [repo-path]
+  (let [p4-refs (io/file repo-path ".git" "refs" "remotes" "p4")]
+    (and (.isDirectory p4-refs)
+         (pos? (count (.list p4-refs))))))
+
+(defn p4-depot->clone-name
+  "Derive a local clone directory name from a depot path.
+   //depot/ProjectA/main/... -> ProjectA-main
+   //stream/main/...         -> main
+   //depot/...               -> depot"
+  [depot-path]
+  (let [segments (-> depot-path
+                     (str/replace #"^//" "")
+                     (str/replace #"/\.\.\.$" "")
+                     (str/replace #"/$" "")
+                     (str/split #"/"))
+        ;; Use sub-path segments if available, else fall back to depot name
+        name-parts (if (> (count segments) 1) (rest segments) segments)]
+    (-> (str/join "-" name-parts)
+        (str/replace #"[^a-zA-Z0-9\-_.]" ""))))
+
+(defn p4-clone-path
+  "Local clone path for a depot path: data/repos/<derived-name>."
+  [depot-path]
+  (str "data/repos/" (p4-depot->clone-name depot-path)))
+
+(def ^:private default-p4-excludes
+  "Default binary exclusion patterns, loaded from p4-excludes.edn."
+  (delay
+    (some-> (io/resource "p4-excludes.edn") slurp edn/read-string)))
+
+(defn p4-exclude-patterns
+  "Compute the final exclusion pattern list given options.
+   Options:
+     :no-default-excludes?  — skip default patterns (default false)
+     :extra-excludes        — additional patterns to exclude (vector of strings)
+     :includes              — patterns to remove from excludes (vector of strings)"
+  [{:keys [no-default-excludes? extra-excludes includes]}]
+  (let [defaults (when-not no-default-excludes?
+                   (->> (vals @default-p4-excludes) (apply concat)))
+        all      (concat defaults extra-excludes)
+        include-set (set includes)]
+    (->> all (remove include-set) distinct vec)))
+
+(defn- p4-exclude-args
+  "Build -/ arguments for git p4 clone from a list of exclusion patterns."
+  [patterns]
+  (mapcat (fn [p] ["-/" p]) patterns))
+
+(defn validate-p4-depot-path!
+  "Validate a Perforce depot path. Must start with //, contain only safe chars,
+   and have at least one depot name segment. Throws on invalid input."
+  [depot-path]
+  (when-not (and (string? depot-path)
+                 (re-matches #"//[a-zA-Z0-9_\-./]+" depot-path)
+                 (not (str/includes? depot-path "..")))
+    (throw (ex-info "Invalid Perforce depot path"
+                    {:depot-path depot-path
+                     :message "Depot path must start with // and contain only alphanumeric, dash, underscore, dot, or slash characters"})))
+  (when-not (p4-available?)
+    (throw (ex-info "git-p4 is not available. Install git-p4 to use Perforce support."
+                    {:depot-path depot-path}))))
+
+(defn p4-clone!
+  "Clone a Perforce depot path via git-p4 into target-dir.
+   Options:
+     :excludes             — override exclusion patterns (vector of strings)
+     :no-default-excludes? — skip default binary excludes
+     :extra-excludes       — additional patterns to exclude
+     :includes             — patterns to remove from default excludes
+     :use-client-spec?     — use P4 workspace view for filtering
+     :max-changes          — limit history depth (number of changelists)"
+  [depot-path target-dir opts]
+  (validate-p4-depot-path! depot-path)
+  (let [excludes   (or (:excludes opts)
+                       (p4-exclude-patterns opts))
+        args       (cond-> ["git" "p4" "clone"]
+                     (:use-client-spec? opts) (conj "--use-client-spec")
+                     (not (:use-client-spec? opts)) (into (p4-exclude-args excludes))
+                     (:max-changes opts) (conj (str "--max-changes=" (:max-changes opts)))
+                     true (conj (str depot-path "@all"))
+                     true (conj "--destination" (str target-dir)))
+        _          (log! (str "git-p4: cloning " depot-path " into " target-dir
+                              " (" (count excludes) " exclusion patterns)"))
+        {:keys [exit err]} (apply shell/sh args)]
+    (when-not (zero? exit)
+      (throw (ex-info (str "git p4 clone failed: " (str/trim (or err "")))
+                      {:exit exit :depot-path depot-path :target target-dir
+                       :stderr (when err (subs err 0 (min (count err) 500)))})))
+    (log! "git-p4: clone complete")
+    target-dir))
+
+(defn p4-sync!
+  "Sync a git-p4 clone with latest Perforce changelists.
+   Runs `git p4 sync` then `git p4 rebase`."
+  [repo-path]
+  (let [sync-args ["-C" (str repo-path) "p4" "sync"]
+        {:keys [exit err]} (apply shell/sh "git" sync-args)]
+    (when-not (zero? exit)
+      (throw (ex-info (str "git p4 sync failed: " (str/trim (or err "")))
+                      {:exit exit :repo-path (str repo-path)}))))
+  (let [rebase-args ["-C" (str repo-path) "p4" "rebase"]
+        {:keys [exit err]} (apply shell/sh "git" rebase-args)]
+    (when-not (zero? exit)
+      (throw (ex-info (str "git p4 rebase failed: " (str/trim (or err "")))
+                      {:exit exit :repo-path (str repo-path)}))))
+  (log! (str "git-p4: synced " repo-path))
+  true)

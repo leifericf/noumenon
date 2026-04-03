@@ -270,9 +270,9 @@
 
 (def command-registry
   {"import"    {:spec simple-command-spec
-                :summary "Import git history and file structure into Datomic"
-                :usage "import [options] <repo-path-or-url>"
-                :epilog "Accepts a local path or a Git URL (https://, git@).\nURLs are auto-cloned to data/repos/<name>/.\nStdout: EDN result map (for scripting). Human output goes to stderr."}
+                :summary "Import commit history and file structure into Datomic"
+                :usage "import [options] <repo-path-or-url-or-depot>"
+                :epilog "Accepts a local path, Git URL (https://, git@), or Perforce depot path\n(//depot/...). URLs and depot paths are auto-cloned to data/repos/<name>/.\nPerforce depots are cloned via git-p4 with default binary exclusions.\nStdout: EDN result map (for scripting). Human output goes to stderr."}
    "analyze"      {:spec analyze-command-spec
                    :summary "Enrich imported files with LLM-driven semantic analysis"
                    :usage "analyze [options] <repo-path>"
@@ -286,9 +286,9 @@
                    :usage "synthesize [options] <repo-path>"
                    :epilog "Queries the knowledge graph for file summaries, import edges, and\ndirectory structure, then uses an LLM to identify logical components,\nclassify files architecturally (layer, category, patterns, purpose),\nand map component dependencies.\n\nRun after analyze — requires sem/summary on files.\nIdempotent: re-running retracts and recreates components.\nStdout: EDN result map (for scripting). Human output goes to stderr."}
    "update"    {:spec update-command-spec
-                :summary "Update knowledge graph with latest git state"
+                :summary "Update knowledge graph with latest changes"
                 :usage "update [options] <repo-path>"
-                :epilog "Detects changes since last update via git HEAD SHA.\nFirst run: performs full import + enrich.\nSubsequent runs: incrementally updates changed/added/deleted files.\nPass --analyze to also re-analyze changed files (requires LLM).\nStdout: EDN result map (for scripting). Human output goes to stderr."}
+                :epilog "Detects changes since last update via HEAD revision.\nFor git-p4 clones, automatically syncs from Perforce first.\nFirst run: performs full import + enrich.\nSubsequent runs: incrementally updates changed/added/deleted files.\nPass --analyze to also re-analyze changed files (requires LLM).\nStdout: EDN result map (for scripting). Human output goes to stderr."}
    "watch"     {:spec watch-command-spec
                 :summary "Watch a repository and auto-update on new commits"
                 :usage "watch [options] <repo-path>"

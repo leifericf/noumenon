@@ -9,8 +9,8 @@
   {"digest"     {:summary "Run full pipeline: import, enrich, analyze, benchmark"
                  :usage   "noum digest <repo> [options]"
                  :api-path "/api/digest" :api-method :post :min-args 1}
-   "import"     {:summary "Import git history and file structure"
-                 :usage   "noum import <repo> [options]"
+   "import"     {:summary "Import commit history and file structure"
+                 :usage   "noum import <repo> [options]\n\n  <repo> can be a local path, Git URL, or Perforce depot path (//depot/...).\n  Perforce depots are cloned via git-p4 with automatic binary exclusions."
                  :api-path "/api/import" :api-method :post :min-args 1}
    "analyze"    {:summary "Run LLM semantic analysis on repository files"
                  :usage   "noum analyze <repo> [options]"
@@ -18,8 +18,8 @@
    "enrich"     {:summary "Extract cross-file import graph deterministically"
                  :usage   "noum enrich <repo> [options]"
                  :api-path "/api/enrich" :api-method :post :min-args 1}
-   "update"     {:summary "Sync knowledge graph with latest git state"
-                 :usage   "noum update <repo> [options]"
+   "update"     {:summary "Sync knowledge graph with latest changes"
+                 :usage   "noum update <repo> [options]\n\n  For git-p4 clones, automatically syncs from Perforce before updating."
                  :api-path "/api/update" :api-method :post :min-args 1}
    "watch"      {:summary "Watch repository and auto-update on new commits"
                  :usage   "noum watch <repo> [--interval N]"

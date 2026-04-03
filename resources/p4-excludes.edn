@@ -1,0 +1,42 @@
+;; Default binary/asset exclusion patterns for git-p4 clone.
+;; Each entry becomes a `-/` argument: git p4 clone -/ "*.fbx" -/ "*.png" ...
+;; Patterns are depot-relative globs.
+;;
+;; Override at import time:
+;;   --p4-include "*.uasset"     (remove from excludes)
+;;   --p4-exclude "*.custom"     (add to excludes)
+;;   --no-default-excludes       (skip all defaults)
+;;   --use-client-spec           (use P4 workspace view instead)
+
+{:3d-models
+ ["*.fbx" "*.obj" "*.blend" "*.max" "*.ma" "*.mb" "*.dae" "*.3ds"
+  "*.stl" "*.ply" "*.abc" "*.gltf" "*.glb"]
+
+ :textures
+ ["*.png" "*.jpg" "*.jpeg" "*.tga" "*.bmp" "*.tiff" "*.exr" "*.hdr"
+  "*.psd" "*.dds" "*.ico" "*.gif" "*.svg" "*.webp"]
+
+ :audio
+ ["*.wav" "*.mp3" "*.ogg" "*.flac" "*.aiff" "*.wma" "*.aac" "*.opus" "*.mid"]
+
+ :video
+ ["*.mp4" "*.avi" "*.mov" "*.mkv" "*.wmv" "*.bik" "*.webm"]
+
+ :unreal-engine
+ ["*.uasset" "*.umap" "*.upk" "*.udk" "*.ubulk" "*.uexp" "*.upluginmanifest"]
+
+ :unity
+ ["*.unity" "*.prefab" "*.asset" "*.anim" "*.controller"]
+
+ :compiled
+ ["*.dll" "*.so" "*.dylib" "*.exe" "*.lib" "*.a" "*.o" "*.pdb" "*.ilk"
+  "*.jar" "*.war" "*.class" "*.pyc" "*.pyo" "*.whl"]
+
+ :archives
+ ["*.pak" "*.zip" "*.tar" "*.gz" "*.7z" "*.rar"]
+
+ :fonts
+ ["*.ttf" "*.otf" "*.woff" "*.woff2" "*.eot"]
+
+ :documents
+ ["*.pdf" "*.doc" "*.docx" "*.xls" "*.xlsx" "*.ppt" "*.pptx"]}

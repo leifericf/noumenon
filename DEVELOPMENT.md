@@ -104,12 +104,56 @@ Connect remotely: `noum --host server:7891 --token <your-token> status myrepo`
 
 ## Perforce
 
-Works via [git-p4](https://git-scm.com/docs/git-p4):
+Noumenon supports Perforce (Helix Core) depots via [git-p4](https://git-scm.com/docs/git-p4), which creates a local Git mirror from P4 changelists. The entire downstream pipeline (commits, files, enrichment, analysis) works unchanged on the mirror.
+
+### Prerequisites
+
+- `git` with `git-p4` support (bundled with most Git installations)
+- `p4` CLI configured: `P4PORT` (server address) and `P4USER` (username) set
+- Authenticated via `p4 login` or `P4PASSWD`
+
+### Quick start
 
 ```bash
+# Import a Perforce depot directly — auto-clones via git-p4
+noum import //depot/project/main/...
+
+# Equivalent manual workflow:
 git p4 clone //depot/project/main/... data/repos/project
 noum import data/repos/project
 ```
+
+### Automatic binary exclusions
+
+Game development depots contain large binary assets (3D models, textures, audio, Unreal/Unity files) that aren't useful in a code knowledge graph. Noumenon automatically excludes 88 binary patterns by default when cloning via git-p4.
+
+Default exclusions cover: 3D models (`.fbx`, `.obj`, `.blend`), textures (`.png`, `.jpg`, `.tga`, `.psd`, `.dds`), audio (`.wav`, `.mp3`, `.ogg`), video (`.mp4`, `.mov`), Unreal Engine (`.uasset`, `.umap`, `.ubulk`), Unity (`.unity`, `.prefab`), compiled binaries (`.dll`, `.exe`, `.so`), archives, fonts, and documents. See `resources/p4-excludes.edn` for the full list.
+
+### Using P4 workspace views
+
+If your team has an existing P4 workspace (client spec) that already scopes the right files, you can use it instead of the default exclusions:
+
+```bash
+# Uses P4CLIENT workspace view for filtering
+noum import --use-client-spec //depot/project/main/...
+```
+
+This requires `P4CLIENT` to be set. The workspace view mappings determine which depot paths are included.
+
+### Syncing with new changelists
+
+```bash
+# Automatic — detects git-p4 clone and syncs from Perforce first
+noum update data/repos/project
+
+# Manual equivalent:
+cd data/repos/project && git p4 sync && git p4 rebase && cd -
+noum update data/repos/project
+```
+
+### Helix4Git alternative
+
+If your server has [Helix4Git](https://www.perforce.com/products/helix-core-git-connector), point Noumenon at the Git URL directly — no git-p4 needed.
 
 ## Benchmarks
 

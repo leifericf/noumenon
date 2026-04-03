@@ -1,6 +1,6 @@
 (ns noumenon.repo
   "Unified repository identifier resolution.
-   Accepts filesystem paths, Git URLs, or database names."
+   Accepts filesystem paths, Git URLs, Perforce depot paths, or database names."
   (:require [clojure.java.io :as io]
             [noumenon.git :as git]
             [noumenon.util :as util :refer [log!]]))
@@ -23,14 +23,31 @@
     (when (and (.exists f) (nil? (util/validate-repo-path (.getCanonicalPath f))))
       (.getCanonicalPath f))))
 
+(defn- clone-or-reuse-p4
+  "Clone a Perforce depot path via git-p4, or reuse an existing clone."
+  [depot-path opts]
+  (let [target (git/p4-clone-path depot-path)]
+    (if (.isDirectory (io/file target ".git"))
+      (do (log! (str "Using existing git-p4 clone at " target)) target)
+      (do (log! (str "Cloning P4 depot " depot-path " into " target " ..."))
+          (git/p4-clone! depot-path target opts)
+          target))))
+
 (defn resolve-repo
-  "Resolve a repo identifier (path, Git URL, or database name) to a context map.
-   Returns {:repo-path <string> :db-name <string>}.
+  "Resolve a repo identifier (path, Git URL, Perforce depot path, or database name)
+   to a context map. Returns {:repo-path <string> :db-name <string>}.
    Options:
      :lookup-uri-fn  — (fn [db-dir db-name]) → stored :repo/uri or nil
-     :db-dir         — database storage directory"
-  [identifier db-dir {:keys [lookup-uri-fn]}]
+     :db-dir         — database storage directory
+     :p4-opts        — options for git-p4 clone (excludes, use-client-spec?, etc.)"
+  [identifier db-dir {:keys [lookup-uri-fn p4-opts]}]
   (cond
+    ;; Perforce depot path — clone via git-p4 and use local path
+    (git/p4-depot-path? identifier)
+    (let [local (clone-or-reuse-p4 identifier (or p4-opts {}))]
+      {:repo-path (.getCanonicalPath (io/file local))
+       :db-name   (util/derive-db-name local)})
+
     ;; Git URL — clone and use local path
     (git/git-url? identifier)
     (let [local (clone-or-reuse identifier)]

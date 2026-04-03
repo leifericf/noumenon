@@ -25,19 +25,21 @@
 ;; --- DB name derivation from URL ---
 
 (defn url->db-name
-  "Derive a database name from a Git URL: org-repo format.
+  "Derive a database name from a Git URL or Perforce depot path.
    https://github.com/ring-clojure/ring.git -> ring-clojure-ring
-   git@github.com:anthropics/claude-code.git -> anthropics-claude-code"
+   git@github.com:anthropics/claude-code.git -> anthropics-claude-code
+   //depot/ProjectA/main/... -> ProjectA-main"
   [url]
-  (let [cleaned (-> url (str/replace #"\.git$" "") (str/replace #"/$" ""))
-        parts   (str/split cleaned #"[/:]")
-        ;; Take last two segments (org/repo)
-        segments (take-last 2 parts)
-        raw     (str/join "-" segments)
-        sanitized (str/replace raw #"[^a-zA-Z0-9\-_.]" "")]
-    (when (str/blank? sanitized)
+  (let [name (if (git/p4-depot-path? url)
+               (git/p4-depot->clone-name url)
+               (let [cleaned (-> url (str/replace #"\.git$" "") (str/replace #"/$" ""))
+                     parts   (str/split cleaned #"[/:]")
+                     segments (take-last 2 parts)
+                     raw     (str/join "-" segments)]
+                 (str/replace raw #"[^a-zA-Z0-9\-_.]" "")))]
+    (when (str/blank? name)
       (throw (ex-info "Cannot derive db-name from URL" {:url url})))
-    sanitized))
+    name))
 
 ;; --- Registration ---
 
@@ -58,10 +60,11 @@
        (sort-by :db-name)))
 
 (defn register-repo!
-  "Register a repo by URL. Clones bare, creates database, imports.
+  "Register a repo by URL or Perforce depot path. Clones, creates database, imports.
    Returns {:db-name str :clone-path str :import-result map}."
-  [meta-conn db-dir {:keys [url name branch]}]
+  [meta-conn db-dir {:keys [url name branch p4-opts]}]
   (let [db-name    (or name (url->db-name url))
+        p4?        (git/p4-depot-path? url)
         clone-path (repo-clone-path db-dir db-name)
         clone-dir  (io/file clone-path)]
     ;; Prevent path traversal
@@ -70,7 +73,9 @@
     ;; Clone if not already present
     (when-not (.isDirectory clone-dir)
       (log! (str "Cloning " url " into " clone-path " ..."))
-      (git/clone-bare! url clone-path))
+      (if p4?
+        (git/p4-clone! url clone-path (or p4-opts {}))
+        (git/clone-bare! url clone-path)))
     ;; Register in meta database
     (d/transact meta-conn
                 {:tx-data [{:managed-repo/db-name       db-name
@@ -86,6 +91,7 @@
 
 (defn refresh-repo!
   "Fetch latest and run incremental import + enrich for a registered repo.
+   Detects git-p4 clones and uses p4-sync! instead of git fetch.
    Returns summary map."
   [db-dir db-name]
   (let [clone-path (repo-clone-path db-dir db-name)
@@ -94,7 +100,9 @@
       (throw (ex-info (str "Clone not found: " clone-path)
                       {:db-name db-name :clone-path clone-path})))
     (log! (str "Fetching " db-name " ..."))
-    (git/fetch! clone-path)
+    (if (git/p4-clone? clone-path)
+      (git/p4-sync! clone-path)
+      (git/fetch! clone-path))
     (let [repo-uri (or (ffirst (d/q '[:find ?uri :where [_ :repo/uri ?uri]]
                                     (d/db conn)))
                        (str "managed://" db-name))]

@@ -88,13 +88,13 @@
 ;; --- Tool definitions ---
 
 (def ^:private repo-path-prop
-  {"repo_path" {:type "string" :description "Absolute path to git repository"}})
+  {"repo_path" {:type "string" :description "Repository path — filesystem path, Git URL, or Perforce depot path (//depot/...)"}})
 
 ;; db-dir-prop removed: db-dir is server-level config only
 
 (def ^:private tools
   [{:name "noumenon_import"
-    :description "Import a git repository's commit history and file structure into the knowledge graph. Safe to call on already-imported repositories — only processes new commits and files."
+    :description "Import a repository's commit history and file structure into the knowledge graph. Accepts Git repos, Git URLs, or Perforce depot paths (//depot/...). Safe to call on already-imported repositories — only processes new commits and files."
     :inputSchema {:type "object"
                   :properties repo-path-prop
                   :required ["repo_path"]}}
@@ -124,7 +124,7 @@
                   :properties repo-path-prop
                   :required ["repo_path"]}}
    {:name "noumenon_update"
-    :description "Update the knowledge graph with the latest git state. Runs import + enrich for changed files. Fast and cheap (no LLM calls by default). Pass analyze=true to also re-analyze changed files with LLM. Works as a first-time setup too — if no database exists, runs the full pipeline."
+    :description "Update the knowledge graph with latest changes. Runs import + enrich for changed files. For git-p4 clones, automatically syncs from Perforce first. Fast and cheap (no LLM calls by default). Pass analyze=true to also re-analyze changed files with LLM. Works as a first-time setup too — if no database exists, runs the full pipeline."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"analyze" {:type "boolean"
