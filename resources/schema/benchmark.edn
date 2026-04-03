@@ -183,6 +183,16 @@
   :db/cardinality :db.cardinality/one
   :db/doc         "Category-weighted mean score for :full condition"}
 
+ {:db/ident       :bench.run/embedded-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Mean score for :embedded (TF-IDF) condition (absent if not run)"}
+
+ {:db/ident       :bench.run/weighted-embedded-mean
+  :db/valueType   :db.type/double
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Category-weighted mean score for :embedded condition"}
+
  {:db/ident       :bench.run/deterministic-count
   :db/valueType   :db.type/long
   :db/cardinality :db.cardinality/one
@@ -332,4 +342,20 @@
  {:db/ident       :bench.result/full-tokens
   :db/valueType   :db.type/long
   :db/cardinality :db.cardinality/one
-  :db/doc         "Input + output tokens for full KG condition"}]
+  :db/doc         "Input + output tokens for full KG condition"}
+
+ ;; --- Per-layer scores (embedded/TF-IDF condition) ---
+ {:db/ident       :bench.result/embedded-score
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Score for TF-IDF embedded condition — :correct, :partial, :wrong"}
+
+ {:db/ident       :bench.result/embedded-reasoning
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Judge reasoning for TF-IDF embedded condition score"}
+
+ {:db/ident       :bench.result/embedded-tokens
+  :db/valueType   :db.type/long
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Input + output tokens for TF-IDF embedded condition"}]
