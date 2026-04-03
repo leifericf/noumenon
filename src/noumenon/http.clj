@@ -106,8 +106,8 @@
    Returns nil if auth passes, or an error response map.
    Supports both the bootstrap admin token (env var) and Datomic-stored tokens."
   [request {:keys [token meta-conn]} method path]
-  (if-not token
-    nil ;; no auth configured — local-only mode
+  (if (or (not token) (= path "/health"))
+    nil ;; no auth configured, or health check (always public)
     (let [bearer (extract-bearer request)]
       (cond
         (str/blank? bearer)
@@ -155,8 +155,9 @@
        :conn      (db/get-or-create-conn db-dir db-name)
        :meta-conn (db/ensure-meta-db db-dir)})
     (catch clojure.lang.ExceptionInfo e
-      (throw (ex-info (.getMessage e)
-                      (assoc (ex-data e) :status 400 :message (.getMessage e)))))))
+      (let [msg    (.getMessage e)
+            status (if (re-find #"(?i)not found" msg) 404 400)]
+        (throw (ex-info msg (assoc (ex-data e) :status status :message msg)))))))
 
 (defn- with-repo
   "Execute f with resolved repo context. Returns JSON response."
@@ -234,6 +235,9 @@
                                         result (body-fn progress-fn)]
                                     (server/send! ch (sse-event "result" result) false)
                                     (server/send! ch (sse-event "done" {}) true))
+                                  (catch clojure.lang.ExceptionInfo e
+                                    (log! "sse/error" (.getMessage e))
+                                    (server/send! ch (sse-event "error" {:message (.getMessage e)}) true))
                                   (catch Exception e
                                     (log! "sse/error" (.getMessage e))
                                     (server/send! ch (sse-event "error" {:message "Internal server error"}) true))))))}))))
@@ -793,7 +797,9 @@
 (defn- handle-ask-session-feedback [request config]
   (let [params     (parse-json-body request)
         session-id (or (:session_id params) (get-in request [:params :id]))
-        polarity   (keyword (or (:feedback params) "negative"))
+        _          (when-not (:feedback params)
+                     (throw (ex-info "Missing feedback" {:status 400 :message "feedback field is required ('positive' or 'negative')"})))
+        polarity   (keyword (:feedback params))
         comment    (or (:comment params) "")]
     (when-not session-id
       (throw (ex-info "Missing session_id" {:status 400 :message "session_id is required"})))
@@ -817,7 +823,7 @@
     (when label (validate-string-length! "label" label 256))
     (let [result (auth/create-token! (:meta-conn config)
                                      {:role role :label (or label "")})]
-      (json-response 201 {:ok true :data result}))))
+      (json-response 201 {:ok true :data (assoc result :label (or label ""))}))))
 
 (defn- handle-token-list [_request config]
   (ok (auth/list-tokens (d/db (:meta-conn config)))))

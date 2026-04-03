@@ -1084,9 +1084,18 @@
         (let [;; Pass auth header via stdin to avoid token in process list
               curl-config (str "header = \"Authorization: Bearer " token "\"\n"
                                "header = \"Content-Type: application/json\"\n")
+              ;; For GET, append non-empty args as query params
+              get-url (if (and (= method :get) (seq args))
+                        (str url "?" (str/join "&"
+                                               (map (fn [[k v]]
+                                                      (str (java.net.URLEncoder/encode (str k) "UTF-8")
+                                                           "="
+                                                           (java.net.URLEncoder/encode (str v) "UTF-8")))
+                                                    args)))
+                        url)
               resp (case method
                      :get  (shell/sh
-                            "curl" "-s" "--config" "-" "-X" "GET" url
+                            "curl" "-s" "--config" "-" "-X" "GET" get-url
                             :in curl-config)
                      :post (shell/sh
                             "curl" "-s" "--config" "-" "-X" "POST" url
@@ -1095,17 +1104,14 @@
               body (json/read-str (:out resp))]
           (if (get body "ok")
             (tool-result (json/write-str (get body "data")))
-            (tool-error (or (get body "error") "Remote request failed"))))
+            (let [error-msg (or (get body "error") "Remote request failed")
+                  status    (get body "status")]
+              (tool-error (cond
+                            (= status 401) "Authentication failed. Run `noum connect <url> --token <new-token>` to update credentials."
+                            (= status 403) "Permission denied. This operation requires admin access."
+                            :else error-msg)))))
         (catch Exception e
-          (cond
-            (str/includes? (.getMessage e) "401")
-            (tool-error "Authentication failed. Run `noum connect <url> --token <new-token>` to update credentials.")
-
-            (str/includes? (.getMessage e) "403")
-            (tool-error "Permission denied. This operation requires admin access.")
-
-            :else
-            (tool-error (str "Remote proxy error: " (.getMessage e)))))))))
+          (tool-error (str "Remote proxy error: " (.getMessage e))))))))
 
 (defn- handle-tools-call-proxy
   "Route tools/call to either local handler or remote proxy."

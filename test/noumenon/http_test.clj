@@ -18,14 +18,19 @@
     (is (= 404 (:status resp)))))
 
 (deftest auth-required-when-token-set
-  (let [handler (http/make-handler {:db-dir "data/datomic/" :token "secret"})
-        no-auth (handler {:request-method :get :uri "/health"})
+  (let [db-dir  (str (System/getProperty "user.dir") "/data/datomic/")
+        handler (http/make-handler {:db-dir db-dir :token "secret"})
+        ;; /health is always public (load balancer probes)
+        health-no-auth (handler {:request-method :get :uri "/health"})
+        ;; API endpoints require auth
+        no-auth (handler {:request-method :get :uri "/api/databases"})
         bad-auth (handler {:request-method :get
-                           :uri "/health"
+                           :uri "/api/databases"
                            :headers {"authorization" "Bearer wrong"}})
         good-auth (handler {:request-method :get
-                            :uri "/health"
+                            :uri "/api/databases"
                             :headers {"authorization" "Bearer secret"}})]
+    (is (= 200 (:status health-no-auth)))
     (is (= 401 (:status no-auth)))
     (is (= 401 (:status bad-auth)))
     (is (= 200 (:status good-auth)))))
