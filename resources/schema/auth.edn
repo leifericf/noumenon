@@ -1,0 +1,54 @@
+[{:db/ident       :token/id
+  :db/valueType   :db.type/uuid
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Token UUID (public identifier for list/revoke)"}
+
+ {:db/ident       :token/hash
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "SHA-256 hash of the token value (never store raw tokens)"}
+
+ {:db/ident       :token/role
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Access role — :reader or :admin"}
+
+ {:db/ident       :token/label
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Human-readable label (e.g. alice, CI bot)"}
+
+ {:db/ident       :token/created-at
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "When the token was created"}
+
+ {:db/ident       :token/revoked?
+  :db/valueType   :db.type/boolean
+  :db/cardinality :db.cardinality/one
+  :db/doc         "True if token has been revoked"}
+
+ ;; --- Managed repos (server-side bare clones) ---
+
+ {:db/ident       :managed-repo/db-name
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Database name for this managed repo (identity)"}
+
+ {:db/ident       :managed-repo/url
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Git remote URL"}
+
+ {:db/ident       :managed-repo/branch
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Branch to track (default: main)"}
+
+ {:db/ident       :managed-repo/registered-at
+  :db/valueType   :db.type/instant
+  :db/cardinality :db.cardinality/one
+  :db/doc         "When this repo was registered"}]

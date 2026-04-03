@@ -7,6 +7,7 @@
             [clojure.string :as str]
             [datomic.client.api :as d]
             [org.httpkit.server :as server]
+            [noumenon.auth :as auth]
             [noumenon.agent :as agent]
             [noumenon.analyze :as analyze]
             [noumenon.artifacts :as artifacts]
@@ -22,7 +23,9 @@
             [noumenon.sessions :as sessions]
             [noumenon.sync :as sync]
             [noumenon.synthesize :as synthesize]
+            [noumenon.concurrency :as cc]
             [noumenon.repo :as repo]
+            [noumenon.repo-manager :as repo-mgr]
             [noumenon.util :as util :refer [log!]])
   (:import [java.lang ProcessHandle]
            [java.security MessageDigest]))
@@ -92,14 +95,34 @@
   (MessageDigest/isEqual (.getBytes (str a) "UTF-8")
                          (.getBytes (str b) "UTF-8")))
 
+(defn- extract-bearer [request]
+  (some-> (get-in request [:headers "authorization"] "")
+          (str/replace #"^Bearer\s+" "")))
+
 (defn- check-auth
-  "Validate bearer token when the daemon is configured with one.
-   Returns nil if auth passes, or an error response map."
-  [request token]
-  (when token
-    (let [header (get-in request [:headers "authorization"] "")]
-      (when-not (constant-time= header (str "Bearer " token))
-        (error-response 401 "Unauthorized")))))
+  "Validate bearer token and check role for the request.
+   Returns nil if auth passes, or an error response map.
+   Supports both the bootstrap admin token (env var) and Datomic-stored tokens."
+  [request {:keys [token meta-conn]} method path]
+  (if-not token
+    nil ;; no auth configured — local-only mode
+    (let [bearer (extract-bearer request)]
+      (cond
+        (str/blank? bearer)
+        (error-response 401 "Unauthorized — bearer token required")
+
+        ;; Bootstrap admin token — always admin role
+        (constant-time= bearer token)
+        nil
+
+        ;; Check Datomic-stored tokens
+        :else
+        (if-let [{:keys [role]} (when meta-conn
+                                  (auth/validate-token
+                                   (datomic.client.api/db meta-conn) bearer))]
+          (when (and (= role :reader) (auth/requires-admin? method path))
+            (error-response 403 "Forbidden — admin token required for this operation"))
+          (error-response 401 "Unauthorized — invalid or revoked token"))))))
 
 ;; --- Repo resolution ---
 
@@ -627,7 +650,9 @@
              :max-hours (:max_hours params)
              :max-cost (:max_cost params)
              :eval-runs (or (:eval_runs params) 1)
-             :git-commit? (:git_commit params)
+             :git-commit? (and (:git_commit params)
+                               (not (:read-only config))
+                               (not (git/bare-repo? repo-path)))
              :model-config {:provider provider :model model}
              :progress-fn progress-fn}
       stop-flag     (assoc :stop-flag stop-flag)
@@ -777,6 +802,70 @@
     (let [meta-conn (db/ensure-meta-db (:db-dir config))]
       (ask-store/set-feedback! meta-conn session-id polarity comment)
       (ok {:session-id session-id}))))
+
+;; --- Token management (admin only — enforced by role middleware) ---
+
+(defn- handle-token-create [request config]
+  (let [params (parse-json-body request)
+        role   (some-> (:role params) keyword)
+        label  (:label params)]
+    (when-not (#{:reader :admin} role)
+      (throw (ex-info "role must be 'reader' or 'admin'"
+                      {:status 400 :message "role must be 'reader' or 'admin'"})))
+    (when label (validate-string-length! "label" label 256))
+    (let [result (auth/create-token! (:meta-conn config)
+                                     {:role role :label (or label "")})]
+      (json-response 201 {:ok true :data result}))))
+
+(defn- handle-token-list [_request config]
+  (ok (auth/list-tokens (d/db (:meta-conn config)))))
+
+(defn- handle-token-revoke [request config]
+  (let [id-str (get-in request [:params :id])]
+    (when-not id-str
+      (throw (ex-info "Missing token id" {:status 400 :message "token id is required"})))
+    (let [id (try (java.util.UUID/fromString id-str)
+                  (catch Exception _
+                    (throw (ex-info "Invalid UUID" {:status 400 :message "Invalid token id"}))))]
+      (if (auth/revoke-token! (:meta-conn config) id)
+        (ok {:revoked id-str})
+        (error-response 404 "Token not found")))))
+
+;; --- Repo management (admin only) ---
+
+(defn- handle-repo-register [request config]
+  (let [params (parse-json-body request)
+        url    (:url params)]
+    (when-not url
+      (throw (ex-info "url is required" {:status 400 :message "url is required"})))
+    (validate-string-length! "url" url max-param-value-len)
+    (when-let [n (:name params)] (validate-string-length! "name" n 256))
+    (ok (repo-mgr/register-repo! (:meta-conn config) (:db-dir config)
+                                 {:url    url
+                                  :name   (:name params)
+                                  :branch (:branch params)}))))
+
+(defn- handle-repo-list [_request config]
+  (let [repos  (repo-mgr/registered-repos (d/db (:meta-conn config)))
+        db-dir (:db-dir config)]
+    (ok (mapv (fn [{:keys [db-name] :as r}]
+                (let [clone (repo-mgr/repo-clone-path db-dir db-name)
+                      sha   (try (git/head-sha clone) (catch Exception _ nil))]
+                  (assoc r :head-sha sha)))
+              repos))))
+
+(defn- handle-repo-remove [request config]
+  (let [name (get-in request [:params :name])]
+    (when-not name
+      (throw (ex-info "Missing repo name" {:status 400 :message "repo name is required"})))
+    (repo-mgr/remove-repo! (:meta-conn config) (:db-dir config) name)
+    (ok {:removed name})))
+
+(defn- handle-repo-refresh [request config]
+  (let [name (get-in request [:params :name])]
+    (when-not name
+      (throw (ex-info "Missing repo name" {:status 400 :message "repo name is required"})))
+    (ok (repo-mgr/refresh-repo! (:db-dir config) name))))
 
 ;; Cache completion source data per db-name (invalidated on import/enrich)
 (defonce ^:private completion-cache (atom {}))
@@ -930,7 +1019,14 @@
    [:post "/api/settings"              handle-settings-post]
    [:get  "/api/ask/sessions"          handle-ask-sessions]
    [:get  "/api/ask/sessions/:id"      handle-ask-session-detail]
-   [:post "/api/ask/sessions/:id/feedback" handle-ask-session-feedback]])
+   [:post "/api/ask/sessions/:id/feedback" handle-ask-session-feedback]
+   [:post "/api/tokens"                 handle-token-create]
+   [:get  "/api/tokens"                 handle-token-list]
+   [:delete "/api/tokens/:id"           handle-token-revoke]
+   [:post "/api/repos"                  handle-repo-register]
+   [:get  "/api/repos"                  handle-repo-list]
+   [:delete "/api/repos/:name"          handle-repo-remove]
+   [:post "/api/repos/:name/refresh"    handle-repo-refresh]])
 
 (defn- match-route [method path]
   (some (fn [[route-method pattern handler]]
@@ -956,11 +1052,13 @@
 
 (defn make-handler
   "Create the ring handler. Config map keys:
-   :db-dir    - Datomic storage directory
-   :provider  - Default LLM provider
-   :model     - Default model alias
-   :token     - Auth bearer token (nil = no auth)
-   :started-at - Epoch ms when daemon started"
+   :db-dir      - Datomic storage directory
+   :provider    - Default LLM provider
+   :model       - Default model alias
+   :token       - Bootstrap admin bearer token (nil = no auth)
+   :meta-conn   - Meta database connection (for token storage)
+   :read-only   - When true, reject all mutating requests
+   :started-at  - Epoch ms when daemon started"
   [config]
   (fn [request]
     (let [method (keyword (str/lower-case (name (:request-method request))))
@@ -974,7 +1072,10 @@
             (let [request (assoc request
                                  :params (merge (:params request) params)
                                  :query-params qp)]
-              (or (check-auth request (:token config))
+              (or (check-auth request config method path)
+                  (when (and (:read-only config)
+                             (auth/requires-admin? method path))
+                    (error-response 503 "Server is in read-only mode"))
                   (try
                     (handler request config)
                     (catch clojure.lang.ExceptionInfo e
@@ -1021,29 +1122,48 @@
   (let [f (io/file (System/getProperty "user.home") ".noumenon" "daemon.edn")]
     (when (.exists f) (.delete f))))
 
+(defn- resolve-server-config
+  "Merge CLI flags with env-var fallbacks. CLI flags take precedence."
+  [{:keys [port bind db-dir provider model token read-only
+           max-ask-sessions max-llm-concurrency log-format
+           webhook-secret poll-interval]}]
+  (let [resolved-token   (or token (util/env "NOUMENON_TOKEN"))
+        resolved-bind    (or bind (System/getenv "NOUMENON_BIND") "127.0.0.1")
+        resolved-port    (or port (util/env-int "NOUMENON_PORT") 0)]
+    {:port               resolved-port
+     :bind               resolved-bind
+     :db-dir             (or db-dir (System/getenv "NOUMENON_DB_DIR")
+                             (util/resolve-db-dir {}))
+     :provider           (or provider (System/getenv "NOUMENON_LLM_PROVIDER"))
+     :model              (or model (System/getenv "NOUMENON_LLM_MODEL"))
+     :token              resolved-token
+     :read-only          (or read-only (util/env-bool "NOUMENON_READ_ONLY"))
+     :max-ask-sessions   (or max-ask-sessions (util/env-int "NOUMENON_MAX_ASK_SESSIONS") 50)
+     :max-llm-concurrency (or max-llm-concurrency (util/env-int "NOUMENON_MAX_LLM_CONCURRENCY") 10)
+     :log-format         (or log-format (System/getenv "NOUMENON_LOG_FORMAT") "text")
+     :webhook-secret     (or webhook-secret (util/env "NOUMENON_WEBHOOK_SECRET"))
+     :poll-interval      (or poll-interval (util/env-int "NOUMENON_POLL_INTERVAL") 5)
+     :started-at         (System/currentTimeMillis)}))
+
 (defn start!
   "Start the HTTP daemon on the given port (0 = auto-assign).
    Returns the actual port."
-  [{:keys [port bind db-dir provider model token]
-    :or   {port 0 bind "127.0.0.1"}}]
+  [opts]
   (when @server-atom
     (throw (ex-info "Daemon already running" {})))
-  ;; Resolve token from arg or env var (env avoids process-list leaks)
-  (let [resolved-token (or token (System/getenv "NOUMENON_TOKEN"))
+  (let [{:keys [bind token] :as config} (resolve-server-config opts)
         ;; Refuse to bind to non-localhost without auth
-        _ (when (and (not= bind "127.0.0.1") (not resolved-token))
+        _ (when (and (not= bind "127.0.0.1") (not token))
             (throw (ex-info (str "Cannot bind to " bind " without --token or NOUMENON_TOKEN. "
                                  "Remote access requires authentication.")
                             {})))
-        config     {:db-dir     (or db-dir (util/resolve-db-dir {}))
-                    :provider   provider
-                    :model      model
-                    :token      resolved-token
-                    :started-at (System/currentTimeMillis)}
-        handler    (make-handler config)
-        srv         (server/run-server handler {:ip bind :port port})
+        meta-conn   (db/ensure-meta-db (:db-dir config))
+        _           (cc/init-llm-semaphore! (:max-llm-concurrency config))
+        config      (assoc config :meta-conn meta-conn)
+        handler     (make-handler config)
+        srv         (server/run-server handler {:ip bind :port (:port config)})
         actual-port (or (some-> srv meta :local-port)
-                        port)]
+                        (:port config))]
     (reset! server-atom srv)
     (write-daemon-file! actual-port)
     (when (not= bind "127.0.0.1")

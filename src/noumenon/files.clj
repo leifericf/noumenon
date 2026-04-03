@@ -2,6 +2,7 @@
   (:require [clojure.java.shell :as shell]
             [clojure.string :as str]
             [datomic.client.api :as d]
+            [noumenon.git :as git]
             [noumenon.util :refer [log!]]))
 
 (def ^:private max-git-output-bytes
@@ -112,10 +113,11 @@
 
 (defn git-ls-tree
   "Shell out to `git ls-tree -r --long HEAD` for the given repo path.
-   Returns raw output string. Throws on non-zero exit."
+   Works with both bare and working-tree repos."
   [repo-path]
-  (let [{:keys [exit out err]} (shell/sh "git" "-C" (str repo-path)
-                                         "ls-tree" "-r" "--long" "HEAD")]
+  (let [args (into ["git"] (concat (git/git-dir-args repo-path)
+                                   ["ls-tree" "-r" "--long" "HEAD"]))
+        {:keys [exit out err]} (apply shell/sh args)]
     (when (not= 0 exit)
       (throw (ex-info (str "git ls-tree failed: " (str/trim err))
                       {:exit exit :repo-path (str repo-path)})))
@@ -130,10 +132,11 @@
 
 (defn git-line-counts
   "Shell out to `git grep -c '' HEAD` for the given repo path.
-   Returns a map of {path line-count}. Binary files are omitted by git grep."
+   Works with both bare and working-tree repos."
   [repo-path]
-  (let [{:keys [exit out]} (shell/sh "git" "-C" (str repo-path)
-                                     "grep" "-c" "" "HEAD")]
+  (let [args (into ["git"] (concat (git/git-dir-args repo-path)
+                                   ["grep" "-c" "" "HEAD"]))
+        {:keys [exit out]} (apply shell/sh args)]
     ;; exit 0 = matches found, exit 1 = no matches (empty repo)
     (if (#{0 1} exit)
       (->> (str/split-lines out)

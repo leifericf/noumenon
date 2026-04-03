@@ -60,6 +60,27 @@
       (throw (ex-info "Cannot derive database name from repo path"
                       {:repo-path repo-path :basename raw :sanitized sanitized})))))
 
+(defn env
+  "Read an env var, with optional _FILE variant for Docker secrets.
+   Tries VAR_FILE first (reads file contents, trimmed), then VAR."
+  [var-name]
+  (or (when-let [path (System/getenv (str var-name "_FILE"))]
+        (let [f (io/file path)]
+          (when (.isFile f)
+            (str/trim (slurp f)))))
+      (System/getenv var-name)))
+
+(defn env-bool
+  "Read an env var as a boolean. Returns true for \"true\"/\"1\"/\"yes\"."
+  [var-name]
+  (some-> (env var-name) str/lower-case #{"true" "1" "yes"} some?))
+
+(defn env-int
+  "Read an env var as an integer, or nil if absent/unparseable."
+  [var-name]
+  (when-let [s (env var-name)]
+    (try (Integer/parseInt (str/trim s)) (catch NumberFormatException _ nil))))
+
 (defn read-version
   "Read project version from version.edn on classpath."
   []

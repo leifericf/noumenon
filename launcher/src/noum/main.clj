@@ -453,6 +453,57 @@
       (print-api-result (api/post! conn "/api/settings"
                                    {:key (first positional) :value (second positional)})))))
 
+;; --- Connection management ---
+
+(defn- do-connect [{:keys [positional flags]}]
+  (if-not (seq positional)
+    (do (tui/eprintln "Usage: noum connect <url-or-name> [--token <token>]")
+        (tui/eprintln "       noum connect local")
+        1)
+    (let [target (first positional)]
+      (if (= target "local")
+        (do (api/set-active-connection! "local")
+            (tui/eprintln (str (style/green "Switched to local mode.")))
+            0)
+        (let [token (:token flags)
+              ;; Derive a connection name from the URL
+              name  (or (:name flags)
+                        (last (str/split (str/replace target #"https?://" "") #"[/.]")))
+              conn  {:host target :token token :insecure (:insecure flags)}]
+          ;; Validate by hitting /health
+          (try
+            (let [resp (http/get (str (api/base-url conn) "/health")
+                                 {:headers (api/auth-headers conn)
+                                  :timeout 5000
+                                  :throw   false})]
+              (if (= 200 (:status resp))
+                (do (api/add-connection! name conn)
+                    (tui/eprintln (str (style/green "Connected to ") target " as '" name "'."))
+                    0)
+                (do (tui/eprintln (str (style/red "Error: ") "Server returned HTTP " (:status resp)))
+                    1)))
+            (catch Exception e
+              (tui/eprintln (str (style/red "Error: ") "Could not reach " target ": " (.getMessage e)))
+              1)))))))
+
+(defn- do-connections [_]
+  (let [conns (api/list-connections)]
+    (doseq [c conns
+            [name info] c]
+      (let [marker (if (:active? info) (style/green " *") "  ")]
+        (tui/eprintln (str marker " " name
+                           (when (:host info) (str " -> " (:host info)))
+                           (when (:mode info) (str " (" (clojure.core/name (:mode info)) ")"))))))
+    0))
+
+(defn- do-disconnect [{:keys [positional]}]
+  (if-not (seq positional)
+    (do (tui/eprintln "Usage: noum disconnect <name>") 1)
+    (let [name (first positional)]
+      (api/remove-connection! name)
+      (tui/eprintln (str "Removed connection '" name "'."))
+      0)))
+
 ;; --- Dispatch ---
 
 (defn- do-demo [{:keys [flags]}]
@@ -498,7 +549,10 @@
    "introspect" do-introspect
    "sessions"   do-sessions
    "feedback"   do-feedback
-   "settings"   do-settings})
+   "settings"   do-settings
+   "connect"    do-connect
+   "connections" do-connections
+   "disconnect" do-disconnect})
 
 (defn -main [& args]
   (let [parsed (cli/parse-args args)]

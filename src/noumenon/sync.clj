@@ -42,9 +42,9 @@
   (if-not (valid-sha? old-sha)
     (do (log! (str "WARNING: Invalid SHA format, skipping diff: " (pr-str old-sha)))
         nil)
-    (let [{:keys [exit out]}
-          (shell/sh "git" "-C" (str repo-path)
-                    "diff" "--name-status" "--" old-sha "HEAD")]
+    (let [args (into ["git"] (concat (git/git-dir-args repo-path)
+                                     ["diff" "--name-status" "--" old-sha "HEAD"]))
+          {:keys [exit out]} (apply shell/sh args)]
       (when (zero? exit)
         (->> (str/split-lines out)
              (remove str/blank?)

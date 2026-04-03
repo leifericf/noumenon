@@ -5,6 +5,7 @@
             [datomic.client.api :as d]
             [noumenon.artifacts :as artifacts]
             [noumenon.files :as files]
+            [noumenon.git :as git]
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
             [noumenon.util :as util :refer [escape-double-mustache log! sha256-hex]])
@@ -311,8 +312,9 @@
   (when-not (valid-git-path? file-path)
     (throw (ex-info "Invalid file path for git-show"
                     {:path file-path})))
-  (let [{:keys [exit out err]} (shell/sh "git" "-C" (str repo-path)
-                                         "show" (str "HEAD:" file-path))]
+  (let [args (into ["git"] (concat (git/git-dir-args repo-path)
+                                   ["show" (str "HEAD:" file-path)]))
+        {:keys [exit out err]} (apply shell/sh args)]
     (when (not= 0 exit)
       (throw (ex-info (str "git show failed: " (str/trim (or err "")))
                       {:exit exit :file-path file-path})))

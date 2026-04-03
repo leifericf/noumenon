@@ -1,0 +1,25 @@
+services:
+  noumenon:
+    image: ghcr.io/leifericf/noumenon:latest
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${NOUMENON_PORT:-7891}:7891"
+    environment:
+      - NOUMENON_TOKEN=${NOUMENON_TOKEN}
+      - NOUMENON_BIND=0.0.0.0
+      - NOUMENON_LLM_PROVIDER=${NOUMENON_LLM_PROVIDER:-}
+      - NOUMENON_LLM_MODEL=${NOUMENON_LLM_MODEL:-}
+      - NOUMENON_ZAI_TOKEN=${NOUMENON_ZAI_TOKEN:-}
+      - NOUMENON_READ_ONLY=${NOUMENON_READ_ONLY:-false}
+      - NOUMENON_MAX_ASK_SESSIONS=${NOUMENON_MAX_ASK_SESSIONS:-50}
+      - NOUMENON_MAX_LLM_CONCURRENCY=${NOUMENON_MAX_LLM_CONCURRENCY:-10}
+      - NOUMENON_POLL_INTERVAL=${NOUMENON_POLL_INTERVAL:-5}
+      - NOUMENON_LOG_FORMAT=${NOUMENON_LOG_FORMAT:-text}
+      - NOUMENON_WEBHOOK_SECRET=${NOUMENON_WEBHOOK_SECRET:-}
+    volumes:
+      - noumenon-data:/data
+    command: ["daemon", "--port", "7891", "--bind", "0.0.0.0", "--db-dir", "/data"]
+
+volumes:
+  noumenon-data:

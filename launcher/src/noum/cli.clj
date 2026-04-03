@@ -93,7 +93,13 @@
    "help"       {:summary "Show help"
                  :usage   "noum help [command]"}
    "version"    {:summary "Show version"
-                 :usage   "noum version"}})
+                 :usage   "noum version"}
+   "connect"    {:summary "Connect to a remote Noumenon instance"
+                 :usage   "noum connect <url> --token <token>\n       noum connect local"}
+   "connections" {:summary "List configured connections"
+                  :usage   "noum connections"}
+   "disconnect" {:summary "Remove a saved connection"
+                 :usage   "noum disconnect <name>"}})
 
 (def command-groups
   [["Get Started" ["demo" "setup"]]
@@ -103,6 +109,7 @@
    ["Introspect" ["introspect"]]
    ["Admin"      ["databases" "delete" "reseed" "history" "settings"]]
    ["Server"     ["serve"]]
+   ["Remote"     ["connect" "connections" "disconnect"]]
    ["Daemon"     ["start" "stop" "ping" "upgrade"]]
    ["UI"         ["open"]]
    ["Other"      ["help" "version"]]])

@@ -84,6 +84,19 @@ noum setup code       # Claude Code (MCP + hook + CLAUDE.md)
 
 Run `noum serve` to start the MCP server manually. See `noum help setup` for details.
 
+## Server Mode
+
+Run Noumenon as a shared service for your team or organization:
+
+```bash
+docker compose up -d
+noum token create --role reader --label alice   # generate user tokens
+```
+
+Users connect with `noum connect https://noumenon.example.com --token <token>`. All CLI and MCP tools work transparently against the remote instance. Up to 200 concurrent users, role-based access (reader/admin), auto-refresh from git.
+
+See [DEPLOY.md](DEPLOY.md) for configuration, reverse proxy setup, and monitoring.
+
 ## Commands
 
 ```bash

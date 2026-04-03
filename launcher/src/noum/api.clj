@@ -139,11 +139,62 @@
         (edn/read-string (slurp paths/config-path)))
     {}))
 
+(defn- save-config! [config]
+  (fs/create-dirs (fs/parent paths/config-path))
+  (spit paths/config-path (pr-str config))
+  (paths/ensure-private! paths/config-path))
+
+(defn active-connection
+  "Return the active connection map, or nil for local mode."
+  []
+  (let [config (load-config)
+        active (:active config)
+        conns  (:connections config)]
+    (when (and active conns)
+      (get conns active))))
+
+(defn add-connection!
+  "Add or update a named connection. Sets it as active."
+  [name conn-map]
+  (let [config (load-config)]
+    (save-config! (-> config
+                      (assoc-in [:connections name] conn-map)
+                      (assoc :active name)))))
+
+(defn remove-connection!
+  "Remove a named connection. Switches to local if it was active."
+  [name]
+  (let [config (load-config)
+        config (update config :connections dissoc name)]
+    (save-config! (if (= (:active config) name)
+                    (assoc config :active "local")
+                    config))))
+
+(defn set-active-connection!
+  "Switch the active connection."
+  [name]
+  (let [config (load-config)]
+    (when (and (not= name "local")
+               (not (get-in config [:connections name])))
+      (throw (ex-info (str "Unknown connection: " name) {:name name})))
+    (save-config! (assoc config :active name))))
+
+(defn list-connections
+  "Return all connections with a :active? flag."
+  []
+  (let [config (load-config)
+        active (:active config "local")
+        conns  (or (:connections config) {})]
+    (into [{"local" {:mode :local :active? (= active "local")}}]
+          (map (fn [[k v]] {k (assoc v :active? (= active k))}))
+          conns)))
+
 (defn ensure-backend!
   "Returns a connection map {:port N} or {:host \"addr:port\" :token \"...\"}.
-   Remote mode (--host): skips JRE/JAR/daemon, connects directly."
+   Uses the active named connection. CLI flags override."
   [flags]
-  (let [effective (merge (load-config) flags)]
+  (let [conn     (active-connection)
+        effective (merge (load-config) conn flags)]
     (if-let [host (:host effective)]
       {:host host :token (:token effective) :insecure (:insecure effective)}
       (let [jre-path (jre/ensure!)

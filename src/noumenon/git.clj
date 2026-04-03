@@ -85,10 +85,44 @@
       (throw (ex-info (str "git clone failed: " (str/trim err))
                       {:exit exit :url url :target target-dir})))))
 
+(defn clone-bare!
+  "Clone a Git URL as a bare repository. No working tree.
+   Validates URL does not resolve to private IPs. Throws on failure."
+  [url target-dir]
+  (validate-clone-url! url)
+  (.mkdirs (io/file target-dir))
+  (let [{:keys [exit err]} (shell/sh "git" "clone" "--bare" url (str target-dir))]
+    (when-not (zero? exit)
+      (throw (ex-info (str "git clone --bare failed: " (str/trim err))
+                      {:exit exit :url url :target target-dir})))))
+
+(defn bare-repo?
+  "True if the path looks like a bare git repository."
+  [path]
+  (let [f (io/file path)]
+    (and (.isDirectory f) (.exists (io/file f "HEAD")))))
+
+(defn fetch!
+  "Fetch latest from all remotes in a bare repo. Returns true on success."
+  [repo-path]
+  (let [{:keys [exit err]} (shell/sh "git" "--git-dir" (str repo-path) "fetch" "--all" "--prune")]
+    (when-not (zero? exit)
+      (throw (ex-info (str "git fetch failed: " (str/trim err))
+                      {:exit exit :repo-path (str repo-path)})))
+    true))
+
+(defn git-dir-args
+  "Return git CLI args for addressing a repo — handles both bare and working tree."
+  [repo-path]
+  (if (bare-repo? repo-path)
+    ["--git-dir" (str repo-path)]
+    ["-C" (str repo-path)]))
+
 (defn head-sha
   "Return the current HEAD SHA for a git repository, or nil on failure."
   [repo-path]
-  (let [{:keys [exit out]} (shell/sh "git" "-C" (str repo-path) "rev-parse" "HEAD")]
+  (let [args (into ["git"] (concat (git-dir-args repo-path) ["rev-parse" "HEAD"]))
+        {:keys [exit out]} (apply shell/sh args)]
     (when (zero? exit) (str/trim out))))
 
 ;; Git log format: %x01 = record separator, %x00 = field separator.
@@ -281,11 +315,12 @@
 
 (defn git-log
   "Shell out to git log on the given repo path. Returns raw output string.
-   Throws on non-zero exit (not a git repo, path doesn't exist, etc.)."
+   Works with both bare and working-tree repos."
   [repo-path]
-  (let [{:keys [exit out err]} (shell/sh "git" "-C" (str repo-path) "log"
-                                         "--topo-order" "--reverse"
-                                         (str "--format=" git-log-format) "--numstat")]
+  (let [args (into ["git"] (concat (git-dir-args repo-path)
+                                   ["log" "--topo-order" "--reverse"
+                                    (str "--format=" git-log-format) "--numstat"]))
+        {:keys [exit out err]} (apply shell/sh args)]
     (when (not= 0 exit)
       (throw (ex-info (str "git log failed: " (str/trim err))
                       {:exit exit :repo-path (str repo-path)})))

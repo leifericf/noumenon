@@ -1,6 +1,8 @@
 (ns noumenon.mcp
   (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.java.shell :as shell]
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.agent :as agent]
@@ -997,31 +999,121 @@
   (.setLevel (java.util.logging.Logger/getLogger "datomic")
              java.util.logging.Level/WARNING))
 
-(defn- dispatch-method
-  "Dispatch a JSON-RPC method. Returns a JSON response string, or nil for notifications."
-  [id method params defaults ^PrintWriter writer]
-  (case method
-    "initialize"              (format-response id (handle-initialize params))
-    "notifications/initialized" nil
-    "tools/list"              (format-response id (handle-tools-list params))
-    "tools/call"              (format-response id (handle-tools-call params defaults writer))
-    "ping"                    (format-response id {})
-    "resources/list"          (format-response id {:resources []})
-    (format-error id -32601 (str "Method not found: " method))))
+;; --- Remote proxy mode ---
 
-(defn- process-line!
-  "Parse one JSON-RPC line, dispatch, and write response."
-  [line ^PrintWriter writer defaults]
-  (try
-    (let [request (json/read-str line)
-          id      (get request "id")
-          method  (get request "method")
-          params  (or (get request "params") {})]
-      (when-let [response (dispatch-method id method params defaults writer)]
-        (.println writer response)))
-    (catch Exception e
-      (log! "parse/error" (.getMessage e))
-      (.println writer (format-error nil -32700 "Parse error")))))
+(defn- load-connection-config
+  "Read the active connection from ~/.noumenon/config.edn."
+  []
+  (let [config-path (str (io/file (System/getProperty "user.home") ".noumenon" "config.edn"))]
+    (when (.exists (io/file config-path))
+      (let [config (edn/read-string (slurp config-path))
+            active (:active config)]
+        (when (and active (not= active "local"))
+          (get-in config [:connections active]))))))
+
+(defn- repo-path->db-name
+  "Translate a local repo_path to a database name for remote queries.
+   Tries: git remote origin URL -> org-repo, else basename."
+  [repo-path]
+  (when (and repo-path (not (str/blank? repo-path)))
+    (let [f (io/file repo-path)]
+      (if (.isDirectory f)
+        ;; Try to get origin URL and derive name
+        (let [{:keys [exit out]} (shell/sh
+                                  "git" "-C" repo-path
+                                  "remote" "get-url" "origin")]
+          (if (zero? exit)
+            ;; Use the same logic as repo-manager/url->db-name
+            (let [url (str/trim out)
+                  cleaned (-> url (str/replace #"\.git$" "") (str/replace #"/$" ""))
+                  parts   (str/split cleaned #"[/:]")
+                  segments (take-last 2 parts)]
+              (str/replace (str/join "-" segments) #"[^a-zA-Z0-9\-_.]" ""))
+            ;; No remote, fall back to basename
+            (.getName f)))
+        ;; Not a directory — might already be a db-name
+        repo-path))))
+
+(def ^:private tool->api-path
+  "Map MCP tool names to HTTP API paths and methods."
+  {"noumenon_import"            {:path "/api/import" :method :post}
+   "noumenon_status"            {:path "/api/status/:repo" :method :get}
+   "noumenon_query"             {:path "/api/query" :method :post}
+   "noumenon_list_queries"      {:path "/api/queries" :method :get}
+   "noumenon_get_schema"        {:path "/api/schema/:repo" :method :get}
+   "noumenon_update"            {:path "/api/update" :method :post}
+   "noumenon_ask"               {:path "/api/ask" :method :post}
+   "noumenon_analyze"           {:path "/api/analyze" :method :post}
+   "noumenon_enrich"            {:path "/api/enrich" :method :post}
+   "noumenon_synthesize"        {:path "/api/synthesize" :method :post}
+   "noumenon_list_databases"    {:path "/api/databases" :method :get}
+   "noumenon_benchmark_run"     {:path "/api/benchmark" :method :post}
+   "noumenon_benchmark_results" {:path "/api/benchmark/results" :method :get}
+   "noumenon_benchmark_compare" {:path "/api/benchmark/compare" :method :get}
+   "noumenon_digest"            {:path "/api/digest" :method :post}
+   "noumenon_introspect"        {:path "/api/introspect" :method :post}
+   "noumenon_introspect_start"  {:path "/api/introspect" :method :post}
+   "noumenon_introspect_status" {:path "/api/introspect/status" :method :get}
+   "noumenon_introspect_stop"   {:path "/api/introspect/stop" :method :post}
+   "noumenon_introspect_history" {:path "/api/introspect/history" :method :get}
+   "noumenon_reseed"            {:path "/api/reseed" :method :post}
+   "noumenon_artifact_history"  {:path "/api/artifacts/history" :method :get}})
+
+(defn- proxy-tool-call
+  "Forward a tool call to the remote HTTP API."
+  [tool-name arguments remote-conn]
+  (let [{:keys [path method]} (tool->api-path tool-name)
+        {:keys [host token]} remote-conn]
+    (when-not path
+      (throw (ex-info (str "Unknown tool: " tool-name) {})))
+    (let [;; Translate repo_path to db-name
+          db-name   (repo-path->db-name (get arguments "repo_path"))
+          base-url  (if (or (str/starts-with? host "http://")
+                            (str/starts-with? host "https://"))
+                      host
+                      (str "https://" host))
+          ;; Replace :repo placeholder in path
+          url-path  (str/replace path ":repo"
+                                 (java.net.URLEncoder/encode (or db-name "") "UTF-8"))
+          url       (str base-url url-path)
+          ;; Replace repo_path with db-name in arguments
+          args      (if db-name
+                      (assoc arguments "repo_path" db-name)
+                      arguments)]
+      (try
+        (let [resp (case method
+                     :get  (shell/sh
+                            "curl" "-s" "-X" "GET" url
+                            "-H" (str "Authorization: Bearer " token)
+                            "-H" "Content-Type: application/json")
+                     :post (shell/sh
+                            "curl" "-s" "-X" "POST" url
+                            "-H" (str "Authorization: Bearer " token)
+                            "-H" "Content-Type: application/json"
+                            "-d" (json/write-str args)))
+              body (json/read-str (:out resp))]
+          (if (get body "ok")
+            (tool-result (json/write-str (get body "data")))
+            (tool-error (or (get body "error") "Remote request failed"))))
+        (catch Exception e
+          (cond
+            (str/includes? (.getMessage e) "401")
+            (tool-error "Authentication failed. Run `noum connect <url> --token <new-token>` to update credentials.")
+
+            (str/includes? (.getMessage e) "403")
+            (tool-error "Permission denied. This operation requires admin access.")
+
+            :else
+            (tool-error (str "Remote proxy error: " (.getMessage e)))))))))
+
+(defn- handle-tools-call-proxy
+  "Route tools/call to either local handler or remote proxy."
+  [params defaults ^PrintWriter writer remote-conn]
+  (if remote-conn
+    (let [tool-name (get params "name")
+          arguments (or (get params "arguments") {})]
+      (proxy-tool-call tool-name arguments remote-conn))
+    (handle-tools-call params defaults writer)))
 
 (defn serve!
   "Start MCP server. Reads JSON-RPC from stdin, writes responses to stdout.
@@ -1029,10 +1121,23 @@
   [opts]
   (suppress-datomic-logging!)
   (log! "noumenon MCP server starting")
-  (let [reader   (BufferedReader. (io/reader System/in))
-        writer   (PrintWriter. System/out true)
-        defaults (cond-> (select-keys opts [:db-dir :provider :model])
-                   (:no-auto-update opts) (assoc :auto-update false))]
+  (let [reader      (BufferedReader. (io/reader System/in))
+        writer      (PrintWriter. System/out true)
+        remote-conn (load-connection-config)
+        defaults    (cond-> (select-keys opts [:db-dir :provider :model])
+                      (:no-auto-update opts) (assoc :auto-update false))
+        dispatch    (fn [id method params]
+                      (case method
+                        "initialize"              (format-response id (handle-initialize params))
+                        "notifications/initialized" nil
+                        "tools/list"              (format-response id (handle-tools-list params))
+                        "tools/call"              (format-response id (handle-tools-call-proxy
+                                                                       params defaults writer remote-conn))
+                        "ping"                    (format-response id {})
+                        "resources/list"          (format-response id {:resources []})
+                        (format-error id -32601 (str "Method not found: " method))))]
+    (when remote-conn
+      (log! (str "MCP proxy mode: forwarding to " (:host remote-conn))))
     (log! "noumenon MCP server ready")
     (loop []
       (when-let [line (try
@@ -1043,5 +1148,15 @@
                           :oversized))]
         (when-not (= line :oversized)
           (when (seq line)
-            (process-line! line writer defaults)))
+            (try
+              (let [request (json/read-str line)
+                    id      (get request "id")
+                    method  (get request "method")
+                    params  (or (get request "params") {})]
+                (when-let [response (dispatch id method params)]
+                  (locking writer
+                    (.println writer response))))
+              (catch Exception e
+                (log! "process/error" (.getMessage e))
+                (.println writer (format-error nil -32700 "Parse error"))))))
         (recur)))))

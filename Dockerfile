@@ -42,6 +42,8 @@ ENV NOUMENON_TOKEN=""
 USER noumenon
 VOLUME /data
 EXPOSE 7891
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget -q --spider http://localhost:7891/health || exit 1
 
 ENTRYPOINT ["java", "-jar", "noumenon.jar"]
 # Default: localhost-only (no token required). For external access, override
