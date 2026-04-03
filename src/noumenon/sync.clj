@@ -72,9 +72,8 @@
 ;; --- Retraction ---
 
 (def ^:private analyze-file-attrs
-  "Attributes from file-level analyze (micro).
-   Note: sem/purpose is written by both analyze and synthesize (synthesize overrides)."
-  [:sem/summary :sem/purpose :sem/complexity :sem/tags :sem/dependencies
+  "Attributes from file-level analyze (micro)."
+  [:sem/summary :sem/purpose :sem/complexity :sem/tags
    :sem/synthesis-hints :prov/confidence])
 
 (def ^:private synthesize-file-attrs
@@ -160,14 +159,21 @@
                                                (retract-code-segments db eid))))]
       (transact-retractions! conn results))))
 
+(defn- retract-inbound-imports
+  "Build retraction tx-data for :file/imports refs pointing at the given entity."
+  [db eid]
+  (->> (d/q '[:find ?src :in $ ?target :where [?src :file/imports ?target]] db eid)
+       (mapv (fn [[src-eid]] [:db/retract src-eid :file/imports eid]))))
+
 (defn- retract-deleted-files!
   "Retract entire file entities for deleted files. Returns count actually retracted."
   [conn paths]
   (when (seq paths)
     (let [results (build-retraction-tx (d/db conn) paths
                                        (fn [db eid]
-                                         (into (retract-code-segments db eid)
-                                               [[:db/retractEntity eid]])))]
+                                         (-> (retract-inbound-imports db eid)
+                                             (into (retract-code-segments db eid))
+                                             (conj [:db/retractEntity eid]))))]
       (transact-retractions! conn results))))
 
 (defn- update-head-sha!

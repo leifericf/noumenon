@@ -67,7 +67,7 @@
  {:db/ident       :code/complexity
   :db/valueType   :db.type/keyword
   :db/cardinality :db.cardinality/one
-  :db/doc         "Per-segment complexity — :trivial, :simple, :moderate, :complex"}
+  :db/doc         "Per-segment complexity — :trivial, :simple, :moderate, :complex, :very-complex"}
 
  {:db/ident       :code/smells
   :db/valueType   :db.type/keyword
@@ -147,7 +147,7 @@
  {:db/ident       :sem/dependencies
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/many
-  :db/doc         "Import/require/use namespace or module names — LLM first-pass, deterministic extraction supersedes later"}
+  :db/doc         "DEPRECATED — use :file/imports instead. Raw import/require/use names from LLM first-pass, superseded by deterministic extraction."}
 
  {:db/ident       :sem/summary
   :db/valueType   :db.type/string

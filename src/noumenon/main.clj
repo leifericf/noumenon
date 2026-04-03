@@ -5,6 +5,7 @@
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
             [noumenon.artifacts :as artifacts]
+            [noumenon.calls :as calls]
             [noumenon.benchmark :as bench]
             [noumenon.cli :as cli]
             [noumenon.db :as db]
@@ -632,7 +633,9 @@
                               #(analyze/analyze-repo! conn repo-path prompt-fn
                                                       {:meta-db     meta-db
                                                        :model-id    model-id
-                                                       :concurrency (or concurrency 3)})))
+                                                       :concurrency (or concurrency 3)}))
+            (run-digest-step! results :calls "resolve calls"
+                              #(calls/resolve-calls! conn)))
           (when-not skip-synthesize
             (let [synth-llm (llm/wrap-as-prompt-fn-from-opts
                              {:provider provider :model model :max-tokens 16384})]

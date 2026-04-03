@@ -29,7 +29,7 @@ Respond with ONLY a raw EDN map (no markdown fences, no explanation) with these 
                 :visibility :public | :private | :protected | :internal | :package
                 :docstring  \"doc comment text if present\"
                 :deprecated true
-                :complexity :trivial | :simple | :moderate | :complex
+                :complexity :trivial | :simple | :moderate | :complex | :very-complex
                 :smells     [:deep-nesting :too-many-params :long-method :god-function :feature-envy :magic-numbers :mutation-heavy :global-state :duplication :poor-naming :dead-code :complex-conditional]
                 :purpose    \"one-line description of what this segment does\"
                 :safety-concerns [:sql-injection :xss :race-condition :unsafe-cast :path-traversal :command-injection :buffer-overflow :deserialization :hardcoded-secret :insecure-random :unvalidated-redirect]
@@ -148,6 +148,7 @@ Segment field guidelines:
   :simple — straightforward logic, one code path, no branching.
   :moderate — some branching or iteration, manageable.
   :complex — multiple nested branches, complex state transitions, hard to reason about.
+  :very-complex — deeply entangled logic, many interacting concerns, requires significant effort to understand.
 
 :smells — only include if actually present:
   :deep-nesting — 3+ levels of nested control flow.

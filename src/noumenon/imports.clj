@@ -608,6 +608,17 @@ end")
       (log! (str "Skipping " (count sensitive) " sensitive file(s) from enrichment")))
     (sort-by :file/path safe)))
 
+(defn- files-needing-enrichment
+  "Filter to files that have no :file/imports yet (never enriched or retracted as stale)."
+  [db all-files]
+  (let [enriched (->> (d/q '[:find ?path
+                             :where
+                             [?e :file/path ?path]
+                             [?e :file/imports _]]
+                           db)
+                      (into #{} (map first)))]
+    (remove #(enriched (:file/path %)) all-files)))
+
 (defn- file->tx-data
   "Build tx-data for one file's resolved imports and raw dependency names."
   [file-path {:keys [resolved raw]}]
@@ -784,9 +795,13 @@ end")
    (let [db        (d/db conn)
          all-files (files-with-lang db)
          all-paths (into #{} (map :file/path) all-files)
+         needing   (vec (files-needing-enrichment db all-files))
+         skipped-n (- (count all-files) (count needing))
+         _         (when (pos? skipped-n)
+                     (log! (str "  " skipped-n " files already enriched, skipping")))
          tools     (probe-tools)
-         skipped-tools (log-tool-availability! tools (frequencies (map :file/lang all-files)))
-         {:keys [std-files c-files]} (partition-files-by-lang all-files tools)
+         skipped-tools (log-tool-availability! tools (frequencies (map :file/lang needing)))
+         {:keys [std-files c-files]} (partition-files-by-lang needing tools)
          total     (+ (count std-files) (count c-files))
          _         (log! (str "  Extracting imports from " total " files"
                               (when (> concurrency 1) (str " (concurrency=" concurrency ")"))

@@ -33,7 +33,7 @@
   #{:public :private :protected :internal :package})
 
 (def ^:private valid-segment-complexity
-  #{:trivial :simple :moderate :complex})
+  #{:trivial :simple :moderate :complex :very-complex})
 
 (def ^:private valid-smells
   #{:deep-nesting :too-many-params :long-method :god-function
@@ -263,7 +263,7 @@
   "Build the file entity transaction map from analysis results. Pure."
   [file-path analysis]
   (let [{:keys [summary purpose tags complexity patterns layer
-                category confidence dependencies]} analysis
+                category confidence]} analysis
         hints (build-synthesis-hints analysis)]
     (cond-> {:file/path file-path}
       summary            (assoc :sem/summary summary)
@@ -274,7 +274,6 @@
       layer              (assoc :arch/layer layer)
       category           (assoc :sem/category category)
       confidence         (assoc :prov/confidence confidence)
-      (seq dependencies) (assoc :sem/dependencies dependencies)
       hints              (assoc :sem/synthesis-hints hints))))
 
 (defn- build-analyze-prov-tx

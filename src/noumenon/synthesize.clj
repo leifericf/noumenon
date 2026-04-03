@@ -214,7 +214,7 @@
   "Build tx-data to retract all component entities and synthesis-assigned file attributes.
    Does not transact — returns a vector of retraction datoms for composition."
   [db]
-  (let [synth-attrs [:arch/component :arch/layer :sem/category :sem/patterns :sem/purpose]
+  (let [synth-attrs [:arch/component :arch/layer :sem/category :sem/patterns]
         file-eids   (d/q '[:find ?e :where [?e :arch/component _]] db)
         comp-eids   (d/q '[:find ?e :where [?e :component/name _]] db)
         file-retractions
@@ -225,8 +225,7 @@
                            (:arch/component e) (conj [:db/retract eid :arch/component (:db/id (:arch/component e))])
                            (:arch/layer e)     (conj [:db/retract eid :arch/layer (:arch/layer e)])
                            (:sem/category e)   (conj [:db/retract eid :sem/category (:sem/category e)])
-                           (:sem/patterns e)   (into (mapv #(vector :db/retract eid :sem/patterns %) (:sem/patterns e)))
-                           (:sem/purpose e)    (conj [:db/retract eid :sem/purpose (:sem/purpose e)])))))
+                           (:sem/patterns e)   (into (mapv #(vector :db/retract eid :sem/patterns %) (:sem/patterns e)))))))
              vec)
         comp-retractions (mapv (fn [[eid]] [:db/retractEntity eid]) comp-eids)]
     (into file-retractions comp-retractions)))
@@ -278,17 +277,27 @@
 ;; --- Main orchestration ---
 
 (defn- invoke-and-parse
-  "Render prompt, invoke LLM, and parse the response. Returns parsed components
-   map or nil on failure. Side-effects: logging."
+  "Render prompt, invoke LLM, and parse the response. Retries once on parse failure.
+   Returns {:parsed map :usage map :resolved-model string}."
   [invoke-llm template repo-name data]
-  (let [prompt (render-prompt template (or repo-name "unknown") data)]
-    (log! "synthesize" (str "Synthesizing " (count (:files data))
-                            " files, " (count (:edges data)) " edges"))
-    (let [{:keys [text usage resolved-model]} (invoke-llm prompt)]
-      (log! "synthesize" (str "Response length: " (count text) " chars"))
-      (when (seq text)
-        (log! "synthesize/tail" (subs text (max 0 (- (count text) 200)))))
-      {:parsed (parse-response text) :usage usage :resolved-model resolved-model})))
+  (let [prompt (render-prompt template (or repo-name "unknown") data)
+        _      (log! "synthesize" (str "Synthesizing " (count (:files data))
+                                       " files, " (count (:edges data)) " edges"))
+        invoke-once (fn []
+                      (let [{:keys [text usage resolved-model]} (invoke-llm prompt)]
+                        (log! "synthesize" (str "Response length: " (count text) " chars"))
+                        (when (seq text)
+                          (log! "synthesize/tail" (subs text (max 0 (- (count text) 200)))))
+                        {:parsed (parse-response text) :usage usage
+                         :resolved-model resolved-model}))
+        r1 (invoke-once)]
+    (if (and (:parsed r1) (seq (:components (:parsed r1))))
+      r1
+      (do (log! "synthesize" "Retrying (unparseable response)...")
+          (let [r2 (invoke-once)]
+            (-> r2
+                (assoc :resolved-model (:resolved-model r1))
+                (update :usage #(llm/sum-usage (:usage r1) %))))))))
 
 (defn- build-provenance-tx
   "Build the provenance transaction entity for a synthesis run."
