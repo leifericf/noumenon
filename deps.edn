@@ -6,7 +6,8 @@
   org.clojure/core.async   {:mvn/version "1.9.865"}
   org.clojure/data.json    {:mvn/version "2.5.0"}
   http-kit/http-kit        {:mvn/version "2.8.0"}
-  org.clojure/tools.namespace {:mvn/version "1.5.0"}}
+  org.clojure/tools.namespace {:mvn/version "1.5.0"}
+  com.taoensso/nippy          {:mvn/version "3.4.2"}}
 
  :aliases
  {:test
