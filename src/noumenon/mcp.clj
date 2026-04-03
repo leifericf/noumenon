@@ -134,6 +134,13 @@
                                       "max_iterations" {:type "integer" :description "Max query iterations (default: 10, max: 50)"}
                                       "continue_from" {:type "string" :description "Session ID from a budget-exhausted run — resumes the agent from where it left off"}})
                   :required ["question" "repo_path"]}}
+   {:name "noumenon_search"
+    :description "Fast semantic search over files and components — no LLM calls. Uses a TF-IDF vector index built from analyzed summaries. Returns ranked results by relevance score. Requires prior analyze + embed (or digest). Much cheaper than noumenon_ask for simple 'find relevant files' queries."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"query" {:type "string" :description "Search query — natural language or keywords"}
+                                      "limit" {:type "integer" :description "Max results to return (default: 8, max: 50)"}})
+                  :required ["query" "repo_path"]}}
    {:name "noumenon_analyze"
     :description "Run LLM analysis on repository files to enrich the knowledge graph with semantic metadata. By default only analyzes files not yet analyzed. Pass reanalyze to re-analyze files: all, prompt-changed, model-changed, or stale. Requires a prior import."
     :inputSchema {:type "object"
@@ -332,6 +339,31 @@
                    "")]
         (tool-result (str commits " commits, " files " files, " dirs " directories." head
                           "\n\nTip: Use noumenon_query or noumenon_ask to explore the codebase before reading files directly."))))))
+
+(defn- handle-search [args defaults]
+  (util/validate-string-length! "query" (args "query") max-question-len)
+  (with-conn args defaults
+    (fn [{:keys [db-dir db-name]}]
+      (let [idx   (embed/get-cached-index db-dir db-name)
+            _     (when-not idx
+                    (throw (ex-info "No TF-IDF index found. Run embed (or digest) first."
+                                    {:user-message "No TF-IDF index. Run: noumenon embed <repo>"})))
+            limit (min (or (args "limit") 8) 50)
+            results (embed/search idx (args "query") :limit limit)]
+        (if (seq results)
+          (tool-result
+           (str "Found " (count results) " results:\n\n"
+                (->> results
+                     (map-indexed
+                      (fn [i {:keys [kind path name text score]}]
+                        (str (inc i) ". "
+                             (if (= :file kind)
+                               (str path " (file)")
+                               (str name " (component)"))
+                             " — score: " (format "%.3f" (double score))
+                             "\n   " (first (clojure.string/split-lines text)))))
+                     (clojure.string/join "\n"))))
+          (tool-result "No results found. The index may be empty — run analyze + embed first."))))))
 
 (defn- handle-query [args defaults]
   (util/validate-string-length! "query_name" (args "query_name") 256)
@@ -904,6 +936,7 @@
    "noumenon_get_schema"        handle-get-schema
    "noumenon_update"            handle-update
    "noumenon_ask"               handle-ask
+   "noumenon_search"            handle-search
    "noumenon_analyze"           handle-analyze
    "noumenon_enrich"            handle-enrich
    "noumenon_synthesize"        handle-synthesize
@@ -1039,6 +1072,7 @@
    "noumenon_get_schema"        {:path "/api/schema/:repo" :method :get}
    "noumenon_update"            {:path "/api/update" :method :post}
    "noumenon_ask"               {:path "/api/ask" :method :post}
+   "noumenon_search"            {:path "/api/search" :method :post}
    "noumenon_analyze"           {:path "/api/analyze" :method :post}
    "noumenon_enrich"            {:path "/api/enrich" :method :post}
    "noumenon_synthesize"        {:path "/api/synthesize" :method :post}

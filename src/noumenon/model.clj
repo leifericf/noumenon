@@ -4,7 +4,6 @@
    network using TF-IDF input vectors from embed.clj."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]
             [noumenon.artifacts :as artifacts]
             [noumenon.embed :as embed]
             [noumenon.query :as query]
