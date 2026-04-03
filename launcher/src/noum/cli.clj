@@ -138,6 +138,12 @@
 
 ;; --- Arg parsing ---
 
+(def ^:private boolean-flags
+  "Flags that never take a value — always treated as true when present."
+  #{"--skip-import" "--skip-enrich" "--skip-analyze" "--skip-synthesize" "--skip-benchmark"
+    "--report" "--force" "--analyze" "--verbose" "--debug" "--canary"
+    "--deterministic-only" "--git-commit" "--read-only"})
+
 (defn- extract-flags
   "Extract --flag value pairs from args. Returns [flags-map remaining-args]."
   [args]
@@ -151,7 +157,9 @@
 
           (str/starts-with? arg "--")
           (let [key (keyword (subs arg 2))]
-            (if (or (empty? more) (str/starts-with? (first more) "--"))
+            (if (or (boolean-flags arg)
+                    (empty? more)
+                    (str/starts-with? (first more) "--"))
               (recur more (assoc flags key true) positional)
               (recur (rest more) (assoc flags key (first more)) positional)))
 

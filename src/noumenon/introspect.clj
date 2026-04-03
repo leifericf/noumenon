@@ -25,8 +25,8 @@
   (artifacts/load-prompt meta-db "introspect"))
 
 (defn load-current-examples [meta-db]
-  (some-> (artifacts/load-prompt meta-db "agent-examples")
-          (edn/read-string {:readers {}})))
+  (some->> (artifacts/load-prompt meta-db "agent-examples")
+           (edn/read-string {:readers {}})))
 
 (defn load-current-system-prompt [meta-db]
   (artifacts/load-prompt meta-db "agent-system"))

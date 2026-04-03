@@ -97,15 +97,21 @@
       (when (and idx (pos? idx))
         {(subs s 0 idx) (subs s (inc idx))}))))
 
+(defn- underscore-keys
+  "Convert hyphenated keyword keys to underscored (CLI convention → API convention)."
+  [m]
+  (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "-" "_")) v])) m))
+
 (defn- build-api-body
   "Build the API request body from flags and positional args.
-   Converts --param key=value into nested {:params {key value}}."
+   Converts --param key=value into nested {:params {key value}}.
+   Converts hyphenated flag keys to underscored for the HTTP API."
   [flags positional cmd-def]
   (let [mapper (get positional-maps (:positional-map cmd-def)
                     (fn [pos] (when-let [repo (first pos)]
                                 {:repo_path (canonicalize-path repo)})))
         param-map (some-> (:param flags) parse-param-flag)]
-    (cond-> (merge (dissoc flags :param) (mapper positional))
+    (cond-> (merge (underscore-keys (dissoc flags :param)) (mapper positional))
       param-map (assoc :params param-map))))
 
 (def ^:private progress-commands

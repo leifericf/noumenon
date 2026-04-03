@@ -2,6 +2,7 @@
  :description "Compare LLM-declared vs import-derived component dependencies — shows undeclared imports and ungrounded declarations"
  :uses-rules true
  :query [:find ?from-name ?to-name ?declared ?import-backed
+         :in $ %
          :where
          [?fc :component/name ?from-name]
          [?tc :component/name ?to-name]

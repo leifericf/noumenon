@@ -161,7 +161,9 @@
 
 (deftest benchmark-resume-specific-run-id
   (let [fake-id "1234-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        {:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude" "--resume" fake-id "."])]
+        tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-resume-id-" (random-uuid))
+        {:keys [exit stderr]} (run-capturing ["benchmark" "--provider" "claude"
+                                              "--db-dir" tmp-dir "--resume" fake-id "."])]
     (is (= 1 exit))
     (is (or (str/includes? stderr (str "Checkpoint not found: " fake-id))
             (str/includes? stderr "No database found")))))
@@ -406,8 +408,9 @@
         "Help text should mention 'query list' sub-subcommand")))
 
 (deftest query-param-flag-parsed
-  (let [{:keys [exit stderr]} (run-capturing ["query" "--param" "file-path=src/main.clj"
-                                              "files-by-complexity" repo-path])]
+  (let [tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-qparam-" (random-uuid))
+        {:keys [exit stderr]} (run-capturing ["query" "--param" "file-path=src/main.clj"
+                                              "--db-dir" tmp-dir "files-by-complexity" repo-path])]
     (is (or (= 0 exit) (str/includes? stderr "No database found"))
         "Should parse --param without error")))
 
