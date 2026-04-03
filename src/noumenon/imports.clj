@@ -13,6 +13,17 @@
   (:import [java.io PushbackReader StringReader]))
 
 ;; ---------------------------------------------------------------------------
+;; Shared helpers
+;; ---------------------------------------------------------------------------
+
+(defn- suffix-match
+  "Find the first path in all-paths ending with any of the given suffixes."
+  [all-paths suffixes]
+  (first (for [suffix suffixes, p all-paths
+               :when (str/ends-with? p suffix)]
+           p)))
+
+;; ---------------------------------------------------------------------------
 ;; Multimethods — dispatch on :file/lang keyword
 ;; ---------------------------------------------------------------------------
 
@@ -117,12 +128,9 @@
         direct     (first (filter all-paths prefixed))]
     (or direct
         ;; Fall back to suffix matching for mono-repos with subproject dirs
-        (let [suffixes (mapcat (fn [c] [(str "/src/" c) (str "/test/" c) (str "/dev/" c)])
-                               candidates)]
-          (first (for [suffix suffixes
-                       p      all-paths
-                       :when  (str/ends-with? p suffix)]
-                   p))))))
+        (suffix-match all-paths
+                      (mapcat (fn [c] [(str "/src/" c) (str "/test/" c) (str "/dev/" c)])
+                              candidates)))))
 
 (defmethod resolve-import :clojure [_ import-name _source-path all-paths]
   (resolve-clj-import import-name all-paths))
@@ -180,11 +188,7 @@ print(json.dumps(imports))")
           suffixes [(str base ".py") (str base "/__init__.py")]
           direct   (first (filter all-paths suffixes))]
       (or direct
-          ;; Handle src-layout projects (src/pkg/...) and other prefixed layouts
-          (first (for [suffix (map #(str "/" %) suffixes)
-                       p      all-paths
-                       :when  (str/ends-with? p suffix)]
-                   p))))))
+          (suffix-match all-paths (map #(str "/" %) suffixes))))))
 
 (defmethod resolve-import :python [_ import-name source-path all-paths]
   (resolve-python-import import-name source-path all-paths))
@@ -409,11 +413,7 @@ end")
   (let [candidates (elixir-module->paths import-name)
         direct     (first (filter all-paths candidates))]
     (or direct
-        ;; Handle umbrella apps with subproject prefixes (apps/myapp/lib/...)
-        (first (for [c candidates
-                     p all-paths
-                     :when (str/ends-with? p (str "/" c))]
-                 p)))))
+        (suffix-match all-paths (map #(str "/" %) candidates)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Erlang — include directives
@@ -453,10 +453,7 @@ end")
           prefixed (mapcat (fn [s] [s (str "src/" s) (str "lib/" s)]) suffixes)
           direct   (first (filter all-paths prefixed))]
       (or direct
-          (first (for [suffix (map #(str "/" %) suffixes)
-                       p      all-paths
-                       :when  (str/ends-with? p suffix)]
-                   p))))))
+          (suffix-match all-paths (map #(str "/" %) suffixes))))))
 
 (defmethod resolve-import :lua [_ import-name source-path all-paths]
   (resolve-lua-import import-name source-path all-paths))
@@ -499,8 +496,7 @@ end")
 (defn- resolve-java-import [import-name all-paths]
   (let [path (str (str/replace import-name "." "/") ".java")]
     (or (all-paths path)
-        ;; Handle Maven/Gradle layout: src/main/java/..., src/test/java/...
-        (first (for [p all-paths :when (str/ends-with? p (str "/" path))] p)))))
+        (suffix-match all-paths [(str "/" path)]))))
 
 (defmethod resolve-import :java [_ import-name _source-path all-paths]
   (resolve-java-import import-name all-paths))
@@ -524,13 +520,12 @@ end")
           suffix  (str "/" as-path ".cs")
           dir-pfx (str as-path "/")]
       (or (all-paths exact)
-          (first (for [p all-paths :when (str/ends-with? p suffix)] p))
+          (suffix-match all-paths [suffix])
           ;; Namespace → directory: find .cs files under that path
           (first (for [p all-paths
                        :when (and (str/ends-with? p ".cs")
                                   (or (str/starts-with? p dir-pfx)
-                                      (let [idx (.indexOf ^String p (str "/" dir-pfx))]
-                                        (pos? idx))))]
+                                      (str/includes? p (str "/" dir-pfx))))]
                    p))))))
 
 (defmethod resolve-import :csharp [_ import-name _source-path all-paths]
@@ -758,7 +753,7 @@ end")
   [c-results c-total has-compile-commands?]
   (let [errors (->> c-results (filter :error?) (keep :stderr) frequencies)]
     (when (seq errors)
-      (let [n-failed   (reduce + (vals errors))
+      (let [n-failed   (apply + (vals errors))
             [top-msg top-n] (apply max-key val errors)
             fail-pct   (if (pos? c-total) (quot (* 100 n-failed) c-total) 0)]
         (log! (str "  C/C++ compiler failures: " n-failed "/" c-total " files (" fail-pct "%)"
@@ -773,7 +768,7 @@ end")
              imports-resolved " import edges resolved"
              (when (> concurrency 1) (str " (concurrency=" concurrency ")"))
              (when (pos? files-errored) (str ", " files-errored " errors"))))
-  (let [files-skipped (reduce + (map :file-count skipped-tools))]
+  (let [files-skipped (apply + (map :file-count skipped-tools))]
     (when (pos? files-skipped)
       (log! (str "  Warning: " files-skipped " files skipped because "
                  (str/join ", " (map (fn [{:keys [tool]}] (str tool " is not on PATH"))

@@ -95,21 +95,19 @@
                   (str/join "\n"))
              "\n\n")))))
 
-(defn- ask-session-insights
-  "Summarize ask session data for the introspect agent.
-   Surfaces unanswered questions, empty-result queries, popular patterns,
-   and error-prone sessions."
+(defn- fetch-ask-data
+  "Query all ask session data needed for insights. Returns a data map."
   [meta-db]
-  (let [sessions    (ask-store/list-sessions meta-db :limit 200)
-        total       (count sessions)
-        unanswered  (->> sessions (filter #(= :budget-exhausted (:status %))))
-        errors      (d/q '[:find ?question
+  (let [sessions (ask-store/list-sessions meta-db :limit 200)]
+    {:sessions      sessions
+     :unanswered    (filterv #(= :budget-exhausted (:status %)) sessions)
+     :errors        (d/q '[:find ?question
                            :where
                            [?e :ask.session/question ?question]
                            [?e :ask.session/steps ?step]
                            [?step :ask.step/type :error]]
                          meta-db)
-        empty-qs    (d/q '[:find ?question ?query-edn
+     :empty-qs      (d/q '[:find ?question ?query-edn
                            :where
                            [?e :ask.session/question ?question]
                            [?e :ask.session/steps ?step]
@@ -117,12 +115,12 @@
                            [?step :ask.step/query-edn ?query-edn]
                            [?step :ask.step/result-count 0]]
                          meta-db)
-        popular     (d/q '[:find ?query-edn (count ?step)
+     :popular       (d/q '[:find ?query-edn (count ?step)
                            :where
                            [?step :ask.step/type :query]
                            [?step :ask.step/query-edn ?query-edn]]
                          meta-db)
-        neg-fb      (d/q '[:find ?question ?comment ?answer ?missing ?quality ?notes
+     :neg-fb        (d/q '[:find ?question ?comment ?answer ?missing ?quality ?notes
                            :where
                            [?e :ask.session/feedback :negative]
                            [?e :ask.session/question ?question]
@@ -132,20 +130,24 @@
                            [(get-else $ ?e :ask.session/quality-issues "") ?quality]
                            [(get-else $ ?e :ask.session/agent-notes "") ?notes]]
                          meta-db)
-        ;; Agent reflections
-        missing-attrs (d/q '[:find ?attrs
-                             :where [?e :ask.session/missing-attributes ?attrs]]
-                           meta-db)
-        quality-iss   (d/q '[:find ?issues
-                             :where [?e :ask.session/quality-issues ?issues]]
-                           meta-db)
-        suggested-qs  (d/q '[:find ?qs
-                             :where [?e :ask.session/suggested-queries ?qs]]
-                           meta-db)]
+     :missing-attrs (d/q '[:find ?attrs
+                           :where [?e :ask.session/missing-attributes ?attrs]]
+                         meta-db)
+     :quality-iss   (d/q '[:find ?issues
+                           :where [?e :ask.session/quality-issues ?issues]]
+                         meta-db)
+     :suggested-qs  (d/q '[:find ?qs
+                           :where [?e :ask.session/suggested-queries ?qs]]
+                         meta-db)}))
+
+(defn- format-ask-insights
+  "Format ask session data into a markdown summary string. Pure."
+  [{:keys [sessions unanswered errors empty-qs popular neg-fb
+           missing-attrs quality-iss suggested-qs]}]
+  (let [total (count sessions)]
     (if (zero? total)
       "No ask sessions recorded yet."
       (str "## Ask Session Insights (" total " sessions)\n\n"
-           ;; Unanswered questions
            (when (seq unanswered)
              (str "### Unanswered questions (" (count unanswered) " sessions hit budget limit)\n"
                   "These questions could not be answered — they represent gaps:\n"
@@ -154,7 +156,6 @@
                        (map #(str "  - \"" (:question %) "\" (" (:iterations %) " iterations)"))
                        (str/join "\n"))
                   "\n\n"))
-           ;; Zero-result queries
            (when (seq empty-qs)
              (str "### Queries that returned zero results (" (count empty-qs) " occurrences)\n"
                   "The agent wrote these Datalog queries but got no data back — likely wrong attributes or missing data:\n"
@@ -165,7 +166,6 @@
                                    "\" → " (subs query-edn 0 (min 80 (count query-edn))))))
                        (str/join "\n"))
                   "\n\n"))
-           ;; Error steps
            (when (seq errors)
              (str "### Parse errors (" (count errors) " occurrences)\n"
                   "The LLM produced unparseable responses for these questions:\n"
@@ -173,7 +173,6 @@
                        (map (fn [[question _]] (str "  - \"" question "\"")))
                        (str/join "\n"))
                   "\n\n"))
-           ;; Negative user feedback cross-referenced with agent reflection
            (when (seq neg-fb)
              (str "### Negatively rated answers (" (count neg-fb) " — HIGHEST PRIORITY)\n"
                   "Users rated these answers unhelpful. The agent's own reflection on each session is included — use both signals to diagnose the root cause.\n"
@@ -188,7 +187,6 @@
                                    (when (seq notes)   (str "\n    Agent notes: " notes)))))
                        (str/join "\n"))
                   "\n\n"))
-           ;; Popular query patterns
            (when (seq popular)
              (str "### Most common Datalog patterns (top 10)\n"
                   "These queries are written most often — consider making them named queries:\n"
@@ -211,6 +209,11 @@
                                      "Queries agents wished existed — consider adding these:"
                                      "suggested" 10)))))
 
+(defn- ask-session-insights
+  "Summarize ask session data for the introspect agent."
+  [meta-db]
+  (format-ask-insights (fetch-ask-data meta-db)))
+
 ;; --- Meta-prompt assembly ---
 
 (defn- format-scores [results]
@@ -222,9 +225,6 @@
          (str/join "\n"))
     "No baseline scores yet."))
 
-(defn- truncate [s max-len]
-  (if (> (count s) max-len) (subs s 0 max-len) s))
-
 (defn- format-history [history]
   (if (seq history)
     (->> history
@@ -234,8 +234,8 @@
                  ": target=" (if target (name target) "unknown")
                  " outcome=" (if outcome (name outcome) "unknown")
                  (when delta (str " delta=" (format "%+.3f" (double delta))))
-                 (when goal (str " goal=\"" (truncate (str goal) 200) "\""))
-                 "\n  " (truncate (or rationale "no rationale") 500))))
+                 (when goal (str " goal=\"" (util/truncate (str goal) 200) "\""))
+                 "\n  " (util/truncate (or rationale "no rationale") 500))))
          (str/join "\n\n"))
     "No prior iterations."))
 
@@ -296,7 +296,7 @@
                         (let [scores (map (fn [{:keys [score]}]
                                             (case score :correct 1.0 :partial 0.5 0.0))
                                           baseline-results)]
-                          (/ (reduce + scores) (count scores)))
+                          (/ (apply + scores) (count scores)))
                         0.0)]
     (-> template
         (str/replace "{{current-system-prompt}}" (or system-prompt ""))
@@ -329,82 +329,82 @@
 (defn- valid-query-names [meta-db]
   (set (artifacts/list-active-query-names meta-db)))
 
+(def ^:private valid-targets
+  #{:examples :system-prompt :rules :code :train})
+
+(def ^:private valid-train-keys
+  #{:vocab-size :embedding-dim :hidden-dim :output-dim
+    :learning-rate :batch-size :time-budget-sec
+    :dropout :weight-decay})
+
+(defn- validate-examples [modification query-names]
+  (cond
+    (not (vector? (:examples modification)))
+    "For :examples target, :modification must contain {:examples [...]}"
+
+    (some (complement query-names) (:examples modification))
+    (str "Invalid query name(s) in :examples — valid: "
+         (str/join ", " (sort query-names)))))
+
+(defn- validate-system-prompt [modification]
+  (cond
+    (not (string? (:template modification)))
+    "For :system-prompt target, :modification must contain {:template \"...\"}"
+
+    (not-every? #(str/includes? (:template modification) %)
+                ["{{repo-name}}" "{{schema}}" "{{rules}}" "{{examples}}"])
+    "System prompt template must preserve all {{placeholders}}"))
+
+(defn- validate-rules [modification]
+  (cond
+    (not (string? (:rules modification)))
+    "For :rules target, :modification must contain {:rules \"...edn...\"}"
+
+    (try (not (vector? (edn/read-string {:readers {}} (:rules modification))))
+         (catch Exception _ true))
+    "Rules must be a valid EDN vector"))
+
+(defn- validate-code [modification]
+  (cond
+    (not (string? (:file modification)))
+    "Code modification must include :file (string path)"
+
+    (not (str/starts-with? (:file modification "") "src/noumenon/"))
+    "Code modifications restricted to src/noumenon/ directory"
+
+    (str/includes? (str (:file modification)) "..")
+    "Code modification path must not contain '..'"
+
+    (not (str/ends-with? (:file modification "") ".clj"))
+    "Code modifications restricted to .clj files"
+
+    (not (string? (:content modification)))
+    "Code modification must include :content (string)"))
+
+(defn- validate-train [modification]
+  (if-not (map? (:config modification))
+    "For :train target, :modification must contain {:config {...}}"
+    (when-let [unknown (seq (remove valid-train-keys (keys (:config modification))))]
+      (str "Unknown train config keys: " (str/join ", " (map name unknown))))))
+
 (defn validate-proposal
   "Validate a parsed proposal. Returns nil if valid, error string if not."
   [meta-db proposal]
-  (let [{:keys [target modification rationale]} proposal
-        query-names (valid-query-names meta-db)]
+  (let [{:keys [target modification rationale]} proposal]
     (cond
-      (not (#{:examples :system-prompt :rules :code :train} target))
+      (not (valid-targets target))
       "Invalid :target — must be :examples, :system-prompt, :rules, :code, or :train"
 
       (not (string? rationale))
       "Missing or invalid :rationale"
 
-      ;; --- :examples ---
-      (and (= :examples target)
-           (not (vector? (:examples modification))))
-      "For :examples target, :modification must contain {:examples [...]}"
-
-      (and (= :examples target)
-           (some (complement query-names) (:examples modification)))
-      (str "Invalid query name(s) in :examples — valid: "
-           (str/join ", " (sort query-names)))
-
-      ;; --- :system-prompt ---
-      (and (= :system-prompt target)
-           (not (string? (:template modification))))
-      "For :system-prompt target, :modification must contain {:template \"...\"}"
-
-      (and (= :system-prompt target)
-           (not-every? #(str/includes? (:template modification) %)
-                       ["{{repo-name}}" "{{schema}}" "{{rules}}" "{{examples}}"]))
-      "System prompt template must preserve all {{placeholders}}"
-
-      ;; --- :rules ---
-      (and (= :rules target)
-           (not (string? (:rules modification))))
-      "For :rules target, :modification must contain {:rules \"...edn...\"}"
-
-      (and (= :rules target)
-           (try (not (vector? (edn/read-string {:readers {}} (:rules modification))))
-                (catch Exception _ true)))
-      "Rules must be a valid EDN vector"
-
-      ;; --- :code ---
-      (and (= :code target) (not (string? (:file modification))))
-      "Code modification must include :file (string path)"
-
-      (and (= :code target) (not (str/starts-with? (:file modification "") "src/noumenon/")))
-      "Code modifications restricted to src/noumenon/ directory"
-
-      (and (= :code target) (str/includes? (str (:file modification)) ".."))
-      "Code modification path must not contain '..'"
-
-      (and (= :code target) (not (str/ends-with? (:file modification "") ".clj")))
-      "Code modifications restricted to .clj files"
-
-      (and (= :code target) (not (string? (:content modification))))
-      "Code modification must include :content (string)"
-
-      ;; --- :train ---
-      (and (= :train target) (not (map? (:config modification))))
-      "For :train target, :modification must contain {:config {...}}"
-
-      (and (= :train target)
-           (seq (remove #{:vocab-size :embedding-dim :hidden-dim :output-dim
-                          :learning-rate :batch-size :time-budget-sec
-                          :dropout :weight-decay}
-                        (keys (:config modification)))))
-      (str "Unknown train config keys: "
-           (->> (keys (:config modification))
-                (remove #{:vocab-size :embedding-dim :hidden-dim :output-dim
-                          :learning-rate :batch-size :time-budget-sec
-                          :dropout :weight-decay})
-                (map name)
-                (str/join ", ")))
-
-      :else nil)))
+      :else
+      (case target
+        :examples      (validate-examples modification (valid-query-names meta-db))
+        :system-prompt (validate-system-prompt modification)
+        :rules         (validate-rules modification)
+        :code          (validate-code modification)
+        :train         (validate-train modification)))))
 
 ;; --- Artifact I/O (multimethods — open for extension) ---
 
@@ -615,8 +615,8 @@
                                :iterations (get-in ask-r [:usage :iterations] 0)}))
                           (range) questions)
         scores          (mapv (comp score-kw->num :score) ask-results)
-        total-iters     (reduce + (map :iterations ask-results))]
-    {:mean             (if (seq scores) (/ (reduce + scores) (count scores)) 0.0)
+        total-iters     (apply + (map :iterations ask-results))]
+    {:mean             (if (seq scores) (/ (apply + scores) (count scores)) 0.0)
      :results          (mapv #(dissoc % :iterations) ask-results)
      :total-iterations total-iters}))
 
@@ -663,13 +663,13 @@
         all     (into [primary] extras)]
     (if (= 1 (count all))
       primary
-      (let [agg-mean (/ (reduce + (map :mean all)) (count all))]
+      (let [agg-mean (/ (apply + (map :mean all)) (count all))]
         (log! (str "  aggregate mean across " (count all) " repos: "
                    (format "%.1f%%" (* 100.0 agg-mean))))
         {:mean             agg-mean
          :results          (:results primary) ;; per-question detail from primary repo
          :repo-means       (mapv :mean all)
-         :total-iterations (reduce + (map #(or (:total-iterations %) 0) all))}))))
+         :total-iterations (apply + (map #(or (:total-iterations %) 0) all))}))))
 
 ;; --- Datomic transaction builders (pure) ---
 

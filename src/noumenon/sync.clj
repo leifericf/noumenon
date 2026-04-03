@@ -119,23 +119,34 @@
   (->> (d/q '[:find ?seg :in $ ?file :where [?seg :code/file ?file]] db eid)
        (mapv (fn [[seg-eid]] [:db/retractEntity seg-eid]))))
 
+(defn- build-retraction-tx
+  "Build tx-data for retracting file paths using a per-eid tx builder. Pure."
+  [db paths build-tx-fn]
+  (->> paths
+       (keep (fn [path]
+               (when-let [eid (find-file-eid db path)]
+                 (let [tx (build-tx-fn db eid)]
+                   (when (seq tx) tx)))))
+       vec))
+
+(defn- transact-retractions!
+  "Transact retraction results built by build-retraction-tx. Returns count."
+  [conn results]
+  (let [tx-data (into [] cat results)]
+    (when (seq tx-data)
+      (d/transact conn {:tx-data tx-data}))
+    (count results)))
+
 (defn retract-stale!
   "Retract mutable attributes and code segments for modified/deleted files.
-   Returns count of files actually retracted. Throws on transaction failure."
+   Returns count of files actually retracted."
   [conn paths]
   (when (seq paths)
-    (let [db      (d/db conn)
-          results (->> paths
-                       (keep (fn [path]
-                               (when-let [eid (find-file-eid db path)]
-                                 (let [tx (into (retract-attrs db eid mutable-file-attrs)
-                                                (retract-code-segments db eid))]
-                                   (when (seq tx) tx)))))
-                       vec)
-          tx-data (into [] cat results)]
-      (when (seq tx-data)
-        (d/transact conn {:tx-data tx-data}))
-      (count results))))
+    (let [results (build-retraction-tx (d/db conn) paths
+                                       (fn [db eid]
+                                         (into (retract-attrs db eid mutable-file-attrs)
+                                               (retract-code-segments db eid))))]
+      (transact-retractions! conn results))))
 
 (defn retract-analysis!
   "Retract analysis attributes and code segments for the given file paths.
@@ -143,35 +154,21 @@
    Returns count of files actually retracted."
   [conn paths]
   (when (seq paths)
-    (let [db      (d/db conn)
-          results (->> paths
-                       (keep (fn [path]
-                               (when-let [eid (find-file-eid db path)]
-                                 (let [tx (into (retract-attrs db eid analysis-file-attrs)
-                                                (retract-code-segments db eid))]
-                                   (when (seq tx) tx)))))
-                       vec)
-          tx-data (into [] cat results)]
-      (when (seq tx-data)
-        (d/transact conn {:tx-data tx-data}))
-      (count results))))
+    (let [results (build-retraction-tx (d/db conn) paths
+                                       (fn [db eid]
+                                         (into (retract-attrs db eid analysis-file-attrs)
+                                               (retract-code-segments db eid))))]
+      (transact-retractions! conn results))))
 
 (defn- retract-deleted-files!
-  "Retract entire file entities for deleted files. Returns count actually retracted.
-   Throws on transaction failure."
+  "Retract entire file entities for deleted files. Returns count actually retracted."
   [conn paths]
   (when (seq paths)
-    (let [db      (d/db conn)
-          results (->> paths
-                       (keep (fn [path]
-                               (when-let [eid (find-file-eid db path)]
-                                 (into (retract-code-segments db eid)
-                                       [[:db/retractEntity eid]]))))
-                       vec)
-          tx-data (into [] cat results)]
-      (when (seq tx-data)
-        (d/transact conn {:tx-data tx-data}))
-      (count results))))
+    (let [results (build-retraction-tx (d/db conn) paths
+                                       (fn [db eid]
+                                         (into (retract-code-segments db eid)
+                                               [[:db/retractEntity eid]])))]
+      (transact-retractions! conn results))))
 
 (defn- update-head-sha!
   "Store the current HEAD SHA on the repo entity."

@@ -41,82 +41,78 @@
     (subs result-text 0 (min 4000 (count result-text)))))
 
 (defn build-step-tx
-  "Build a Datomic transaction map for a single step."
+  "Build a Datomic transaction map for a single step. Pure."
   [step idx elapsed-ms]
-  (let [step-type (extract-step-type step)]
+  (let [step-type  (extract-step-type step)
+        query-edn  (extract-query-edn (:parsed step))
+        reasoning  (extract-reasoning (:raw-text step))
+        result-txt (:tool-result step)]
     (cond-> {:ask.step/ordinal idx
              :ask.step/type    (or step-type :unknown)}
-      (extract-query-edn (:parsed step))
-      (assoc :ask.step/query-edn (extract-query-edn (:parsed step)))
+      query-edn  (assoc :ask.step/query-edn query-edn)
+      result-txt (assoc :ask.step/result-count (or (result-line-count result-txt) 0)
+                        :ask.step/result-sample (result-sample result-txt))
+      reasoning  (assoc :ask.step/reasoning reasoning)
+      elapsed-ms (assoc :ask.step/elapsed-ms elapsed-ms))))
 
-      (:tool-result step)
-      (assoc :ask.step/result-count (or (result-line-count (:tool-result step)) 0))
+(defn- build-session-tx
+  "Build the Datomic transaction map for an ask session. Pure."
+  [session-id result {:keys [channel caller repo question started-at duration-ms]}]
+  (let [steps      (:steps result)
+        usage      (:usage result)
+        reflection (or (:reflection result)
+                       (some :reflection (reverse steps)))
+        step-txs   (mapv (fn [step idx]
+                           (build-step-tx step idx (:elapsed-ms step)))
+                         steps (range))]
+    (cond-> {:ask.session/id         session-id
+             :ask.session/question   question
+             :ask.session/status     (or (:status result) :error)
+             :ask.session/channel    (or channel :unknown)
+             :ask.session/caller     (or caller :human)
+             :ask.session/started-at (or started-at (java.util.Date.))
+             :ask.session/steps      step-txs}
+      (:answer result)
+      (assoc :ask.session/answer (:answer result))
 
-      (:tool-result step)
-      (assoc :ask.step/result-sample (result-sample (:tool-result step)))
+      repo
+      (assoc :ask.session/repo repo)
 
-      (extract-reasoning (:raw-text step))
-      (assoc :ask.step/reasoning (extract-reasoning (:raw-text step)))
+      duration-ms
+      (assoc :ask.session/duration-ms duration-ms)
 
-      elapsed-ms
-      (assoc :ask.step/elapsed-ms elapsed-ms))))
+      (:input-tokens usage)
+      (assoc :ask.session/input-tokens (:input-tokens usage))
+
+      (:output-tokens usage)
+      (assoc :ask.session/output-tokens (:output-tokens usage))
+
+      (:iterations usage)
+      (assoc :ask.session/iterations (:iterations usage))
+
+      (seq (:missing-attributes reflection))
+      (assoc :ask.session/missing-attributes
+             (pr-str (:missing-attributes reflection)))
+
+      (seq (:quality-issues reflection))
+      (assoc :ask.session/quality-issues
+             (pr-str (:quality-issues reflection)))
+
+      (seq (:suggested-queries reflection))
+      (assoc :ask.session/suggested-queries
+             (pr-str (:suggested-queries reflection)))
+
+      (seq (:notes reflection))
+      (assoc :ask.session/agent-notes (:notes reflection)))))
 
 (defn save-session!
   "Persist a completed ask session to Datomic.
    result is the return value of agent/ask.
    opts: {:channel :ui/:cli/:mcp, :caller :human/:ai-agent,
           :repo db-name, :question string, :started-at inst, :duration-ms long}"
-  [meta-conn result {:keys [channel caller repo question started-at duration-ms]}]
-  (let [session-id  (str (java.util.UUID/randomUUID))
-        steps       (:steps result)
-        usage       (:usage result)
-        reflection  (or (:reflection result)
-                        ;; Also check last step for reflection
-                        (some :reflection (reverse steps)))
-        step-txs    (mapv (fn [step idx]
-                            (build-step-tx step idx (:elapsed-ms step)))
-                          steps (range))
-        session-tx  (cond-> {:ask.session/id          session-id
-                             :ask.session/question    question
-                             :ask.session/status      (or (:status result) :error)
-                             :ask.session/channel     (or channel :unknown)
-                             :ask.session/caller      (or caller :human)
-                             :ask.session/started-at  (or started-at (java.util.Date.))
-                             :ask.session/steps       step-txs}
-                      (:answer result)
-                      (assoc :ask.session/answer (:answer result))
-
-                      repo
-                      (assoc :ask.session/repo repo)
-
-                      duration-ms
-                      (assoc :ask.session/duration-ms duration-ms)
-
-                      (:input-tokens usage)
-                      (assoc :ask.session/input-tokens (:input-tokens usage))
-
-                      (:output-tokens usage)
-                      (assoc :ask.session/output-tokens (:output-tokens usage))
-
-                      (:iterations usage)
-                      (assoc :ask.session/iterations (:iterations usage))
-
-                      ;; Agent reflection data
-                      (seq (:missing-attributes reflection))
-                      (assoc :ask.session/missing-attributes
-                             (pr-str (:missing-attributes reflection)))
-
-                      (seq (:quality-issues reflection))
-                      (assoc :ask.session/quality-issues
-                             (pr-str (:quality-issues reflection)))
-
-                      (seq (:suggested-queries reflection))
-                      (assoc :ask.session/suggested-queries
-                             (pr-str (:suggested-queries reflection)))
-
-                      (seq (:notes reflection))
-                      (assoc :ask.session/agent-notes (:notes reflection)))]
-    (d/transact meta-conn {:tx-data [session-tx]})
+  [meta-conn result opts]
+  (let [session-id (str (java.util.UUID/randomUUID))]
+    (d/transact meta-conn {:tx-data [(build-session-tx session-id result opts)]})
     session-id))
 
 (defn set-feedback!

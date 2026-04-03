@@ -123,11 +123,12 @@
 
 (defn- build-analyze-opts
   "Build the options map for analyze-repo! from CLI opts."
-  [{:keys [concurrency min-delay max-files]} model-id meta-db]
+  [{:keys [concurrency min-delay max-files]
+    :or   {concurrency 3 min-delay 0}} model-id meta-db]
   (cond-> {:meta-db      meta-db
            :model-id     model-id
-           :concurrency  (or concurrency 3)
-           :min-delay-ms (or min-delay 0)}
+           :concurrency  concurrency
+           :min-delay-ms min-delay}
     max-files (assoc :max-files max-files)))
 
 (defn do-analyze

@@ -40,12 +40,13 @@
 (def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
 
 (defn- validate-string-length!
-  "Reject string values exceeding max-len."
+  "Reject string values exceeding max-len. Wraps util version with :status 400."
   [field-name s max-len]
-  (when (and (string? s) (> (count s) max-len))
-    (throw (ex-info (str field-name " exceeds maximum length")
-                    {:status 400
-                     :message (str field-name " exceeds maximum length of " max-len)}))))
+  (try
+    (util/validate-string-length! field-name s max-len)
+    (catch clojure.lang.ExceptionInfo e
+      (throw (ex-info (.getMessage e)
+                      (assoc (ex-data e) :status 400))))))
 
 (defn- validate-query-params!
   "Reject query parameter values exceeding max-param-value-len."

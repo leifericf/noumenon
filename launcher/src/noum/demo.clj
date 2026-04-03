@@ -50,82 +50,91 @@
                 out (io/output-stream (str dest))]
       (io/copy in out))))
 
-(defn- download-and-verify!
-  "Download the demo tarball and verify SHA256. Returns path to verified tarball."
+(defn- verify-sha256!
+  "Download SHA sidecar and verify tarball integrity. Throws on mismatch."
+  [sha-asset tmp-dir tar-path]
+  (let [sha-path (str (fs/path tmp-dir (:name sha-asset)))
+        s        (spinner/start "Verifying integrity...")]
+    (download-to-file! (:url sha-asset) sha-path)
+    (let [expected (first (re-seq #"[0-9a-f]{64}" (slurp sha-path)))
+          actual   (sha256-file tar-path)]
+      (if (= expected actual)
+        ((:stop s) "SHA256 verified")
+        (do ((:fail s))
+            (fs/delete-tree tmp-dir)
+            (throw (ex-info "SHA256 mismatch — download may be corrupted. Try again."
+                            {:expected expected :actual actual})))))))
+
+(defn- resolve-release-assets!
+  "Find release and locate tarball + SHA assets. Throws if unavailable."
   []
   (let [s       (spinner/start "Checking latest release for demo database...")
         release (latest-release-assets)]
     (when-not release
       ((:fail s))
       (throw (ex-info "Cannot reach GitHub. Check your internet connection." {})))
-    (let [tarball-asset (find-asset (:assets release) asset-pattern)
-          sha-asset     (find-asset (:assets release) sha-pattern)]
+    (let [tarball-asset (find-asset (:assets release) asset-pattern)]
       (when-not tarball-asset
         ((:fail s) "Not found")
         (throw (ex-info (str "No demo database found in release " (:tag release)
                              ". The maintainer may not have uploaded it yet.") {})))
       ((:stop s) (str "Found demo database in " (:tag release)))
-      (let [tmp-dir  (str (fs/create-temp-dir {:prefix "noum-demo-"}))
-            tar-path (str (fs/path tmp-dir (:name tarball-asset)))
-            s2       (spinner/start (str "Downloading " (:name tarball-asset) "..."))]
-        (download-to-file! (:url tarball-asset) tar-path)
-        ((:stop s2) (str "Downloaded (" (-> (fs/size tar-path) (/ 1024) int) " KB)"))
-        ;; Verify SHA256 if sidecar available
-        (when sha-asset
-          (let [sha-path (str (fs/path tmp-dir (:name sha-asset)))
-                s3       (spinner/start "Verifying integrity...")]
-            (download-to-file! (:url sha-asset) sha-path)
-            (let [expected (first (re-seq #"[0-9a-f]{64}" (slurp sha-path)))
-                  actual   (sha256-file tar-path)]
-              (if (= expected actual)
-                ((:stop s3) "SHA256 verified")
-                (do ((:fail s3))
-                    (fs/delete-tree tmp-dir)
-                    (throw (ex-info "SHA256 mismatch — download may be corrupted. Try again."
-                                    {:expected expected :actual actual})))))))
-        {:tarball tar-path :tmp-dir tmp-dir}))))
+      {:tarball-asset tarball-asset
+       :sha-asset     (find-asset (:assets release) sha-pattern)})))
+
+(defn- download-and-verify!
+  "Download the demo tarball and verify SHA256. Returns path to verified tarball."
+  []
+  (let [{:keys [tarball-asset sha-asset]} (resolve-release-assets!)
+        tmp-dir  (str (fs/create-temp-dir {:prefix "noum-demo-"}))
+        tar-path (str (fs/path tmp-dir (:name tarball-asset)))
+        s        (spinner/start (str "Downloading " (:name tarball-asset) "..."))]
+    (download-to-file! (:url tarball-asset) tar-path)
+    ((:stop s) (str "Downloaded (" (-> (fs/size tar-path) (/ 1024) int) " KB)"))
+    (when sha-asset
+      (verify-sha256! sha-asset tmp-dir tar-path))
+    {:tarball tar-path :tmp-dir tmp-dir}))
 
 ;; --- Extraction ---
 
 (defn- demo-db-exists? []
   (fs/directory? (fs/path paths/data-dir "noumenon" "noumenon")))
 
+(defn- copy-db-dirs!
+  "Copy database subdirectories, system catalog files, and manifest from src to dst."
+  [src-system dst-system]
+  (doseq [sub ["noumenon" "noumenon-internal"]]
+    (let [src (str (fs/path src-system sub))
+          dst (str (fs/path dst-system sub))]
+      (when (fs/directory? src)
+        (when (fs/exists? dst) (fs/delete-tree dst))
+        (fs/copy-tree src dst))))
+  (doseq [f ["db.log" "log.idx"]]
+    (let [src (str (fs/path src-system f))
+          dst (str (fs/path dst-system f))]
+      (when (and (fs/exists? src) (not (fs/exists? dst)))
+        (fs/copy src dst))))
+  (let [src (str (fs/path src-system "manifest.edn"))
+        dst (str (fs/path dst-system "manifest.edn"))]
+    (when (fs/exists? src)
+      (fs/copy src dst {:replace-existing true}))))
+
 (defn- extract!
   "Extract the demo tarball into ~/.noumenon/data/."
   [tarball-path]
-  (let [s (spinner/start "Extracting demo database...")]
-    (fs/create-dirs paths/data-dir)
-    ;; Extract to a temp staging dir first
-    (let [stage (str (fs/create-temp-dir {:prefix "noum-demo-stage-"}))]
-      (proc/shell {:dir stage} "tar" "xzf" tarball-path)
-      ;; The tarball root is noumenon-demo/noumenon/ (Datomic system dir)
-      ;; Target is ~/.noumenon/data/noumenon/
-      (let [src-system (str (fs/path stage "noumenon-demo" "noumenon"))
-            dst-system (str (fs/path paths/data-dir "noumenon"))]
-        (when-not (fs/directory? src-system)
-          ((:fail s))
-          (fs/delete-tree stage)
-          (throw (ex-info "Tarball has unexpected structure (missing noumenon-demo/noumenon/)" {})))
-        ;; Copy database subdirectories
-        (doseq [sub ["noumenon" "noumenon-internal"]]
-          (let [src (str (fs/path src-system sub))
-                dst (str (fs/path dst-system sub))]
-            (when (fs/directory? src)
-              (when (fs/exists? dst) (fs/delete-tree dst))
-              (fs/copy-tree src dst))))
-        ;; Copy system catalog if target doesn't have one
-        (doseq [f ["db.log" "log.idx"]]
-          (let [src (str (fs/path src-system f))
-                dst (str (fs/path dst-system f))]
-            (when (and (fs/exists? src) (not (fs/exists? dst)))
-              (fs/copy src dst))))
-        ;; Copy manifest
-        (let [src (str (fs/path src-system "manifest.edn"))
-              dst (str (fs/path dst-system "manifest.edn"))]
-          (when (fs/exists? src)
-            (fs/copy src dst {:replace-existing true})))
-        (fs/delete-tree stage))
-      ((:stop s) "Demo database installed"))))
+  (let [s     (spinner/start "Extracting demo database...")
+        _     (fs/create-dirs paths/data-dir)
+        stage (str (fs/create-temp-dir {:prefix "noum-demo-stage-"}))]
+    (proc/shell {:dir stage} "tar" "xzf" tarball-path)
+    (let [src-system (str (fs/path stage "noumenon-demo" "noumenon"))
+          dst-system (str (fs/path paths/data-dir "noumenon"))]
+      (when-not (fs/directory? src-system)
+        ((:fail s))
+        (fs/delete-tree stage)
+        (throw (ex-info "Tarball has unexpected structure (missing noumenon-demo/noumenon/)" {})))
+      (copy-db-dirs! src-system dst-system)
+      (fs/delete-tree stage))
+    ((:stop s) "Demo database installed")))
 
 ;; --- Public API ---
 

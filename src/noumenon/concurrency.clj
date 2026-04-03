@@ -63,4 +63,4 @@
 (defn active-ask-count
   "Total active ask sessions across all tokens."
   []
-  (reduce + 0 (map count (vals @ask-sessions))))
+  (apply + (map count (vals @ask-sessions))))

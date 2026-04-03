@@ -4,6 +4,16 @@
             [noum.tui.core :as tui]
             [noum.tui.style :as style]))
 
+(def ^:private ^:const key-enter    10)
+(def ^:private ^:const key-cr       13)
+(def ^:private ^:const key-escape   27)
+(def ^:private ^:const key-ctrl-c    3)
+(def ^:private ^:const key-j       106)
+(def ^:private ^:const key-k       107)
+(def ^:private ^:const key-q       113)
+(def ^:private ^:const arrow-up     65)
+(def ^:private ^:const arrow-down   66)
+
 (defn- with-raw-mode
   "Execute f with terminal in raw mode. Restores original settings on exit."
   [f]
@@ -50,22 +60,24 @@
                                  (str/join (repeat n (str (style/clear-line) "\n")))
                                  (style/cursor-up n)))
                 (cond
-                  ;; Enter / carriage return
-                  (#{10 13} ch) (do (tui/eprintln (str (style/green "✓ ") message " → "
-                                                       (style/cyan (nth labels selected))))
-                                    (nth options selected))
-                  ;; Escape sequence (arrows)
-                  (= 27 ch)    (let [_ (.read System/in) ;; [
-                                     arrow (.read System/in)]
-                                 (recur (case (int arrow)
-                                          65 (mod (dec selected) n) ;; A = up
-                                          66 (mod (inc selected) n) ;; B = down
-                                          selected)))
-                  ;; k/j vim keys
-                  (= 107 ch)   (recur (mod (dec selected) n))
-                  (= 106 ch)   (recur (mod (inc selected) n))
-                  ;; q/Ctrl-C
-                  (#{113 3} ch) nil
-                  :else         (recur selected))))))
+                  (#{key-enter key-cr} ch)
+                  (do (tui/eprintln (str (style/green "✓ ") message " → "
+                                         (style/cyan (nth labels selected))))
+                      (nth options selected))
+
+                  (= key-escape ch)
+                  (let [_ (.read System/in)
+                        arrow (.read System/in)]
+                    (recur (case (int arrow)
+                             arrow-up   (mod (dec selected) n)
+                             arrow-down (mod (inc selected) n)
+                             selected)))
+
+                  (= key-k ch) (recur (mod (dec selected) n))
+                  (= key-j ch) (recur (mod (inc selected) n))
+
+                  (#{key-q key-ctrl-c} ch) nil
+
+                  :else (recur selected))))))
         (finally
           (tui/eprint (style/show-cursor)))))))

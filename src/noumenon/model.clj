@@ -205,7 +205,7 @@
                                     (train-step! model tokens label learning-rate)))
                                 batch)]
               (recur (inc epoch)
-                     (+ total-loss (reduce + losses))
+                     (+ total-loss (apply + losses))
                      (+ steps (count batch))))))))))
 
 ;; --- Evaluation ---

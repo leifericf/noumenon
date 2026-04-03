@@ -277,6 +277,36 @@
 
 ;; --- Main orchestration ---
 
+(defn- invoke-and-parse
+  "Render prompt, invoke LLM, and parse the response. Returns parsed components
+   map or nil on failure. Side-effects: logging."
+  [invoke-llm template repo-name data]
+  (let [prompt (render-prompt template (or repo-name "unknown") data)]
+    (log! "synthesize" (str "Synthesizing " (count (:files data))
+                            " files, " (count (:edges data)) " edges"))
+    (let [{:keys [text usage resolved-model]} (invoke-llm prompt)]
+      (log! "synthesize" (str "Response length: " (count text) " chars"))
+      (when (seq text)
+        (log! "synthesize/tail" (subs text (max 0 (- (count text) 200)))))
+      {:parsed (parse-response text) :usage usage :resolved-model resolved-model})))
+
+(defn- build-provenance-tx
+  "Build the provenance transaction entity for a synthesis run."
+  [template model-id resolved-model usage]
+  (let [prompt-hash (subs (sha256-hex template) 0 16)
+        cost        (llm/estimate-cost (or resolved-model model-id "")
+                                       (:input-tokens usage 0)
+                                       (:output-tokens usage 0))]
+    (cond-> {:db/id "datomic.tx"
+             :tx/op :synthesize
+             :tx/source :llm
+             :tx/model (or resolved-model model-id "unknown")
+             :prov/prompt-hash prompt-hash
+             :prov/analyzed-at (Date.)}
+      (:input-tokens usage)  (assoc :tx/input-tokens (:input-tokens usage))
+      (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
+      (pos? cost)            (assoc :tx/cost-usd cost))))
+
 (defn synthesize-repo!
   "Identify components and classify files architecturally.
    `invoke-llm` is (prompt -> {:text string :usage map :resolved-model string}).
@@ -285,55 +315,36 @@
   (let [start-ms (System/currentTimeMillis)
         db       (d/db conn)
         data     (prefetch-codebase-data db)]
-    (if (seq (:files data))
-      (let [meta-db   (or meta-db db)
-            template  (artifacts/load-prompt meta-db "synthesize")
-            _         (when-not template
-                        (throw (ex-info "Synthesize prompt not found — run 'reseed' first"
-                                        {:status 400 :message "Synthesize prompt not seeded. Run: noum reseed"})))
-            prompt    (render-prompt template (or repo-name "unknown") data)
-            _         (log! "synthesize" (str "Synthesizing " (count (:files data))
-                                              " files, " (count (:edges data)) " edges"))
-            {:keys [text usage resolved-model]} (invoke-llm prompt)
-            _         (log! "synthesize" (str "Response length: " (count text) " chars"))
-            _         (when (and text (> (count text) 0))
-                        (log! "synthesize/tail" (subs text (max 0 (- (count text) 200)))))
-            parsed    (parse-response text)]
-        (if (and parsed (seq (:components parsed)))
-          (let [retract-tx (retraction-tx-data (d/db conn))
-                comp-txs   (components->tx-data (:components parsed))
-                n-files    (->> (:components parsed) (mapcat :files) distinct count)
-                prompt-hash (subs (sha256-hex template) 0 16)
-                cost        (llm/estimate-cost (or resolved-model model-id "")
-                                               (:input-tokens usage 0)
-                                               (:output-tokens usage 0))
-                prov-tx    (cond-> {:db/id "datomic.tx"
-                                    :tx/op :synthesize
-                                    :tx/source :llm
-                                    :tx/model (or resolved-model model-id "unknown")
-                                    :prov/prompt-hash prompt-hash
-                                    :prov/analyzed-at (Date.)}
-                             (:input-tokens usage)  (assoc :tx/input-tokens (:input-tokens usage))
-                             (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
-                             (pos? cost)            (assoc :tx/cost-usd cost))
-                tx-data    (vec (concat retract-tx comp-txs [prov-tx]))]
+    (if-not (seq (:files data))
+      (do (log! "synthesize" "No analyzed files found — run analyze first")
+          {:components 0 :files-classified 0 :elapsed-ms 0})
+      (let [meta-db  (or meta-db db)
+            template (artifacts/load-prompt meta-db "synthesize")
+            _        (when-not template
+                       (throw (ex-info "Synthesize prompt not found — run 'reseed' first"
+                                       {:status 400 :message "Synthesize prompt not seeded. Run: noum reseed"})))
+            {:keys [parsed usage resolved-model]}
+            (invoke-and-parse invoke-llm template repo-name data)]
+        (if-not (and parsed (seq (:components parsed)))
+          (do (log! "synthesize/error" "Failed to parse synthesis response")
+              {:components 0 :files-classified 0
+               :elapsed-ms (- (System/currentTimeMillis) start-ms)
+               :error "Failed to parse synthesis response"})
+          (let [tx-data (vec (concat (retraction-tx-data (d/db conn))
+                                     (components->tx-data (:components parsed))
+                                     [(build-provenance-tx template model-id
+                                                           resolved-model usage)]))]
             (d/transact conn {:tx-data tx-data})
             (let [{:keys [edges-derived]} (derive-component-deps! conn)
+                  n-files (count (distinct (mapcat :files (:components parsed))))
                   elapsed (- (System/currentTimeMillis) start-ms)]
               (when (pos? edges-derived)
                 (log! "synthesize" (str "Derived " edges-derived
                                         " component dependency edges from import graph")))
               (log! "synthesize" (str "Done. " (count (:components parsed)) " components, "
-                                      n-files " files classified ("
-                                      elapsed "ms)"))
+                                      n-files " files classified (" elapsed "ms)"))
               {:components       (count (:components parsed))
                :files-classified n-files
                :edges-derived    edges-derived
                :elapsed-ms       elapsed
-               :usage            usage}))
-          (do (log! "synthesize/error" "Failed to parse synthesis response")
-              {:components 0 :files-classified 0
-               :elapsed-ms (- (System/currentTimeMillis) start-ms)
-               :error "Failed to parse synthesis response"})))
-      (do (log! "synthesize" "No analyzed files found — run analyze first")
-          {:components 0 :files-classified 0 :elapsed-ms 0}))))
+               :usage            usage})))))))

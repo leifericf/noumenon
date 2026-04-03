@@ -35,6 +35,21 @@
                    :margin-top "5px"
                    :flex-shrink 0}}]))
 
+(defn- copy-button [text]
+  [:button {:on {:click [:action/copy-to-clipboard text]}
+            :style {:position "absolute" :top "10px" :right "10px"
+                    :background "rgba(255,255,255,0.05)"
+                    :border "1px solid rgba(255,255,255,0.08)"
+                    :border-radius "6px"
+                    :cursor "pointer"
+                    :color "rgba(255,255,255,0.4)"
+                    :font-size "11px"
+                    :padding "4px 10px"
+                    :letter-spacing "0.3px"}
+            :title "Copy to clipboard"
+            :aria-label "Copy answer to clipboard"}
+   "Copy"])
+
 (defn- sample-pills [samples]
   (when (seq samples)
     [:div {:style {:display "flex" :gap "4px" :flex-wrap "wrap" :margin-top "4px"}}
@@ -52,7 +67,42 @@
                        :white-space "nowrap"}}
         s])]))
 
-(defn- reasoning-step [{:keys [type message reasoning results samples elapsed]} idx total]
+(defn- step-badges
+  "Inline badges and action buttons for a reasoning step."
+  [{:keys [type message results samples elapsed]}]
+  [:<>
+   (when-let [t (format-elapsed elapsed)]
+     [:span {:style {:font-size "11px"
+                     :color (:text-muted styles/tokens)
+                     :padding "1px 6px"
+                     :background (:bg-tertiary styles/tokens)
+                     :border-radius "8px"}}
+      t])
+   (when (and results (pos? results) (= type "step"))
+     [:span {:style {:font-size "11px"
+                     :color (:success styles/tokens)
+                     :padding "1px 6px"
+                     :background (str (:success styles/tokens) "15")
+                     :border-radius "8px"}}
+      (if (= results 1) "Found 1 result" (str "Found " results " results"))])
+   (when (and (seq samples) (= type "step"))
+     [:button {:on {:click [:action/ask-show-step-on-graph samples]}
+               :style {:background (str (:accent styles/tokens) "15")
+                       :border "none" :cursor "pointer"
+                       :border-radius "8px"
+                       :font-size "11px" :color (:accent styles/tokens)
+                       :padding "1px 6px"}}
+      "graph"])
+   (when (and results (> results 5) (seq samples) (= type "step"))
+     [:button {:on {:click [:action/ask-download-csv message samples]}
+               :style {:background (str (:text-muted styles/tokens) "15")
+                       :border "none" :cursor "pointer"
+                       :border-radius "8px"
+                       :font-size "11px" :color (:text-secondary styles/tokens)
+                       :padding "1px 6px"}}
+      "\u2193 csv"])])
+
+(defn- reasoning-step [{:keys [type message reasoning samples] :as step} idx total]
   [:div {:key idx
          :style {:display "flex"
                  :gap "10px"
@@ -60,11 +110,8 @@
                  :animation "fadeSlideIn 0.3s ease"
                  :border-bottom (when (< idx (dec total))
                                   (str "1px solid " (str (:border styles/tokens) "80")))}}
-   ;; Timeline dot
    (step-icon type)
-   ;; Content
    [:div {:style {:flex 1 :min-width 0}}
-    ;; Main message
     [:div {:style {:display "flex" :align-items "center" :gap "8px"}}
      [:span {:style {:font-size "13px"
                      :color (if (= type "thinking")
@@ -72,39 +119,7 @@
                               (:text-primary styles/tokens))
                      :font-style (when (= type "thinking") "italic")}}
       message]
-     (when-let [t (format-elapsed elapsed)]
-       [:span {:style {:font-size "11px"
-                       :color (:text-muted styles/tokens)
-                       :padding "1px 6px"
-                       :background (:bg-tertiary styles/tokens)
-                       :border-radius "8px"}}
-        t])
-     (when (and results (pos? results) (= type "step"))
-       [:span {:style {:font-size "11px"
-                       :color (:success styles/tokens)
-                       :padding "1px 6px"
-                       :background (str (:success styles/tokens) "15")
-                       :border-radius "8px"}}
-        (case results
-          1 "Found 1 result"
-          (str "Found " results " results"))])
-     (when (and (seq samples) (= type "step"))
-       [:button {:on {:click [:action/ask-show-step-on-graph samples]}
-                 :style {:background (str (:accent styles/tokens) "15")
-                         :border "none" :cursor "pointer"
-                         :border-radius "8px"
-                         :font-size "11px" :color (:accent styles/tokens)
-                         :padding "1px 6px"}}
-        "graph"])
-     (when (and results (> results 5) (seq samples) (= type "step"))
-       [:button {:on {:click [:action/ask-download-csv message samples]}
-                 :style {:background (str (:text-muted styles/tokens) "15")
-                         :border "none" :cursor "pointer"
-                         :border-radius "8px"
-                         :font-size "11px" :color (:text-secondary styles/tokens)
-                         :padding "1px 6px"}}
-        "\u2193 csv"])]
-    ;; LLM reasoning (italic, lighter)
+     (step-badges step)]
     (when (and reasoning (= type "step"))
       [:div {:style {:font-size "12px"
                      :color (:text-muted styles/tokens)
@@ -112,7 +127,6 @@
                      :margin-top "3px"
                      :line-height "1.4"}}
        reasoning])
-    ;; Sample data pills
     (when (= type "step")
       (sample-pills samples))]])
 
@@ -187,19 +201,7 @@
                   :border-radius (:radius styles/tokens)
                   :padding "16px"
                   :position "relative"}}
-    [:button {:on {:click [:action/copy-to-clipboard answer]}
-              :style {:position "absolute" :top "10px" :right "10px"
-                      :background "rgba(255,255,255,0.05)"
-                      :border "1px solid rgba(255,255,255,0.08)"
-                      :border-radius "6px"
-                      :cursor "pointer"
-                      :color "rgba(255,255,255,0.4)"
-                      :font-size "11px"
-                      :padding "4px 10px"
-                      :letter-spacing "0.3px"}
-              :title "Copy to clipboard"
-              :aria-label "Copy answer to clipboard"}
-     "Copy"]
+    (copy-button answer)
     (md/render-markdown answer)]])
 
 ;; --- Main view ---
@@ -287,18 +289,7 @@
                       :border (str "1px solid " (:border styles/tokens))
                       :border-radius (:radius styles/tokens)
                       :position "relative"}}
-        [:button {:on {:click [:action/copy-to-clipboard answer]}
-                  :style {:position "absolute" :top "10px" :right "10px"
-                          :background "rgba(255,255,255,0.05)"
-                          :border "1px solid rgba(255,255,255,0.08)"
-                          :border-radius "6px"
-                          :cursor "pointer"
-                          :color "rgba(255,255,255,0.4)"
-                          :font-size "11px"
-                          :padding "4px 10px"}
-                  :title "Copy to clipboard"
-                  :aria-label "Copy answer to clipboard"}
-         "Copy"]
+        (copy-button answer)
         (md/render-markdown answer)])]))
 
 (defn- past-session-item [{:keys [id question status duration-ms iterations

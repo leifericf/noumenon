@@ -60,6 +60,13 @@
       (throw (ex-info "Cannot derive database name from repo path"
                       {:repo-path repo-path :basename raw :sanitized sanitized})))))
 
+(defn validate-string-length!
+  "Throw ex-info if s exceeds max-len characters."
+  [field-name s max-len]
+  (when (and (string? s) (> (count s) max-len))
+    (throw (ex-info (str field-name " exceeds maximum length of " max-len " characters")
+                    {:field field-name :length (count s) :max max-len}))))
+
 (defn env
   "Read an env var, with optional _FILE variant for Docker secrets.
    Tries VAR_FILE first (reads file contents, trimmed), then VAR."

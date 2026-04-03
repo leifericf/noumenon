@@ -9,7 +9,7 @@
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
             [noumenon.query :as query]
-            [noumenon.util :refer [escape-double-mustache log! sha256-hex]])
+            [noumenon.util :as util :refer [escape-double-mustache log! sha256-hex truncate]])
   (:import [java.nio.file Files StandardCopyOption]))
 
 ;; --- Loading ---
@@ -84,19 +84,14 @@
   "Maximum characters per file included in raw context."
   10000)
 
-(defn- truncate-content
-  "Truncate content to max-chars, appending a note if truncated."
-  [content max-chars]
-  (if (<= (count content) max-chars)
-    content
-    (str (subs content 0 max-chars) "\n[... truncated at " max-chars " chars]")))
-
 (defn- sanitize-file-content
   "Sanitize untrusted file content: truncate, escape closing delimiters and
    template variables. Prevents prompt injection via embedded </file-content>."
   [content]
-  (-> content
-      (truncate-content max-file-content-chars)
+  (-> (let [t (truncate content max-file-content-chars)]
+        (cond-> t
+          (< (count t) (count content))
+          (str "\n[... truncated at " max-file-content-chars " chars]")))
       (str/replace "</file-content>" "&lt;/file-content&gt;")
       escape-double-mustache))
 
@@ -551,15 +546,15 @@
   ([results] (aggregate-scores results nil))
   ([results mode]
    (let [layers     (resolve-layers (or mode {}))
-         mean       (fn [xs] (let [v (vec xs)] (if (seq v) (/ (reduce + v) (count v)) 0.0)))
+         mean       (fn [xs] (let [v (vec xs)] (if (seq v) (/ (apply + v) (count v)) 0.0)))
          wmean      (fn [rs score-fn]
                       (let [pairs (keep (fn [r]
                                           (when-let [s (score-fn r)]
                                             [(get category-weights (:category r) 1.0) s]))
                                         rs)
-                            total-w (reduce + 0.0 (map first pairs))]
+                            total-w (apply + (map first pairs))]
                         (if (zero? total-w) 0.0
-                            (/ (reduce + 0.0 (map (fn [[w s]] (* w s)) pairs)) total-w))))
+                            (/ (apply + (map (fn [[w s]] (* w s)) pairs)) total-w))))
          layer-key  (fn [layer] (keyword (str (name layer) "-score")))
          layer-mean (fn [layer rs]
                       (let [scored (filterv #(contains? % (layer-key layer)) rs)
@@ -983,40 +978,48 @@
         (answer-prompt q-text raw-ctx)
         (answer-prompt q-text (query-context meta-db db (:query-name question)))))))
 
+(defn- run-deterministic-stage
+  "Score a deterministic (non-LLM) judge stage. Pure except for logging."
+  [[qid condition] question meta-db db stages]
+  (let [answer (or (get-in stages [[qid condition :answer] :result]) "")
+        score  (deterministic-score question meta-db db answer)]
+    (log! (str "bench/deterministic-score q=" (name qid)
+               " condition=" (name condition)
+               " score=" (name (:score score))))
+    {:status :ok :result score :usage llm/zero-usage :resolved-model nil
+     :completed-at (java.util.Date.)}))
+
+(defn- select-llm-fn
+  "Choose the LLM function for a stage based on condition and type."
+  [stage-type condition {:keys [invoke-llm isolated-llm judge-llm]}]
+  (cond
+    (= :judge stage-type)                  judge-llm
+    (and (= :raw condition) isolated-llm)  isolated-llm
+    :else                                  invoke-llm))
+
 (defn run-stage
   "Execute a single benchmark stage. Returns {:status :ok :result ... :usage ... :completed-at ...}."
-  [stage-key {:keys [question meta-db db stages invoke-llm isolated-llm judge-llm] :as opts}]
-  (let [[qid condition stage-type] stage-key
-        deterministic? (and (= :judge stage-type)
-                            (= :deterministic (:scoring question)))]
-    (if deterministic?
-      (let [answer (or (get-in stages [[qid condition :answer] :result]) "")
-            score  (deterministic-score question meta-db db answer)]
-        (log! (str "bench/deterministic-score q=" (name qid)
-                   " condition=" (name condition)
-                   " score=" (name (:score score))))
-        {:status :ok :result score :usage llm/zero-usage :resolved-model nil
-         :completed-at (java.util.Date.)})
+  [stage-key {:keys [question meta-db db stages] :as opts}]
+  (let [[qid condition stage-type] stage-key]
+    (if (and (= :judge stage-type) (= :deterministic (:scoring question)))
+      (run-deterministic-stage [qid condition] question meta-db db stages)
       (try
-        (let [llm-fn (cond
-                       (= :judge stage-type)  judge-llm
-                       (and (= :raw condition) isolated-llm) isolated-llm
-                       :else invoke-llm)
+        (let [llm-fn (select-llm-fn stage-type condition opts)
               prompt (stage-prompt stage-key opts)
               {:keys [text usage resolved-model]} (llm-fn prompt)
               result (if (= :judge stage-type) (parse-judge-response text) text)]
           (cond-> {:status :ok :result result :usage usage :resolved-model resolved-model
                    :completed-at (java.util.Date.)}
-            (= :answer stage-type)
-            (assoc :context-chars (count prompt))))
+            (= :answer stage-type) (assoc :context-chars (count prompt))))
         (catch clojure.lang.ExceptionInfo e
           (let [{:keys [status]} (ex-data e)]
             (if (#{413 400} status)
               (do (log! (str "  bench/skip-stage " (pr-str stage-key)
                              " — HTTP " status " (payload too large)"))
-                  {:status :error :result (if (= :judge stage-type)
-                                            {:score :wrong :reasoning (.getMessage e)}
-                                            (.getMessage e))
+                  {:status :error
+                   :result (if (= :judge stage-type)
+                             {:score :wrong :reasoning (.getMessage e)}
+                             (.getMessage e))
                    :usage llm/zero-usage :resolved-model nil
                    :completed-at (java.util.Date.)})
               (throw e))))))))
@@ -1384,7 +1387,7 @@
             in-key   (fn [layer] (keyword (str (name layer) "-input-tokens")))
             avg      (fn [k rs] (let [vs (keep k rs)]
                                   (when (seq vs)
-                                    (long (/ (reduce + vs) (count vs))))))]
+                                    (long (/ (apply + vs) (count vs))))))]
         (.append sb "\n## Context & Efficiency\n\n")
         (.append sb "| Layer | Avg Context (chars) | Avg Input Tokens | Avg Latency (ms) |\n")
         (.append sb "|-------|--------------------:|------------------:|------------------:|\n")

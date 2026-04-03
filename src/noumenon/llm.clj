@@ -72,34 +72,56 @@
 (def ^:dynamic *max-retries* 3)
 (def ^:dynamic *retry-delays-ms* [2000 4000])
 
+(defn- build-api-request
+  "Build the JSON request body and http-kit options for the Messages API."
+  [messages {:keys [model temperature max-tokens base-url auth-token system]}]
+  {:url     (str base-url "/v1/messages")
+   :method  :post
+   :headers {"Content-Type"     "application/json"
+             "x-api-key"        auth-token
+             "anthropic-version" "2023-06-01"}
+   :body    (json/write-str
+             (cond-> {:model model :max_tokens (or max-tokens 4096) :messages messages}
+               temperature (assoc :temperature temperature)
+               system      (assoc :system [{:type "text" :text system
+                                            :cache_control {:type "ephemeral"}}])))
+   :timeout 300000})
+
+(defn- parse-api-response
+  "Parse a successful API response body into {:text :usage :model :resolved-model}."
+  [body start-ms]
+  (let [dur-ms  (- (System/currentTimeMillis) start-ms)
+        parsed  (json/read-str body :key-fn keyword)
+        text    (some #(when (= "text" (:type %)) (:text %)) (:content parsed))
+        usage   (:usage parsed)
+        in      (:input_tokens usage 0)
+        out     (:output_tokens usage 0)
+        cached  (:cache_read_input_tokens usage 0)
+        created (:cache_creation_input_tokens usage 0)]
+    (when-not text
+      (log! (str "WARNING: API returned HTTP 200 but no text content"
+                 " (stop_reason=" (:stop_reason parsed)
+                 " content=" (truncate (pr-str (:content parsed)) 200) ")")))
+    {:text           text
+     :usage          (cond-> {:input-tokens in :output-tokens out
+                              :cost-usd (estimate-cost (:model parsed) in out)
+                              :duration-ms dur-ms}
+                       (pos? cached)  (assoc :cache-read-tokens cached)
+                       (pos? created) (assoc :cache-creation-tokens created))
+     :model          (:model parsed)
+     :resolved-model (:model parsed)}))
+
 (defn invoke-api
   "Invoke Anthropic Messages API directly via http-kit.
    `messages` is [{:role \"user\"/\"assistant\" :content string} ...].
-   Optional :system in opts is a string placed in the top-level system field
-   with cache_control for prompt caching.
    Returns {:text string :usage {:input-tokens n :output-tokens m} :model string}.
-   Makes up to 3 attempts (2 retries) on transient errors (429, 5xx, connection failures).
+   Makes up to 3 attempts on transient errors (429, 5xx, connection failures).
    Throws ex-info on persistent HTTP errors."
-  [messages {:keys [model temperature max-tokens base-url auth-token system]}]
-  (let [url      (str base-url "/v1/messages")
-        req-body (json/write-str
-                  (cond-> {:model      model
-                           :max_tokens (or max-tokens 4096)
-                           :messages   messages}
-                    temperature (assoc :temperature temperature)
-                    system      (assoc :system [{:type "text"
-                                                 :text system
-                                                 :cache_control {:type "ephemeral"}}])))
+  [messages opts]
+  (let [req      (build-api-request messages opts)
         start-ms (System/currentTimeMillis)]
     (loop [attempt 1]
-      (let [{:keys [status body error]}
-            @(http/request {:url     url
-                            :method  :post
-                            :headers {"Content-Type"      "application/json"
-                                      "x-api-key"         auth-token
-                                      "anthropic-version"  "2023-06-01"}
-                            :body    req-body
-                            :timeout 300000})
+      (let [{:keys [status body error]} @(http/request req)
             retryable?    (or error (retryable-status status))
             last-attempt? (>= attempt *max-retries*)
             retry!        (fn [msg]
@@ -107,50 +129,45 @@
                             (Thread/sleep (get *retry-delays-ms* (dec attempt) 4000)))]
         (cond
           (and error retryable? (not last-attempt?))
-          (do (retry! (.getMessage ^Exception error))
-              (recur (inc attempt)))
+          (do (retry! (.getMessage ^Exception error)) (recur (inc attempt)))
 
           error
           (throw (ex-info (str "API request failed: " (.getMessage ^Exception error))
                           {:error error :attempts attempt}))
 
           (and (not= 200 status) retryable? (not last-attempt?))
-          (do (retry! (str "HTTP " status))
-              (recur (inc attempt)))
+          (do (retry! (str "HTTP " status)) (recur (inc attempt)))
 
           (not= 200 status)
           (throw (ex-info (str "API error: HTTP " status)
                           {:status status :attempts attempt}))
 
           :else
-          (let [dur-ms  (- (System/currentTimeMillis) start-ms)
-                parsed  (json/read-str body :key-fn keyword)
-                text    (some #(when (= "text" (:type %)) (:text %))
-                              (:content parsed))
-                usage   (:usage parsed)
-                in      (:input_tokens usage 0)
-                out     (:output_tokens usage 0)
-                cached  (:cache_read_input_tokens usage 0)
-                created (:cache_creation_input_tokens usage 0)]
-            (when-not text
-              (log! (str "WARNING: API returned HTTP 200 but no text content"
-                         " (stop_reason=" (:stop_reason parsed)
-                         " content=" (truncate (pr-str (:content parsed)) 200) ")")))
-            {:text           text
-             :usage          (cond-> {:input-tokens  in
-                                      :output-tokens out
-                                      :cost-usd      (estimate-cost (:model parsed) in out)
-                                      :duration-ms   dur-ms}
-                               (pos? cached)  (assoc :cache-read-tokens cached)
-                               (pos? created) (assoc :cache-creation-tokens created))
-             :model          (:model parsed)
-             :resolved-model (:model parsed)}))))))
+          (parse-api-response body start-ms))))))
 
 (def ^:private cli-timeout-ms
   "Timeout in milliseconds for Claude CLI subprocess (5 minutes)."
   300000)
 
 ;; --- Claude CLI invocation ---
+
+(defn- parse-cli-output
+  "Parse Claude CLI JSON output into {:text :usage :resolved-model}.
+   Falls back to raw text + zero usage if JSON parse fails."
+  [out-str dur-ms]
+  (let [parsed (try (json/read-str out-str :key-fn keyword)
+                    (catch Exception _ nil))]
+    (if (and (map? parsed) (contains? parsed :result))
+      (let [u (:usage parsed)]
+        {:text           (:result parsed)
+         :usage          {:input-tokens  (:input_tokens u 0)
+                          :output-tokens (:output_tokens u 0)
+                          :cost-usd      (:total_cost_usd parsed 0.0)
+                          :duration-ms   dur-ms}
+         :resolved-model (:model parsed)})
+      (do (log! "WARNING: Claude CLI returned non-JSON output, using raw text with zero usage")
+          {:text  out-str
+           :usage (assoc zero-usage :duration-ms dur-ms)}))))
 
 (defn invoke-claude-cli
   "Invoke Claude Code CLI with the given prompt. Returns {:text string :usage map}.
@@ -185,19 +202,7 @@
      (when (not= 0 exit)
        (throw (ex-info (str "Claude CLI failed: " (str/trim (or err-str "")))
                        {:exit exit})))
-     (let [parsed (try (json/read-str out-str :key-fn keyword)
-                       (catch Exception _ nil))]
-       (if (and (map? parsed) (contains? parsed :result))
-         (let [u (:usage parsed)]
-           {:text           (:result parsed)
-            :usage          {:input-tokens  (:input_tokens u 0)
-                             :output-tokens (:output_tokens u 0)
-                             :cost-usd      (:total_cost_usd parsed 0.0)
-                             :duration-ms   dur-ms}
-            :resolved-model (:model parsed)})
-         (do (log! "WARNING: Claude CLI returned non-JSON output, using raw text with zero usage")
-             {:text  out-str
-              :usage (assoc zero-usage :duration-ms dur-ms)}))))))
+     (parse-cli-output out-str dur-ms))))
 
 ;; --- CLI message flattening ---
 

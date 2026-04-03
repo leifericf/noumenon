@@ -243,59 +243,73 @@
                 architectural-notes (assoc :notes architectural-notes))]
     (when (seq hints) (pr-str hints))))
 
+(defn- deduplicate-segments
+  "Deduplicate segments by name, appending :L<line> for collisions. Pure."
+  [segments]
+  (->> segments
+       (reduce (fn [acc {:keys [name line-start] :as seg}]
+                 (let [unique-name (if (contains? (:seen acc) name)
+                                     (str name ":L" (or line-start (count (:seen acc))))
+                                     name)]
+                   (if (contains? (:seen acc) unique-name)
+                     acc
+                     (-> acc
+                         (update :seen conj name unique-name)
+                         (update :txs conj (assoc seg :name unique-name))))))
+               {:seen #{} :txs []})
+       :txs))
+
+(defn- build-file-tx
+  "Build the file entity transaction map from analysis results. Pure."
+  [file-path analysis]
+  (let [{:keys [summary purpose tags complexity patterns layer
+                category confidence dependencies]} analysis
+        hints (build-synthesis-hints analysis)]
+    (cond-> {:file/path file-path}
+      summary            (assoc :sem/summary summary)
+      purpose            (assoc :sem/purpose purpose)
+      (seq tags)         (assoc :sem/tags tags)
+      complexity         (assoc :sem/complexity complexity)
+      (seq patterns)     (assoc :sem/patterns patterns)
+      layer              (assoc :arch/layer layer)
+      category           (assoc :sem/category category)
+      confidence         (assoc :prov/confidence confidence)
+      (seq dependencies) (assoc :sem/dependencies dependencies)
+      hints              (assoc :sem/synthesis-hints hints))))
+
+(defn- build-analyze-prov-tx
+  "Build the provenance transaction entity for an analysis run. Pure."
+  [{:keys [model-version prompt-hash-val analyzer usage]}]
+  (let [cost (let [raw (:cost-usd usage 0.0)]
+               (if (pos? raw)
+                 raw
+                 (llm/estimate-cost (or model-version "")
+                                    (:input-tokens usage 0)
+                                    (:output-tokens usage 0))))]
+    (cond-> {:db/id              "datomic.tx"
+             :tx/op              :analyze
+             :tx/source          :llm
+             :tx/model           (or model-version "unknown")
+             :tx/analyzer        (or analyzer "noumenon.analyze/0.1.0")
+             :prov/model-version (or model-version "unknown")
+             :prov/prompt-hash   (or prompt-hash-val "")
+             :prov/analyzed-at   (Date.)}
+      (:input-tokens usage)  (assoc :tx/input-tokens (:input-tokens usage))
+      (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
+      (pos? cost)            (assoc :tx/cost-usd cost))))
+
 (defn analysis->tx-data
   "Convert a parsed analysis map into Datomic tx-data for a file.
    `file-path` is the repo-relative path. Returns tx-data vector (may be empty)."
-  [file-path analysis {:keys [model-version prompt-hash-val analyzer usage]}]
+  [file-path analysis prov-opts]
   (when (and analysis (seq analysis))
-    (let [{:keys [summary purpose tags complexity patterns layer
-                  category confidence dependencies segments]} analysis
-          hints (build-synthesis-hints analysis)
-          file-ref [:file/path file-path]
-          file-tx  (cond-> {:file/path file-path}
-                     summary          (assoc :sem/summary summary)
-                     purpose          (assoc :sem/purpose purpose)
-                     (seq tags)       (assoc :sem/tags tags)
-                     complexity       (assoc :sem/complexity complexity)
-                     (seq patterns)   (assoc :sem/patterns patterns)
-                     layer            (assoc :arch/layer layer)
-                     category         (assoc :sem/category category)
-                     confidence       (assoc :prov/confidence confidence)
-                     (seq dependencies) (assoc :sem/dependencies dependencies)
-                     hints            (assoc :sem/synthesis-hints hints))
-          seg-txs  (when (seq segments)
-                     (->> segments
-                          (reduce (fn [acc {:keys [name line-start] :as seg}]
-                                    (let [unique-name (if (contains? (:seen acc) name)
-                                                        (str name ":L" (or line-start
-                                                                           (count (:seen acc))))
-                                                        name)]
-                                      (if (contains? (:seen acc) unique-name)
-                                        acc
-                                        (-> acc
-                                            (update :seen conj name unique-name)
-                                            (update :txs conj (assoc seg :name unique-name))))))
-                                  {:seen #{} :txs []})
-                          :txs
-                          (mapv (partial segment->tx-data file-ref))))
-          cost     (let [raw (:cost-usd usage 0.0)]
-                     (if (pos? raw)
-                       raw
-                       (llm/estimate-cost (or model-version "")
-                                          (:input-tokens usage 0)
-                                          (:output-tokens usage 0))))
-          prov-tx  (cond-> {:db/id               "datomic.tx"
-                            :tx/op               :analyze
-                            :tx/source           :llm
-                            :tx/model            (or model-version "unknown")
-                            :tx/analyzer         (or analyzer "noumenon.analyze/0.1.0")
-                            :prov/model-version  (or model-version "unknown")
-                            :prov/prompt-hash    (or prompt-hash-val "")
-                            :prov/analyzed-at    (Date.)}
-                     (:input-tokens usage)  (assoc :tx/input-tokens (:input-tokens usage))
-                     (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
-                     (pos? cost)            (assoc :tx/cost-usd cost))]
-      (into [file-tx prov-tx] seg-txs))))
+    (let [file-ref [:file/path file-path]
+          seg-txs  (when-let [segs (seq (:segments analysis))]
+                     (mapv (partial segment->tx-data file-ref)
+                           (deduplicate-segments segs)))]
+      (into [(build-file-tx file-path analysis)
+             (build-analyze-prov-tx prov-opts)]
+            seg-txs))))
 
 ;; --- File content ---
 

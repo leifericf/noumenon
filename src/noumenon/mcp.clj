@@ -59,24 +59,17 @@
 (def ^:private allowed-layers #{:raw :import :enrich :full})
 (def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
 
-(defn- validate-string-length!
-  "Throw ex-info if s exceeds max-len characters."
-  [field-name s max-len]
-  (when (and (string? s) (> (count s) max-len))
-    (throw (ex-info (str field-name " exceeds maximum length of " max-len " characters")
-                    {:field field-name :length (count s) :max max-len}))))
-
 (defn- validate-llm-inputs!
   "Validate model and provider string lengths when present."
   [args]
-  (when-let [m (args "model")] (validate-string-length! "model" m max-model-len))
-  (when-let [p (args "provider")] (validate-string-length! "provider" p max-provider-len)))
+  (when-let [m (args "model")] (util/validate-string-length! "model" m max-model-len))
+  (when-let [p (args "provider")] (util/validate-string-length! "provider" p max-provider-len)))
 
 (defn- validate-layers
   "Parse and validate a comma-separated layers string. Returns keyword vector or nil."
   [layers-str]
   (when layers-str
-    (validate-string-length! "layers" layers-str max-layers-len)
+    (util/validate-string-length! "layers" layers-str max-layers-len)
     (let [kws (mapv keyword (str/split layers-str #","))]
       (when-let [bad (seq (remove allowed-layers kws))]
         (throw (ex-info (str "Unknown layers: " (pr-str bad)
@@ -295,7 +288,7 @@
   (let [raw-id (args "repo_path")]
     (when-not (string? raw-id)
       (throw (ex-info "repo_path is required" {:field "repo_path"})))
-    (validate-string-length! "repo_path" raw-id max-repo-path-len)
+    (util/validate-string-length! "repo_path" raw-id max-repo-path-len)
     (let [db-dir    (util/resolve-db-dir defaults)
           {:keys [repo-path db-name]}
           (repo/resolve-repo raw-id db-dir {:lookup-uri-fn lookup-repo-uri})
@@ -340,7 +333,7 @@
                           "\n\nTip: Use noumenon_query or noumenon_ask to explore the codebase before reading files directly."))))))
 
 (defn- handle-query [args defaults]
-  (validate-string-length! "query_name" (args "query_name") 256)
+  (util/validate-string-length! "query_name" (args "query_name") 256)
   (with-conn args defaults
     (fn [{:keys [db meta-db]}]
       (let [raw-params (args "params")
@@ -348,7 +341,7 @@
                          (throw (ex-info "Too many params"
                                          {:user-message "params: max 20 entries"})))
             _          (doseq [[k v] raw-params]
-                         (validate-string-length! (str "params." k) (str v) 1024))
+                         (util/validate-string-length! (str "params." k) (str v) 1024))
             params     (into {} (map (fn [[k v]] [(keyword k) v])) raw-params)
             result (query/run-named-query meta-db db (args "query_name") params)]
         (if (:ok result)
@@ -404,7 +397,7 @@
       "Already up to date.")))
 
 (defn- handle-update [args defaults]
-  (validate-string-length! "repo_path" (args "repo_path") max-repo-path-len)
+  (util/validate-string-length! "repo_path" (args "repo_path") max-repo-path-len)
   (validate-llm-inputs! args)
   (let [db-dir    (util/resolve-db-dir defaults)
         {:keys [repo-path db-name]}
@@ -425,7 +418,7 @@
     (tool-result (format-update-changes result))))
 
 (defn- handle-ask [args defaults]
-  (validate-string-length! "question" (args "question") max-question-len)
+  (util/validate-string-length! "question" (args "question") max-question-len)
   (validate-llm-inputs! args)
   (with-conn args defaults
     (fn [{:keys [db meta-db db-name]}]
@@ -632,7 +625,7 @@
 
 (defn- handle-benchmark-results [args defaults]
   (when-let [rid (args "run_id")]
-    (validate-string-length! "run_id" rid max-run-id-len))
+    (util/validate-string-length! "run_id" rid max-run-id-len))
   (with-conn args defaults
     (fn [{:keys [db]}]
       (if-let [run (find-run db (args "run_id"))]
@@ -640,8 +633,8 @@
         (tool-error "No benchmark runs found.")))))
 
 (defn- handle-benchmark-compare [args defaults]
-  (validate-string-length! "run_id_a" (args "run_id_a") max-run-id-len)
-  (validate-string-length! "run_id_b" (args "run_id_b") max-run-id-len)
+  (util/validate-string-length! "run_id_a" (args "run_id_a") max-run-id-len)
+  (util/validate-string-length! "run_id_b" (args "run_id_b") max-run-id-len)
   (with-conn args defaults
     (fn [{:keys [db]}]
       (let [id-a (args "run_id_a")
@@ -819,7 +812,7 @@
 
 (defn- handle-introspect-status [args _defaults]
   (let [run-id (args "run_id")]
-    (validate-string-length! "run_id" run-id max-run-id-len)
+    (util/validate-string-length! "run_id" run-id max-run-id-len)
     (if-let [session (sessions/get-session run-id)]
       (let [{:keys [status result error started-at]} session]
         (tool-result
@@ -835,7 +828,7 @@
 
 (defn- handle-introspect-stop [args _defaults]
   (let [run-id (args "run_id")]
-    (validate-string-length! "run_id" run-id max-run-id-len)
+    (util/validate-string-length! "run_id" run-id max-run-id-len)
     (if-let [session (sessions/get-session run-id)]
       (case (:status session)
         :running   (do (reset! (:stop-flag session) true)
@@ -848,7 +841,7 @@
 
 (defn- handle-introspect-history [args defaults]
   (let [query-name (args "query_name")]
-    (validate-string-length! "query_name" query-name 256)
+    (util/validate-string-length! "query_name" query-name 256)
     (when-not (str/starts-with? (str query-name) "introspect-")
       (throw (ex-info "Only introspect-* queries are available"
                       {:user-message "Use one of: introspect-runs, introspect-improvements, introspect-by-target, introspect-score-trend, introspect-failed-approaches"})))
@@ -889,7 +882,7 @@
                       {:user-message "name is required when type is 'prompt'. Provide the prompt name to look up."})))
     (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir defaults))
           history   (case atype
-                      "prompt" (do (validate-string-length! "name" aname 256)
+                      "prompt" (do (util/validate-string-length! "name" aname 256)
                                    (artifacts/prompt-history meta-conn aname))
                       "rules"  (artifacts/rules-history meta-conn))]
       (tool-result
