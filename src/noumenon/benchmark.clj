@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.cli :as cli]
+            [noumenon.embed :as embed]
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
             [noumenon.query :as query]
@@ -49,7 +50,11 @@
 
 (def all-layers
   "Ordered benchmark layers from least to most enriched."
-  [:raw :import :enrich :full])
+  [:raw :import :enrich :full :embedded])
+
+(def ^:private canonical-layers
+  "Layers required for a canonical run (original 4)."
+  #{:raw :import :enrich :full})
 
 (def default-layers
   "Default layers for backward-compatible runs."
@@ -130,6 +135,25 @@
                              " files (" total " chars)"))
                   (str/join "\n" (conj parts "[... context truncated to fit API limits]")))
               (recur (rest remaining) (conj parts part) new-total))))))))
+
+(defn embed-context
+  "Build context from TF-IDF search results for the embedded layer.
+   Searches the index for the question text, returns file paths + summaries
+   formatted similarly to query-context output."
+  [embed-index question-text]
+  (if-not embed-index
+    "(No TF-IDF index available)"
+    (let [results (embed/search embed-index question-text :limit 15)]
+      (if-not (seq results)
+        "(TF-IDF search returned no results)"
+        (->> results
+             (map (fn [{:keys [kind path name text score]}]
+                    (str (if (= :file kind)
+                           (str "File: " path)
+                           (str "Component: " name))
+                         " (relevance: " (format "%.3f" (double score)) ")\n"
+                         "  " text)))
+             (str/join "\n\n"))))))
 
 ;; --- Prompts ---
 
@@ -568,8 +592,8 @@
          by-cat     (group-by :category results)
          det-rs     (filterv #(= :deterministic (:scoring %)) results)
          llm-rs     (filterv #(not= :deterministic (:scoring %)) results)
-         ;; Canonical only if all 4 layers and no skip flags
-         canonical? (and (= (set layers) (set all-layers))
+         ;; Canonical if at least the original 4 layers and no skip flags
+         canonical? (and (every? (set layers) canonical-layers)
                          (not (:skip-judge mode)))
          ;; Use :full layer for deterministic/llm-judged means (primary benchmark metric)
          primary-layer (if (some #{:full} layers) :full (last layers))]
@@ -721,6 +745,9 @@
           (:full-mean aggregate)
           (assoc :bench.run/full-mean (double (:full-mean aggregate)))
 
+          (:embedded-mean aggregate)
+          (assoc :bench.run/embedded-mean (double (:embedded-mean aggregate)))
+
           ;; Weighted per-layer means
           (:weighted-raw-mean aggregate)
           (assoc :bench.run/weighted-raw-mean (double (:weighted-raw-mean aggregate)))
@@ -733,6 +760,9 @@
 
           (:weighted-full-mean aggregate)
           (assoc :bench.run/weighted-full-mean (double (:weighted-full-mean aggregate)))
+
+          (:weighted-embedded-mean aggregate)
+          (assoc :bench.run/weighted-embedded-mean (double (:weighted-embedded-mean aggregate)))
 
           (:deterministic-count aggregate)
           (assoc :bench.run/deterministic-count (long (:deterministic-count aggregate))
@@ -967,15 +997,16 @@
 
 (defn- stage-prompt
   "Build the LLM prompt for a benchmark stage."
-  [stage-key {:keys [question rubric-map meta-db db raw-ctx stages]}]
+  [stage-key {:keys [question rubric-map meta-db db raw-ctx embed-ctx stages]}]
   (let [[qid layer stage-type] stage-key
         q-text (:question question)]
     (if (= :judge stage-type)
       (judge-prompt (:judge-template rubric-map) q-text (:rubric question)
                     (get-in stages [[qid layer :answer] :result]))
       ;; :answer stage — context depends on layer
-      (if (= :raw layer)
-        (answer-prompt q-text raw-ctx)
+      (case layer
+        :raw      (answer-prompt q-text raw-ctx)
+        :embedded (answer-prompt q-text (embed-context embed-ctx q-text))
         (answer-prompt q-text (query-context meta-db db (:query-name question)))))))
 
 (defn- run-deterministic-stage
@@ -1113,11 +1144,12 @@
 
 (defn- execute-and-record-stage!
   "Execute one stage, record result in checkpoint, write to disk."
-  [{:keys [stage-key question rubric-map meta-db db raw-ctx checkpoint cp-path
+  [{:keys [stage-key question rubric-map meta-db db raw-ctx embed-ctx checkpoint cp-path
            invoke-llm judge-llm session-cost total]}]
   (let [stage-start (System/currentTimeMillis)
         result      (run-stage stage-key {:question question :rubric-map rubric-map
                                           :meta-db meta-db :db db :raw-ctx raw-ctx
+                                          :embed-ctx embed-ctx
                                           :stages (:stages @checkpoint)
                                           :invoke-llm invoke-llm :judge-llm judge-llm})
         dur-ms      (- (System/currentTimeMillis) stage-start)
@@ -1575,9 +1607,12 @@
         (when-let [mq (:max-questions budget)]
           (count (all-stage-keys (take mq questions) mode)))
         has-raw?       (some #{:raw} layers)
+        has-embedded?  (some #{:embedded} layers)
         isolated-llm   (when has-raw? (llm/make-isolated-prompt-fn
                                        (select-keys model-config [:provider :model])))
         raw-ctx        (when (and has-remaining? has-raw?) (raw-context repo-path))
+        embed-ctx      (when (and has-remaining? has-embedded?)
+                         (embed/get-cached-index (:db-dir opts) (:db-name opts)))
         checkpoint     (atom (make-initial-checkpoint
                               (build-run-metadata
                                {:resume-checkpoint resume-checkpoint
@@ -1589,7 +1624,8 @@
                                 :mode mode
                                 :budget budget})))
         pairs          (for [q questions, layer layers] [(:id q) layer q])
-        shared         {:rubric-map rubric-map :meta-db meta-db :db db :raw-ctx raw-ctx
+        shared         {:rubric-map rubric-map :meta-db meta-db :db db
+                        :raw-ctx raw-ctx :embed-ctx embed-ctx
                         :checkpoint checkpoint :cp-path cp-path
                         :invoke-llm invoke-llm :isolated-llm isolated-llm :judge-llm judge-llm
                         :session-cost session-cost :budget budget :start-ms start-ms

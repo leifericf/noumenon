@@ -37,7 +37,7 @@
 (def ^:private max-question-len 8000)
 (def ^:private max-run-id-len 256)
 (def ^:private max-layers-len 64)
-(def ^:private allowed-layers #{:raw :import :enrich :full})
+(def ^:private allowed-layers #{:raw :import :enrich :full :embedded})
 (def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
 
 (defn- validate-string-length!
@@ -342,7 +342,7 @@
           (with-sse request (partial run-synthesize ctx params config))
           (ok (run-synthesize ctx params config nil)))))))
 
-(defn- run-digest [{:keys [conn meta-db repo-path]} params config progress-fn]
+(defn- run-digest [{:keys [conn meta-db db-dir db-name repo-path]} params config progress-fn]
   (let [{:keys [prompt-fn model-id]}
         (llm/wrap-as-prompt-fn-from-opts (resolve-provider params config))
         step-progress (fn [step-name inner-fn]
@@ -374,7 +374,8 @@
                                                                        :budget {:max-questions (:max_questions params)}
                                                                        :report? (:report params)
                                                                        :concurrency 3
-                                                                       :progress-fn progress-fn)]
+                                                                       :progress-fn progress-fn
+                                                                       :db-dir db-dir :db-name db-name)]
                                       (select-keys r [:run-id :aggregate :stop-reason :report-path]))))]
     (cond-> {}
       update-r  (assoc :update update-r)
@@ -581,7 +582,7 @@
           (ok {:deleted db-name}))
       (error-response 404 (str "Database not found: " db-name)))))
 
-(defn- run-benchmark [{:keys [conn meta-db db repo-path]} params config progress-fn]
+(defn- run-benchmark [{:keys [conn meta-db db db-dir db-name repo-path]} params config progress-fn]
   (let [{:keys [prompt-fn]}
         (llm/wrap-as-prompt-fn-from-opts (resolve-provider params config))
         layers (validate-layers (:layers params))
@@ -591,7 +592,8 @@
                                      :budget {:max-questions (:max_questions params)}
                                      :report? (:report params)
                                      :concurrency 3
-                                     :progress-fn progress-fn)]
+                                     :progress-fn progress-fn
+                                     :db-dir db-dir :db-name db-name)]
     (select-keys result [:run-id :aggregate :stop-reason :report-path])))
 
 (defn- handle-benchmark-run [request config]

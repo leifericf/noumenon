@@ -380,8 +380,10 @@
                                                    :model       model
                                                    :temperature 0.3
                                                    :max-tokens  4096})
+                  eidx   (embed/get-cached-index (:db-dir ctx) db-name)
                   result (agent/ask meta-db db question
-                                    (cond-> {:invoke-fn invoke-fn :repo-name db-name}
+                                    (cond-> {:invoke-fn invoke-fn :repo-name db-name
+                                             :embed-index eidx}
                                       max-iterations (assoc :max-iterations max-iterations)
                                       continue-from  (assoc :continue-from continue-from)))]
               (when verbose (log-verbose-steps result max-iterations))
@@ -488,7 +490,9 @@
                           :concurrency (or (:concurrency opts) 3)
                           :min-delay-ms (or (:min-delay opts) 0)
                           :conn (:conn opts)
-                          :report? (:report? opts))
+                          :report? (:report? opts)
+                          :db-dir (:db-dir opts)
+                          :db-name (:db-name opts))
     {:exit 0}
     (catch Exception e
       (print-error! (.getMessage e))
@@ -601,7 +605,8 @@
           (fn [{:keys [conn db meta-db]}]
             (let [answer-llm (:prompt-fn (llm/wrap-as-prompt-fn-from-opts
                                           {:provider provider :model model}))
-                  run-opts   (build-benchmark-opts opts conn meta-db)]
+                  run-opts   (assoc (build-benchmark-opts opts conn meta-db)
+                                    :db-dir (:db-dir ctx) :db-name (:db-name ctx))]
               (if resume
                 (do-benchmark-resume "data/benchmarks/runs" resume db
                                      (:repo-path opts) answer-llm run-opts)
@@ -673,7 +678,8 @@
                                                         :conn conn :mode mode
                                                         :budget {:max-questions max-questions}
                                                         :report? report
-                                                        :concurrency (or concurrency 3))
+                                                        :concurrency (or concurrency 3)
+                                                        :db-dir db-dir :db-name db-name)
                                   [:run-id :aggregate :stop-reason :report-path]))))
           (log! (str "digest: complete (" (- (System/currentTimeMillis) t0) " ms)"))
           {:exit 0 :result @results})

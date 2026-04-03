@@ -57,7 +57,7 @@
 (def ^:private max-model-len 256)
 (def ^:private max-provider-len 64)
 (def ^:private max-layers-len 64)
-(def ^:private allowed-layers #{:raw :import :enrich :full})
+(def ^:private allowed-layers #{:raw :import :enrich :full :embedded})
 (def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
 
 (defn- validate-llm-inputs!
@@ -595,7 +595,7 @@
 (defn- handle-benchmark-run [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [conn meta-db db repo-path]}]
+    (fn [{:keys [conn meta-db db db-dir db-name repo-path]}]
       (let [{:keys [prompt-fn]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                               :model    (or (args "model") (:model defaults))})
@@ -609,7 +609,8 @@
                                               :budget {:max-questions (args "max_questions")}
                                               :report? (args "report")
                                               :progress-fn (:progress-fn defaults)
-                                              :concurrency 3)]
+                                              :concurrency 3
+                                              :db-dir db-dir :db-name db-name)]
         (tool-result
          (str "Benchmark complete. Run ID: " (:run-id result)
               "\nQuestions: " (get-in result [:aggregate :question-count])
@@ -713,7 +714,7 @@
 (defn- handle-digest [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [conn meta-db repo-path]}]
+    (fn [{:keys [conn meta-db db-dir db-name repo-path]}]
       (let [{:keys [prompt-fn model-id]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                               :model    (or (args "model") (:model defaults))})
@@ -742,7 +743,8 @@
                                              :budget {:max-questions (args "max_questions")}
                                              :report? (args "report")
                                              :concurrency 3
-                                             :progress-fn (:progress-fn defaults))]
+                                             :progress-fn (:progress-fn defaults)
+                                             :db-dir db-dir :db-name db-name)]
             (swap! results assoc :benchmark
                    (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
         (tool-result (format-digest-summary @results))))))
