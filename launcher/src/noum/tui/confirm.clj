@@ -6,11 +6,12 @@
 
 (defn ask
   "Prompt for y/n confirmation. Returns true/false.
-   Non-interactive: returns default-val."
+   Non-interactive: returns default-val and logs the auto-accept."
   ([message] (ask message true))
   ([message default-val]
    (if-not (tui/interactive?)
-     default-val
+     (do (tui/eprintln (str message " → " (if default-val "yes" "no") " (non-interactive)"))
+         default-val)
      (let [hint (if default-val "[Y/n]" "[y/N]")]
        (tui/eprint (str (style/bold "? ") message " " (style/dim hint) " "))
        (let [input (str/trim (or (read-line) ""))]

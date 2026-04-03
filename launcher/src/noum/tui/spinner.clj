@@ -10,10 +10,13 @@
   (if (tui/utf8?) unicode-frames ascii-frames))
 
 (defn start
-  "Start a spinner with a message. Returns a map with :stop fn."
+  "Start a spinner with a message. Returns a map with :stop and :fail fns."
   [message]
   (if-not (tui/interactive?)
-    (do (tui/eprintln message) {:stop (fn [& _])})
+    (do (tui/eprintln message)
+        {:stop (fn ([] nil) ([_msg] nil))
+         :fail (fn ([] (tui/eprintln (str "FAILED: " message)))
+                 ([msg] (tui/eprintln (str "FAILED: " msg))))})
     (let [running (atom true)
           fs      (frames)
           t (Thread.
@@ -26,12 +29,18 @@
                                     " " message))
                    (Thread/sleep 80)
                    (recur (inc i))))
-               (tui/eprint (str (style/clear-line) (style/show-cursor)))))]
+               (tui/eprint (str (style/clear-line) (style/show-cursor)))))
+          stop! (fn [icon msg]
+                  (reset! running false)
+                  (Thread/sleep 100)
+                  (tui/eprintln (str icon " " msg)))
+          check (if (tui/utf8?) "✓" "*")
+          cross (if (tui/utf8?) "✗" "x")]
       (.setDaemon t true)
       (.start t)
-      {:stop (let [check (if (tui/utf8?) "✓" "*")]
-               (fn
-                 ([] (reset! running false) (Thread/sleep 100)
-                     (tui/eprintln (str (style/green check) " " message)))
-                 ([msg] (reset! running false) (Thread/sleep 100)
-                        (tui/eprintln (str (style/green check) " " msg)))))})))
+      {:stop (fn
+               ([] (stop! (style/green check) message))
+               ([msg] (stop! (style/green check) msg)))
+       :fail (fn
+               ([] (stop! (style/red cross) message))
+               ([msg] (stop! (style/red cross) msg)))})))

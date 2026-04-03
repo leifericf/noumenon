@@ -6,6 +6,7 @@
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [noum.paths :as paths]
+            [noum.tui.confirm :as confirm]
             [noum.tui.core :as tui]
             [noum.tui.spinner :as spinner])
   (:import [java.security MessageDigest]))
@@ -55,12 +56,12 @@
   (let [s       (spinner/start "Checking latest release for demo database...")
         release (latest-release-assets)]
     (when-not release
-      ((:stop s) "Failed")
+      ((:fail s))
       (throw (ex-info "Cannot reach GitHub. Check your internet connection." {})))
     (let [tarball-asset (find-asset (:assets release) asset-pattern)
           sha-asset     (find-asset (:assets release) sha-pattern)]
       (when-not tarball-asset
-        ((:stop s) "Not found")
+        ((:fail s) "Not found")
         (throw (ex-info (str "No demo database found in release " (:tag release)
                              ". The maintainer may not have uploaded it yet.") {})))
       ((:stop s) (str "Found demo database in " (:tag release)))
@@ -78,7 +79,7 @@
                   actual   (sha256-file tar-path)]
               (if (= expected actual)
                 ((:stop s3) "SHA256 verified")
-                (do ((:stop s3) "FAILED")
+                (do ((:fail s3))
                     (fs/delete-tree tmp-dir)
                     (throw (ex-info "SHA256 mismatch — download may be corrupted. Try again."
                                     {:expected expected :actual actual})))))))
@@ -102,7 +103,7 @@
       (let [src-system (str (fs/path stage "noumenon-demo" "noumenon"))
             dst-system (str (fs/path paths/data-dir "noumenon"))]
         (when-not (fs/directory? src-system)
-          ((:stop s) "Failed")
+          ((:fail s))
           (fs/delete-tree stage)
           (throw (ex-info "Tarball has unexpected structure (missing noumenon-demo/noumenon/)" {})))
         ;; Copy database subdirectories
@@ -135,12 +136,9 @@
   "Download and install the demo database. Returns true on success."
   [{:keys [force]}]
   (when (and (demo-db-exists?) (not force))
-    (tui/eprint "A 'noumenon' database already exists. Overwrite? [y/N] ")
-    (flush)
-    (let [answer (str (read-line))]
-      (when-not (#{"y" "Y" "yes"} answer)
-        (tui/eprintln "Cancelled.")
-        (throw (ex-info "Cancelled by user" {:cancelled true})))))
+    (when-not (confirm/ask "A 'noumenon' database already exists. Overwrite?" false)
+      (tui/eprintln "Cancelled.")
+      (throw (ex-info "Cancelled by user" {:cancelled true}))))
   (let [{:keys [tarball tmp-dir]} (download-and-verify!)]
     (try
       (extract! tarball)

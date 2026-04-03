@@ -365,7 +365,7 @@
       (when-not (zero? exit-code)
         (tui/eprintln (str (style/red "Error: ") "Electron UI exited with code " exit-code "."))
         (tui/eprintln "  Ensure Node.js is installed (https://nodejs.org) and run:")
-        (tui/eprintln "    npm install -g electron"))
+        (tui/eprintln "    cd ui && npm install"))
       exit-code)))
 
 ;; --- Query (raw + as-of) ---
@@ -442,14 +442,18 @@
   (let [conn (api/ensure-backend! flags)]
     (case (count positional)
       0 (print-api-result (api/get! conn "/api/settings"))
-      1 (let [resp (api/get! conn "/api/settings")]
+      1 (let [k    (first positional)
+              resp (api/get! conn (str "/api/settings/" k))]
           (if (:ok resp)
-            (let [k   (first positional)
-                  val (get (:data resp) (keyword k))]
-              (if (some? val)
-                (do (tui/eprintln (str "  " k ": " val)) 0)
-                (do (tui/eprintln (str "No setting: " k)) 1)))
-            (print-api-result resp)))
+            (do (tui/eprintln (str "  " k ": " (:data resp))) 0)
+            ;; Fall back to fetching all if per-key endpoint not available
+            (let [all (api/get! conn "/api/settings")]
+              (if (:ok all)
+                (let [val (get (:data all) (keyword k))]
+                  (if (some? val)
+                    (do (tui/eprintln (str "  " k ": " val)) 0)
+                    (do (tui/eprintln (str "No setting: " k)) 1)))
+                (print-api-result all)))))
       (print-api-result (api/post! conn "/api/settings"
                                    {:key (first positional) :value (second positional)})))))
 
@@ -463,12 +467,19 @@
     (let [target (first positional)]
       (if (= target "local")
         (do (api/set-active-connection! "local")
-            (tui/eprintln (str (style/green "Switched to local mode.")))
+            (tui/eprintln (str (style/green "Switched to local mode.")
+                               " Commands will use the local daemon."))
             0)
         (let [token (:token flags)
               ;; Derive a connection name from the URL
+              ;; Derive name from hostname (drop TLD): noumenon.example.com -> noumenon
               name  (or (:name flags)
-                        (last (str/split (str/replace target #"https?://" "") #"[/.]")))
+                        (let [host (str/replace target #"https?://" "")
+                              host (first (str/split host #"[:/]"))
+                              parts (str/split host #"\.")]
+                          (if (> (count parts) 1)
+                            (first parts)
+                            host)))
               conn  {:host target :token token :insecure (:insecure flags)}]
           ;; Validate by hitting /health
           (try
@@ -479,6 +490,8 @@
               (if (= 200 (:status resp))
                 (do (api/add-connection! name conn)
                     (tui/eprintln (str (style/green "Connected to ") target " as '" name "'."))
+                    (when token
+                      (tui/eprintln (str (style/dim "  Token saved to ~/.noumenon/config.edn"))))
                     0)
                 (do (tui/eprintln (str (style/red "Error: ") "Server returned HTTP " (:status resp)))
                     1)))
@@ -493,23 +506,29 @@
       (let [marker (if (:active? info) (style/green " *") "  ")]
         (tui/eprintln (str marker " " name
                            (when (:host info) (str " -> " (:host info)))
-                           (when (:mode info) (str " (" (clojure.core/name (:mode info)) ")"))))))
+                           (when (and (:mode info) (not= (clojure.core/name (:mode info)) name))
+                             (str " (" (clojure.core/name (:mode info)) ")"))))))
     0))
 
 (defn- do-disconnect [{:keys [positional]}]
   (if-not (seq positional)
     (do (tui/eprintln "Usage: noum disconnect <name>") 1)
-    (let [name (first positional)]
-      (api/remove-connection! name)
-      (tui/eprintln (str "Removed connection '" name "'."))
-      0)))
+    (let [name   (first positional)
+          conns  (api/list-connections)
+          exists (some (fn [c] (contains? c name)) conns)]
+      (if exists
+        (do (api/remove-connection! name)
+            (tui/eprintln (str "Removed connection '" name "'."))
+            0)
+        (do (tui/eprintln (str (style/yellow "No connection named '") name (style/yellow "'.")))
+            1)))))
 
 ;; --- Dispatch ---
 
 (defn- do-demo [{:keys [flags]}]
   (try
     (demo/install! flags)
-    (let [port (api/ensure-backend! {})]
+    (let [_port (api/ensure-backend! {})]
       (tui/eprintln "")
       (tui/eprintln (str (style/green "Done!") " Demo database ready."))
       (tui/eprintln "")

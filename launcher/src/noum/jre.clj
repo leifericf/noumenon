@@ -69,7 +69,7 @@
           ((:stop s) "SHA256 verified")
 
           :else
-          (do ((:stop s) "FAILED")
+          (do ((:fail s))
               (throw (ex-info "SHA256 mismatch -- JRE download may be corrupted. Try again."
                               {:expected expected :actual actual})))))
       (catch Exception e

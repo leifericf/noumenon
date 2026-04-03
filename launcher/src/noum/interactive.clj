@@ -25,7 +25,10 @@
            (take 20)
            (mapv (fn [{:keys [id question started-at]}]
                    {:label (str (style/dim (str id "  "))
-                                (-> (or question "—") (subs 0 (min 60 (count (or question "—"))))))
+                                (let [q (or question "—")]
+                                  (if (> (count q) 60)
+                                    (str (subs q 0 57) "…")
+                                    q)))
                     :value id}))))))
 
 (defn- fetch-queries [conn]
@@ -98,7 +101,9 @@
 (defn- collect-ask [conn]
   (when-let [repo (select-repo conn)]
     (when-let [question (prompt/ask "Question:")]
-      (when-not (str/blank? question)
+      (if (str/blank? question)
+        (do (tui/eprintln (style/yellow "  Question cannot be blank."))
+            nil)
         {:command "ask" :flags {} :positional [repo question]}))))
 
 (defn- collect-query [conn]
@@ -204,7 +209,23 @@
    "delete"     (fn [conn _] (collect-delete conn))
    "feedback"   (fn [conn _] (collect-feedback conn))
    "setup"      (fn [conn _] (collect-setup conn))
-   "history"    (fn [conn _] (collect-history conn))})
+   "history"    (fn [conn _] (collect-history conn))
+   "connect"    (fn [_conn _]
+                  (when-let [target (prompt/ask "URL or name (or 'local'):")]
+                    (when-not (str/blank? target)
+                      (if (= target "local")
+                        {:command "connect" :flags {} :positional ["local"]}
+                        (let [token (prompt/ask "Token (optional):")
+                              cname (prompt/ask "Connection name (optional):")]
+                          {:command "connect"
+                           :flags   (cond-> {}
+                                      (not (str/blank? token)) (assoc :token token)
+                                      (not (str/blank? cname)) (assoc :name cname))
+                           :positional [target]})))))
+   "disconnect" (fn [_conn _]
+                  (when-let [name (prompt/ask "Connection name:")]
+                    (when-not (str/blank? name)
+                      {:command "disconnect" :flags {} :positional [name]})))})
 
 ;; --- Commands to exclude from interactive menu ---
 
@@ -237,11 +258,16 @@
   (conj (mapv (fn [[group _]] {:label group :value group}) groups)
         {:label (style/dim "Quit") :value :quit}))
 
+(def ^:private no-backend-commands
+  "Commands that don't need the backend daemon."
+  #{"setup" "connect" "disconnect" "connections" "help" "version"})
+
 (defn run!
   "Interactive menu loop. Requires dispatch table and do-api-command fallback."
   [dispatch-table default-handler]
-  (let [conn   (api/ensure-backend! {})
-        groups (menu-groups)]
+  (let [groups (menu-groups)
+        conn   (atom nil)
+        ensure-conn! (fn [] (or @conn (reset! conn (api/ensure-backend! {}))))]
     (tui/eprintln (str "\n" (style/bold "noumenon") " — interactive mode\n"))
     (loop []
       (when-let [group (choose/select "What would you like to do?" (group-options groups))]
@@ -249,11 +275,14 @@
           (let [cmds (second (first (filter #(= (:value group) (first %)) groups)))]
             (when-let [cmd (choose/select (:value group) (command-options cmds))]
               (when-not (= :back (:value cmd))
-                (let [command  (:value cmd)
+                (let [command   (:value cmd)
+                      ;; Only start the daemon when the command actually needs it
+                      conn-val  (when-not (no-backend-commands command)
+                                  (ensure-conn!))
                       collector (get arg-collectors command)
-                      parsed   (if collector
-                                 (collector conn command)
-                                 {:command command :flags {} :positional []})]
+                      parsed    (if collector
+                                  (collector conn-val command)
+                                  {:command command :flags {} :positional []})]
                   (when parsed
                     (let [handler (get dispatch-table command default-handler)]
                       (tui/eprintln "")

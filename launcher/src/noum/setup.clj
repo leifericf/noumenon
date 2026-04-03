@@ -170,6 +170,7 @@ A PreToolUse hook enforces this — file-reading tools are blocked until a Noume
 (defn setup-code!
   "Write .mcp.json, hook, settings, and CLAUDE.md for Claude Code."
   []
+  (tui/eprintln (str (style/dim "  Target directory: ") (str (fs/absolutize "."))))
   (let [path     ".mcp.json"
         abs-path (str (fs/absolutize path))
         config   {"mcpServers"

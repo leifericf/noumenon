@@ -3,10 +3,13 @@
   (:require [babashka.fs :as fs]))
 
 (defn ensure-private!
-  "Set file permissions to owner-only (600) if the file exists."
+  "Set file permissions to owner-only (600) if the file exists.
+   No-op on platforms without POSIX file permissions (e.g. Windows)."
   [path]
   (when (fs/exists? path)
-    (fs/set-posix-file-permissions path "rw-------")))
+    (try
+      (fs/set-posix-file-permissions path "rw-------")
+      (catch UnsupportedOperationException _))))
 
 (def noum-dir  (str (fs/path (fs/home) ".noumenon")))
 (def jre-dir   (str (fs/path noum-dir "jre")))

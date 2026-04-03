@@ -10,7 +10,7 @@
   (if-not (tui/interactive?)
     (let [last-pct (atom -1)]
       {:update (fn [current]
-                 (let [pct (if (zero? total) 100 (int (* 100 (/ current total))))]
+                 (let [pct (if (pos? total) (int (* 100 (/ current total))) 0)]
                    (when (and (zero? (mod pct 25)) (not= pct @last-pct))
                      (reset! last-pct pct)
                      (tui/eprintln (str message " " pct "%")))))
@@ -20,7 +20,7 @@
           empty-ch  (if (tui/utf8?) "░" ".")
           spin-ch   (if (tui/utf8?) "⠋" "*")]
       {:update (fn [current]
-                 (let [pct   (if (zero? total) 100 (int (* 100 (/ current total))))
+                 (let [pct   (if (pos? total) (int (* 100 (/ current total))) 0)
                        filled (int (* width (/ (min current total) (max total 1))))
                        empty  (- width filled)]
                    (tui/eprint (str (style/clear-line)

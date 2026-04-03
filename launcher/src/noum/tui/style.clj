@@ -1,19 +1,31 @@
 (ns noum.tui.style
-  "ANSI styling primitives.")
+  "ANSI styling primitives.
+   Respects NO_COLOR (https://no-color.org) and non-TTY output.")
+
+(defn- color?
+  "True when ANSI colors should be emitted."
+  []
+  (and (nil? (System/getenv "NO_COLOR"))
+       (some? (System/console))))
 
 (def ^:private esc "\033[")
 
-(defn bold [s] (str esc "1m" s esc "0m"))
-(defn dim [s] (str esc "2m" s esc "0m"))
-(defn italic [s] (str esc "3m" s esc "0m"))
-(defn red [s] (str esc "31m" s esc "0m"))
-(defn green [s] (str esc "32m" s esc "0m"))
-(defn yellow [s] (str esc "33m" s esc "0m"))
-(defn blue [s] (str esc "34m" s esc "0m"))
-(defn cyan [s] (str esc "36m" s esc "0m"))
-(defn gray [s] (str esc "90m" s esc "0m"))
+(defn- wrap [code s]
+  (if (color?)
+    (str esc code "m" s esc "0m")
+    (str s)))
 
-(defn clear-line [] (str esc "2K\r"))
-(defn cursor-up [n] (str esc n "A"))
-(defn hide-cursor [] (str esc "?25l"))
-(defn show-cursor [] (str esc "?25h"))
+(defn bold [s] (wrap "1" s))
+(defn dim [s] (wrap "2" s))
+(defn italic [s] (wrap "3" s))
+(defn red [s] (wrap "31" s))
+(defn green [s] (wrap "32" s))
+(defn yellow [s] (wrap "33" s))
+(defn blue [s] (wrap "34" s))
+(defn cyan [s] (wrap "36" s))
+(defn gray [s] (wrap "90" s))
+
+(defn clear-line [] (if (color?) (str esc "2K\r") ""))
+(defn cursor-up [n] (if (color?) (str esc n "A") ""))
+(defn hide-cursor [] (if (color?) (str esc "?25l") ""))
+(defn show-cursor [] (if (color?) (str esc "?25h") ""))

@@ -4,6 +4,7 @@
             [babashka.http-client :as http]
             [cheshire.core :as json]
             [clojure.java.io :as io]
+            [noum.daemon :as daemon]
             [noum.paths :as paths]
             [noum.tui.core :as tui]
             [noum.tui.spinner :as spinner])
@@ -56,21 +57,22 @@
           actual   (sha256-file jar-path)]
       (if (= expected actual)
         ((:stop s) "SHA256 verified")
-        (do ((:stop s) "FAILED")
+        (do ((:fail s))
             (fs/delete jar-path)
             (throw (ex-info "SHA256 mismatch -- download may be corrupted. Try again."
                             {:expected expected :actual actual})))))
     (tui/eprintln "  Warning: no .sha256 sidecar in release, skipping checksum verification.")))
 
 (defn- current-version
-  "Read the installed JAR's version from the daemon, or nil."
+  "Read the installed JAR's version from the running daemon, or nil."
   []
-  (try
-    (let [resp (http/get "http://127.0.0.1:7891/health"
-                         {:timeout 2000 :throw false})]
-      (when (= 200 (:status resp))
-        (-> (json/parse-string (:body resp) true) :data :version)))
-    (catch Exception _ nil)))
+  (when-let [{:keys [port]} (daemon/connection)]
+    (try
+      (let [resp (http/get (str "http://127.0.0.1:" port "/health")
+                           {:timeout 2000 :throw false})]
+        (when (= 200 (:status resp))
+          (-> (json/parse-string (:body resp) true) :data :version)))
+      (catch Exception _ nil))))
 
 (defn download!
   "Download the latest noumenon.jar. Returns the jar path, or nil if already up to date."
