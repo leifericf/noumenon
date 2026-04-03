@@ -5,6 +5,7 @@
             [noumenon.analyze :as analyze]
             [noumenon.files :as files]
             [noumenon.git :as git]
+            [noumenon.calls :as calls]
             [noumenon.imports :as imports]
             [noumenon.util :refer [log!]]))
 
@@ -275,7 +276,9 @@
                            {:meta-db      (:meta-db opts)
                             :model-id     (:model-id opts)
                             :concurrency  (or (:analyze-concurrency opts) 3)
-                            :min-delay-ms 0}))]
+                            :min-delay-ms 0}))
+              calls-r   (when (or post-r analyze-r)
+                          (calls/resolve-calls! conn))]
           (update-head-sha! conn repo-path repo-uri)
           (let [elapsed (- (System/currentTimeMillis) start-ms)]
             (log! (str "Update complete (" elapsed " ms)"))
@@ -289,4 +292,5 @@
                      :files         (:files-imported files-r 0)
                      :imports       (:imports-resolved post-r 0)
                      :elapsed-ms  elapsed}
-              analyze-r (assoc :analyzed (:files-analyzed analyze-r 0)))))))))
+              analyze-r (assoc :analyzed (:files-analyzed analyze-r 0))
+              calls-r   (assoc :calls-resolved (:resolved calls-r 0)))))))))

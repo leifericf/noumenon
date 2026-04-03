@@ -69,4 +69,11 @@
  ;; Commits that touched a component
  [(component-commit ?comp ?commit)
   [?commit :commit/changed-files ?file]
-  [?file :arch/component ?comp]]]
+  [?file :arch/component ?comp]]
+
+ ;; Import-derived component dependency — live from file/imports graph
+ [(import-component-dep ?c1 ?c2)
+  [?f1 :file/imports ?f2]
+  [?f1 :arch/component ?c1]
+  [?f2 :arch/component ?c2]
+  [(!= ?c1 ?c2)]]]

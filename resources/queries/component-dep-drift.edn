@@ -1,0 +1,21 @@
+{:name "component-dep-drift"
+ :description "Compare LLM-declared vs import-derived component dependencies — shows undeclared imports and ungrounded declarations"
+ :uses-rules true
+ :query [:find ?from-name ?to-name ?declared ?import-backed
+         :where
+         [?fc :component/name ?from-name]
+         [?tc :component/name ?to-name]
+         [(!= ?fc ?tc)]
+         ;; At least one direction must hold
+         (or-join [?fc ?tc ?declared ?import-backed]
+                  (and [?fc :component/depends-on ?tc]
+                       [(ground true) ?declared]
+                       (or-join [?fc ?tc ?import-backed]
+                                (and (import-component-dep ?fc ?tc)
+                                     [(ground true) ?import-backed])
+                                (and (not (import-component-dep ?fc ?tc))
+                                     [(ground false) ?import-backed])))
+                  (and (import-component-dep ?fc ?tc)
+                       (not [?fc :component/depends-on ?tc])
+                       [(ground false) ?declared]
+                       [(ground true) ?import-backed]))]}

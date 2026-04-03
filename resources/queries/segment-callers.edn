@@ -1,0 +1,14 @@
+{:name "segment-callers"
+ :description "Segments that call a given segment — reverse call graph [requires inputs: file-path, segment-name]"
+ :inputs [:file-path :segment-name]
+ :query [:find ?caller-path ?caller-name ?caller-kind
+         :in $ ?target-path ?target-name
+         :where
+         [?tf :file/path ?target-path]
+         [?target :code/file ?tf]
+         [?target :code/name ?target-name]
+         [?caller :code/calls ?target]
+         [?caller :code/name ?caller-name]
+         [?caller :code/file ?cf]
+         [?cf :file/path ?caller-path]
+         [(get-else $ ?caller :code/kind :unknown) ?caller-kind]]}

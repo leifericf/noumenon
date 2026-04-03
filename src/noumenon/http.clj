@@ -22,6 +22,7 @@
             [noumenon.sessions :as sessions]
             [noumenon.sync :as sync]
             [noumenon.synthesize :as synthesize]
+            [noumenon.repo :as repo]
             [noumenon.util :as util :refer [log!]])
   (:import [java.lang ProcessHandle]
            [java.security MessageDigest]))
@@ -117,39 +118,20 @@
           nil)))))
 
 (defn- resolve-repo
-  "Resolve repo-path from request params, return context map or throw.
-   Accepts a filesystem path or a database name."
-  [repo-path db-dir]
-  (let [as-file   (io/file repo-path)
-        valid?    (and (.exists as-file) (nil? (util/validate-repo-path (.getCanonicalPath as-file))))
-        ;; Try as filesystem path first
-        canonical (when valid? (.getCanonicalPath as-file))
-        ;; If not a valid path, try as database name
-        db-name   (if canonical
-                    (util/derive-db-name canonical)
-                    repo-path)
-        ;; Check if the database directory exists for bare db names
-        db-path   (when-not canonical
-                    (io/file db-dir "noumenon" db-name))
-        repo-uri  (when-not canonical
-                    (or (lookup-repo-uri db-dir db-name)
-                        ;; Use a synthetic path for databases without stored URI
-                        (when (and db-path (.isDirectory db-path))
-                          (str "db://" db-name))))]
-    (when (and (not canonical) (not repo-uri))
-      (throw (ex-info (str "Repository not found: " repo-path)
-                      {:status 400
-                       :message (str "Repository not found: " repo-path
-                                     ". Use a filesystem path or a database name.")})))
-    (when canonical
-      (when-let [reason (util/validate-repo-path canonical)]
-        (throw (ex-info (str "Invalid repository: " reason)
-                        {:status 400 :message (str "Invalid repository: " reason)}))))
-    {:repo-path (or canonical repo-uri)
-     :db-dir    db-dir
-     :db-name   db-name
-     :conn      (db/get-or-create-conn db-dir db-name)
-     :meta-conn (db/ensure-meta-db db-dir)}))
+  "Resolve repo identifier from request params, return context map or throw.
+   Accepts a filesystem path, Git URL, or database name."
+  [identifier db-dir]
+  (try
+    (let [{:keys [repo-path db-name]}
+          (repo/resolve-repo identifier db-dir {:lookup-uri-fn lookup-repo-uri})]
+      {:repo-path repo-path
+       :db-dir    db-dir
+       :db-name   db-name
+       :conn      (db/get-or-create-conn db-dir db-name)
+       :meta-conn (db/ensure-meta-db db-dir)})
+    (catch clojure.lang.ExceptionInfo e
+      (throw (ex-info (.getMessage e)
+                      (assoc (ex-data e) :status 400 :message (.getMessage e)))))))
 
 (defn- with-repo
   "Execute f with resolved repo context. Returns JSON response."

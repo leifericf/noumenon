@@ -239,6 +239,42 @@
     (when (seq tx)
       (d/transact conn {:tx-data tx}))))
 
+;; --- Deterministic component dependency derivation ---
+
+(defn cross-component-edges
+  "Query file/imports edges crossing component boundaries.
+   Returns set of [from-comp-eid to-comp-eid] pairs."
+  [db]
+  (->> (d/q '[:find ?fc ?tc
+              :where
+              [?f1 :file/imports ?f2]
+              [?f1 :arch/component ?fc]
+              [?f2 :arch/component ?tc]
+              [(!= ?fc ?tc)]]
+            db)
+       set))
+
+(defn component-deps-tx
+  "Convert cross-component edge set to additive tx-data for :component/depends-on."
+  [edges]
+  (let [by-source (group-by first edges)]
+    (->> by-source
+         (mapv (fn [[src targets]]
+                 {:db/id src
+                  :component/depends-on (mapv second targets)})))))
+
+(defn derive-component-deps!
+  "Derive component dependencies from the import graph and transact.
+   Additive — merges with existing LLM-declared deps."
+  [conn]
+  (let [edges  (cross-component-edges (d/db conn))
+        tx     (component-deps-tx edges)]
+    (when (seq tx)
+      (d/transact conn {:tx-data (conj tx {:db/id "datomic.tx"
+                                           :tx/op :derive-deps
+                                           :tx/source :deterministic})}))
+    {:edges-derived (count edges)}))
+
 ;; --- Main orchestration ---
 
 (defn synthesize-repo!
@@ -282,14 +318,19 @@
                              (pos? cost)            (assoc :tx/cost-usd cost))
                 tx-data    (vec (concat retract-tx comp-txs [prov-tx]))]
             (d/transact conn {:tx-data tx-data})
-            (let [elapsed (- (System/currentTimeMillis) start-ms)]
+            (let [{:keys [edges-derived]} (derive-component-deps! conn)
+                  elapsed (- (System/currentTimeMillis) start-ms)]
+              (when (pos? edges-derived)
+                (log! "synthesize" (str "Derived " edges-derived
+                                        " component dependency edges from import graph")))
               (log! "synthesize" (str "Done. " (count (:components parsed)) " components, "
                                       n-files " files classified ("
                                       elapsed "ms)"))
-              {:components      (count (:components parsed))
+              {:components       (count (:components parsed))
                :files-classified n-files
-               :elapsed-ms      elapsed
-               :usage           usage}))
+               :edges-derived    edges-derived
+               :elapsed-ms       elapsed
+               :usage            usage}))
           (do (log! "synthesize/error" "Failed to parse synthesis response")
               {:components 0 :files-classified 0
                :elapsed-ms (- (System/currentTimeMillis) start-ms)

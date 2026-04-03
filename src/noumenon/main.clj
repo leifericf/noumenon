@@ -17,6 +17,7 @@
             [noumenon.http :as http]
             [noumenon.mcp :as mcp]
             [noumenon.query :as query]
+            [noumenon.repo :as repo]
             [noumenon.sync :as sync]
             [noumenon.synthesize :as synthesize]
             [noumenon.util :as util :refer [log!]]))
@@ -74,18 +75,12 @@
                    :meta-conn meta-conn :meta-db (d/db meta-conn))))))
 
 (defn- resolve-repo-path
-  "If repo-path is a Git URL, clone to data/repos/<name>/ and return local path.
-   If already cloned, reuse existing directory. Otherwise return repo-path as-is."
+  "If repo-path is a Git URL, clone and return local path. Otherwise return as-is.
+   Validation happens later in with-valid-repo."
   [repo-path]
-  (if-not (git/git-url? repo-path)
-    repo-path
-    (let [name   (git/url->repo-name repo-path)
-          target (str "data/repos/" name)]
-      (if (.isDirectory (io/file target ".git"))
-        (do (log! (str "Using existing clone at " target)) target)
-        (do (log! (str "Cloning " repo-path " into " target " ..."))
-            (git/clone! repo-path target)
-            target)))))
+  (if (git/git-url? repo-path)
+    (:repo-path (repo/resolve-repo repo-path (util/resolve-db-dir {}) {}))
+    repo-path))
 
 (defn do-import
   "Run the import subcommand. Returns {:exit n :result map-or-nil}."

@@ -14,6 +14,7 @@
             [noumenon.introspect :as introspect]
             [noumenon.llm :as llm]
             [noumenon.query :as query]
+            [noumenon.repo :as repo]
             [noumenon.sessions :as sessions]
             [noumenon.sync :as sync]
             [noumenon.synthesize :as synthesize]
@@ -21,16 +22,6 @@
   (:import [java.io BufferedReader PrintWriter]))
 
 ;; --- Helpers ---
-
-(defn- validate-repo-path!
-  "Validate that repo-path exists, is a directory, and contains .git.
-   Throws ex-info with a generic message (details logged to stderr only)."
-  [repo-path]
-  (when-let [reason (util/validate-repo-path repo-path)]
-    (log! "validate-repo-path" reason repo-path)
-    (throw (ex-info "Invalid or inaccessible repository path"
-                    {:repo-path    repo-path
-                     :user-message "Invalid or inaccessible repository path."}))))
 
 ;; --- Connection cache ---
 
@@ -281,32 +272,45 @@
 
 ;; --- Tool handlers ---
 
+(defn- lookup-repo-uri
+  "Look up stored :repo/uri for a database name. Returns path string or nil."
+  [db-dir db-name]
+  (let [db-path (io/file db-dir "noumenon" db-name)]
+    (when (.isDirectory db-path)
+      (try
+        (let [conn (get-or-create-conn db-dir db-name)
+              db   (d/db conn)]
+          (ffirst (d/q '[:find ?uri :where [_ :repo/uri ?uri]] db)))
+        (catch Exception e
+          (log! "lookup-repo-uri" db-name (.getMessage e))
+          nil)))))
+
 (defn- with-conn
-  "Resolve db-dir and db-name from arguments, get/create connection, call f with conn and db.
-   Also connects to the meta database for artifact access.
+  "Resolve repo identifier from arguments, get/create connection, call f with context.
+   Accepts filesystem paths, Git URLs, or database names.
    When auto-update is enabled (default), transparently updates stale databases before returning."
   [args defaults f]
-  (let [raw-path  (args "repo_path")]
-    (when-not (string? raw-path)
+  (let [raw-id (args "repo_path")]
+    (when-not (string? raw-id)
       (throw (ex-info "repo_path is required" {:field "repo_path"})))
-    (validate-string-length! "repo_path" raw-path max-repo-path-len)
-    (let [repo-path (.getCanonicalPath (io/file raw-path))]
-      (validate-repo-path! repo-path)
-      (let [db-dir    (util/resolve-db-dir defaults)
-            db-name   (util/derive-db-name repo-path)
-            conn      (get-or-create-conn db-dir db-name)
-            meta-conn (db/ensure-meta-db db-dir)]
-        (when (:auto-update defaults true)
-          (try
-            (let [db (d/db conn)]
-              (when (sync/stale? db repo-path)
-                (log! "auto-update" "HEAD changed, updating...")
-                (sync/update-repo! conn repo-path repo-path {:concurrency 8})))
-            (catch Exception e
-              (log! "auto-update" (str "failed, continuing: " (.getMessage e))))))
-        (f {:conn conn :db (d/db conn)
-            :meta-conn meta-conn :meta-db (d/db meta-conn)
-            :repo-path repo-path :db-name db-name})))))
+    (validate-string-length! "repo_path" raw-id max-repo-path-len)
+    (let [db-dir    (util/resolve-db-dir defaults)
+          {:keys [repo-path db-name]}
+          (repo/resolve-repo raw-id db-dir {:lookup-uri-fn lookup-repo-uri})
+          conn      (get-or-create-conn db-dir db-name)
+          meta-conn (db/ensure-meta-db db-dir)]
+      (when (and (:auto-update defaults true)
+                 (not (str/starts-with? (str repo-path) "db://")))
+        (try
+          (let [db (d/db conn)]
+            (when (sync/stale? db repo-path)
+              (log! "auto-update" "HEAD changed, updating...")
+              (sync/update-repo! conn repo-path repo-path {:concurrency 8})))
+          (catch Exception e
+            (log! "auto-update" (str "failed, continuing: " (.getMessage e))))))
+      (f {:conn conn :db (d/db conn)
+          :meta-conn meta-conn :meta-db (d/db meta-conn)
+          :repo-path repo-path :db-name db-name}))))
 
 (defn- format-import-summary [git-r files-r]
   (str "Import complete. "
@@ -400,25 +404,23 @@
 (defn- handle-update [args defaults]
   (validate-string-length! "repo_path" (args "repo_path") max-repo-path-len)
   (validate-llm-inputs! args)
-  (let [raw-path (args "repo_path")
-        repo-path (.getCanonicalPath (io/file raw-path))]
-    (validate-repo-path! repo-path)
-    (let [db-dir    (util/resolve-db-dir defaults)
-          db-name   (util/derive-db-name repo-path)
-          conn      (get-or-create-conn db-dir db-name)
-          meta-conn (db/ensure-meta-db db-dir)
-          analyze?  (args "analyze")
-          opts      (if analyze?
-                      (let [{:keys [prompt-fn model-id]}
-                            (llm/wrap-as-prompt-fn-from-opts
-                             {:provider (or (args "provider") (:provider defaults))
-                              :model    (or (args "model") (:model defaults))})]
-                        {:concurrency 8 :analyze? true
-                         :meta-db (d/db meta-conn)
-                         :model-id model-id :invoke-llm prompt-fn})
-                      {:concurrency 8})
-          result    (sync/update-repo! conn repo-path repo-path opts)]
-      (tool-result (format-update-changes result)))))
+  (let [db-dir    (util/resolve-db-dir defaults)
+        {:keys [repo-path db-name]}
+        (repo/resolve-repo (args "repo_path") db-dir {:lookup-uri-fn lookup-repo-uri})
+        conn      (get-or-create-conn db-dir db-name)
+        meta-conn (db/ensure-meta-db db-dir)
+        analyze?  (args "analyze")
+        opts      (if analyze?
+                    (let [{:keys [prompt-fn model-id]}
+                          (llm/wrap-as-prompt-fn-from-opts
+                           {:provider (or (args "provider") (:provider defaults))
+                            :model    (or (args "model") (:model defaults))})]
+                      {:concurrency 8 :analyze? true
+                       :meta-db (d/db meta-conn)
+                       :model-id model-id :invoke-llm prompt-fn})
+                    {:concurrency 8})
+        result    (sync/update-repo! conn repo-path repo-path opts)]
+    (tool-result (format-update-changes result))))
 
 (defn- handle-ask [args defaults]
   (validate-string-length! "question" (args "question") max-question-len)
@@ -685,7 +687,9 @@
       (let [{:keys [prompt-fn model-id]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                               :model    (or (args "model") (:model defaults))})
-            repo-uri (.getCanonicalPath (java.io.File. (str repo-path)))
+            repo-uri (if (str/starts-with? (str repo-path) "db://")
+                       repo-path
+                       (.getCanonicalPath (java.io.File. (str repo-path))))
             results  (atom {})]
         ;; Import + Enrich
         (when-not (or (args "skip_import") (args "skip_enrich"))
