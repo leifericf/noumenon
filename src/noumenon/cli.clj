@@ -281,6 +281,10 @@
                    :summary "Extract cross-file import graph deterministically"
                    :usage "enrich [options] <repo-path>"
                    :epilog "Parses source code imports and resolves them to repo files.\nFull support: Clojure. Import extraction: Elixir, Python, JS/TS, C/C++, Go, Rust, Java, Erlang.\nOther languages are skipped. External tools (elixir, python3, node, etc.) required on PATH.\nStdout: EDN result map (for scripting). Human output goes to stderr."}
+   "embed"        {:spec simple-command-spec
+                   :summary "Build TF-IDF vector index for semantic search"
+                   :usage "embed [options] <repo-path>"
+                   :epilog "Builds a TF-IDF vocabulary and vector index from file and component\nsummaries (requires prior analyze). Used by ask for semantic seeding\nand by the noumenon_search MCP tool.\nIndex is saved as a Nippy file alongside the Datomic database.\nIdempotent — rebuilds the full index on each run (~10ms for 300 files)."}
    "synthesize"   {:spec synthesize-command-spec
                    :summary "Identify architectural components from analyzed codebase data"
                    :usage "synthesize [options] <repo-path>"
@@ -406,7 +410,7 @@
                 :epilog "Starts an HTTP API server on 127.0.0.1 for the noum launcher\nand future Electron UI. Writes connection info to ~/.noumenon/daemon.edn.\nUse --port to specify a fixed port, or omit for auto-assignment.\nUse --token for remote access authentication."}})
 
 (def ^:private command-order
-  ["digest" "import" "analyze" "enrich" "synthesize" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "daemon" "benchmark" "introspect" "reseed" "artifact-history"])
+  ["digest" "import" "analyze" "enrich" "synthesize" "embed" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "daemon" "benchmark" "introspect" "reseed" "artifact-history"])
 
 ;; --- Help text generation ---
 

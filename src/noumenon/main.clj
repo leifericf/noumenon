@@ -15,6 +15,7 @@
             [noumenon.llm :as llm]
             [noumenon.imports :as imports]
             [noumenon.introspect :as introspect]
+            [noumenon.embed :as embed]
             [noumenon.http :as http]
             [noumenon.mcp :as mcp]
             [noumenon.query :as query]
@@ -208,6 +209,20 @@
             (log!)
             (log! help))
           {:exit 1})))))
+
+(defn do-embed
+  "Run the embed subcommand: build TF-IDF vector index. Returns {:exit n :result map-or-nil}."
+  [opts]
+  (with-valid-repo
+    opts
+    (fn [{:keys [db-dir db-name] :as ctx}]
+      (with-existing-db
+        ctx
+        (fn [{:keys [db]}]
+          (let [idx (embed/build-index! db db-dir db-name)]
+            {:exit   0
+             :result {:entries (count (:entries idx))
+                      :vocab   (count (:vocab idx))}}))))))
 
 (defn- build-sync-opts
   [{:keys [analyze model provider concurrency]}]
@@ -605,7 +620,7 @@
     (swap! results assoc step-key r)))
 
 (defn do-digest
-  "Run the full pipeline: import → enrich → analyze → synthesize → benchmark.
+  "Run the full pipeline: import → enrich → analyze → synthesize → embed → benchmark.
    Each step is idempotent and can be skipped with --skip-* flags."
   [{:keys [skip-import skip-enrich skip-analyze skip-synthesize skip-benchmark
            model provider concurrency max-questions layers report] :as opts}]
@@ -645,6 +660,9 @@
                                   {:meta-db   meta-db
                                    :model-id  (:model-id synth-llm)
                                    :repo-name db-name}))))
+          (run-digest-step! results :embed "embed"
+                            #(let [db (d/db conn)]
+                               (embed/build-index! db db-dir db-name)))
           (when-not skip-benchmark
             (run-digest-step! results :benchmark "benchmark"
                               #(let [db   (d/db conn)
@@ -853,6 +871,7 @@
     "analyze"          (do-analyze parsed)
     "enrich"           (do-enrich parsed)
     "synthesize"       (do-synthesize parsed)
+    "embed"            (do-embed parsed)
     "update"           (do-update parsed)
     "watch"            (do-watch parsed)
     "query"            (do-query parsed)
