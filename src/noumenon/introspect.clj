@@ -781,6 +781,7 @@
   [meta-conn db]
   (let [config  (model/load-config)
         dataset (td/build-dataset (d/db meta-conn) db config)
+        config  (assoc config :embedding-dim (:embedding-dim dataset))
         prev    (model/load-best-model)
         mdl     (if (and prev (= (:config prev) config))
                   (do (log! "introspect: warm-starting from previous model")

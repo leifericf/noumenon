@@ -367,11 +367,11 @@
                :max-iterations max-iterations})))))))
 
 (defn- model-hint
-  "If a trained model is available, generate a hint suggesting which
-   named queries to try first. Returns a string or nil."
-  [meta-db question]
+  "If a trained model and embed index are available, generate a hint suggesting
+   which named queries to try first. Returns a string or nil."
+  [meta-db embed-index question]
   (when-let [mdl (model/load-best-model)]
-    (when-let [suggestions (seq (model/suggest-queries mdl meta-db question 3))]
+    (when-let [suggestions (seq (model/suggest-queries mdl embed-index meta-db question 3))]
       (str "\n\nHint: a query routing model suggests these named queries "
            "may be relevant (try them first if they fit):\n"
            (->> suggestions
@@ -386,11 +386,12 @@
             :status :answered|:budget-exhausted :session-id string?}.
    Pass :continue-from session-id to resume a budget-exhausted session.
    Pass :on-iteration (fn [{:keys [iteration max-iterations message]}]) for progress."
-  [meta-db db question {:keys [invoke-fn repo-name max-iterations continue-from on-iteration]
+  [meta-db db question {:keys [invoke-fn repo-name max-iterations continue-from on-iteration
+                               embed-index]
                         :or   {max-iterations default-max-iterations}}]
   (let [sys-prompt (build-system-prompt meta-db db repo-name)
         context    {:meta-db meta-db :db db :invoke-fn invoke-fn :system-prompt sys-prompt}
-        hint       (model-hint meta-db question)
+        hint       (model-hint meta-db embed-index question)
         user-msg   (if hint (str question hint) question)
         initial    (if-let [prev (when continue-from (load-session! continue-from))]
                      (assoc prev :max-iterations (+ (:iterations prev) max-iterations))

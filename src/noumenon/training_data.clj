@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [noumenon.artifacts :as artifacts]
             [noumenon.benchmark :as bench]
+            [noumenon.embed :as embed]
             [noumenon.util :refer [log!]]))
 
 ;; --- Tokenization (simple word-level) ---
@@ -67,13 +68,16 @@
 ;; --- Dataset assembly ---
 
 (defn build-dataset
-  "Build a complete training dataset.
-   Returns {:examples [{:text str :tokens [int] :label int}...]
-            :vocab {str int} :label-index {int str}}."
-  [meta-db db {:keys [vocab-size] :or {vocab-size 2048}}]
+  "Build a complete training dataset using TF-IDF input vectors.
+   If an embed-index is provided, uses its vocab+IDF for consistent vectorization.
+   Otherwise builds a vocabulary from the training corpus itself.
+   Returns {:examples [{:text str :input double-array :label int}...]
+            :vocab {str int} :idf double-array :label-index {int str}}."
+  [meta-db db {:keys [vocab-size embed-index] :or {vocab-size 2048}}]
   (let [examples   (benchmark-examples meta-db db)
-        token-seqs (mapv (comp tokenize :text) examples)
-        vocab      (build-vocab token-seqs vocab-size)
+        token-seqs (mapv (comp embed/tokenize :text) examples)
+        vocab      (or (:vocab embed-index) (embed/build-vocab token-seqs vocab-size))
+        idf        (or (:idf embed-index) (embed/compute-idf vocab token-seqs))
         labels     (query-name->index meta-db)
         dropped    (remove #(labels (:query-name %)) examples)
         _          (when (seq dropped)
@@ -81,13 +85,16 @@
                                 " examples with unknown query names")))
         labeled    (keep (fn [[ex toks]]
                            (when-let [label (labels (:query-name ex))]
-                             {:text (:text ex) :tokens (encode vocab toks)
+                             {:text  (:text ex)
+                              :input (embed/tfidf-vec vocab idf toks)
                               :label label}))
                          (map vector examples token-seqs))]
-    {:examples    (vec labeled)
-     :vocab       vocab
-     :label-index (into {} (map (fn [[k v]] [v k]) labels))
-     :n-classes   (count labels)}))
+    {:examples      (vec labeled)
+     :vocab         vocab
+     :idf           idf
+     :embedding-dim (count vocab)
+     :label-index   (into {} (map (fn [[k v]] [v k]) labels))
+     :n-classes     (count labels)}))
 
 (defn save-dataset!
   "Save a dataset to EDN file."

@@ -1,11 +1,12 @@
 (ns noumenon.model
   "Query routing model: predicts which Datalog query patterns to try
-   for a given natural language question. Uses Deep Diamond for training
-   and inference on CPU (DNNL backend)."
+   for a given natural language question. Pure-Clojure feedforward
+   network using TF-IDF input vectors from embed.clj."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [noumenon.artifacts :as artifacts]
+            [noumenon.embed :as embed]
             [noumenon.query :as query]
             [noumenon.util :refer [log!]])
   (:import [java.util Random]))
@@ -47,20 +48,6 @@
 
 ;; --- Forward pass ---
 
-(defn- bag-of-words
-  "Average token indices into a fixed-size embedding vector.
-   Simple but effective: each dimension is the mean token index
-   binned into embedding-dim buckets."
-  [tokens embedding-dim]
-  (let [result (double-array embedding-dim)]
-    (doseq [t tokens]
-      (let [bucket (mod t embedding-dim)]
-        (aset result bucket (+ (aget result bucket) 1.0))))
-    (let [n (max 1.0 (double (count tokens)))]
-      (dotimes [i embedding-dim]
-        (aset result i (/ (aget result i) n))))
-    result))
-
 (defn- matmul-add
   "y = Wx + b. W is [out-dim x in-dim] stored row-major."
   ^doubles [^doubles w ^doubles b ^doubles x out-dim in-dim]
@@ -93,18 +80,17 @@
     y))
 
 (defn forward
-  "Forward pass: tokens -> class probabilities."
-  [{:keys [w1 b1 w2 b2 config]} tokens]
+  "Forward pass: input-vec (double-array) -> class probabilities."
+  [{:keys [w1 b1 w2 b2 config]} ^doubles input-vec]
   (let [{:keys [embedding-dim hidden-dim output-dim]} config
-        x  (bag-of-words tokens embedding-dim)
-        h  (relu (matmul-add w1 b1 x hidden-dim embedding-dim))
+        h  (relu (matmul-add w1 b1 input-vec hidden-dim embedding-dim))
         z  (matmul-add w2 b2 h output-dim hidden-dim)]
     (softmax z)))
 
 (defn predict
-  "Predict top-k query indices for a token sequence."
-  [model tokens k]
-  (let [probs    (forward model tokens)
+  "Predict top-k query indices for an input vector (double-array)."
+  [model ^doubles input-vec k]
+  (let [probs    (forward model input-vec)
         indexed  (map-indexed vector probs)
         top-k    (->> indexed (sort-by second >) (take k))]
     (mapv (fn [[idx prob]] {:index idx :probability prob}) top-k)))
@@ -116,15 +102,17 @@
     (into {} (map-indexed (fn [i n] [i n]) names))))
 
 (defn suggest-queries
-  "Given a question string, return the top-k most relevant named query suggestions.
-   Uses the vocab and label-index stored with the model for consistent tokenization
-   and index mapping. Falls back to live query names only when label-index is absent.
-   Returns a seq of {:query-name str :probability double}, or nil if no model is available."
-  [model meta-db question k]
-  (when (and model (:vocab model))
-    (let [tokens    (->> (str/lower-case question) (re-seq #"[a-z0-9_\-]+") vec)
-          encoded   (mapv #(get (:vocab model) % 1) tokens)
-          preds     (predict model encoded k)
+  "Given a question string and a TF-IDF index, return the top-k most relevant
+   named query suggestions. Uses TF-IDF vectors for richer input representation.
+   Falls back to live query names when label-index is absent in the model.
+   Returns a seq of {:query-name str :probability double}, or nil if unavailable."
+  [model embed-index meta-db question k]
+  (when (and model embed-index (:vocab embed-index))
+    (let [tokens    (embed/tokenize question)
+          input-vec (embed/tfidf-vec (:vocab embed-index)
+                                     (:idf embed-index)
+                                     tokens)
+          preds     (predict model input-vec k)
           idx->name (or (:label-index model) (index->query-name meta-db))]
       (->> preds
            (keep (fn [{:keys [index probability]}]
@@ -143,17 +131,17 @@
 (defn- numerical-gradient
   "Compute numerical gradient of loss w.r.t. a parameter array.
    Slow but correct — used for small models."
-  [model param-key tokens label epsilon]
+  [model param-key ^doubles input-vec label epsilon]
   (let [^doubles params (get model param-key)
         grad            (double-array (alength params))]
     (dotimes [i (alength params)]
       (let [orig (aget params i)]
         ;; f(x + eps)
         (aset params i (+ orig epsilon))
-        (let [loss-plus (cross-entropy-loss (forward model tokens) label)]
+        (let [loss-plus (cross-entropy-loss (forward model input-vec) label)]
           ;; f(x - eps)
           (aset params i (- orig epsilon))
-          (let [loss-minus (cross-entropy-loss (forward model tokens) label)]
+          (let [loss-minus (cross-entropy-loss (forward model input-vec) label)]
             (aset grad i (/ (- loss-plus loss-minus) (* 2.0 epsilon)))
             (aset params i orig)))))
     grad))
@@ -166,12 +154,12 @@
 
 (defn train-step!
   "Train on a single example. Returns loss."
-  [model tokens label lr]
-  (let [probs (forward model tokens)
+  [model ^doubles input-vec label lr]
+  (let [probs (forward model input-vec)
         loss  (cross-entropy-loss probs label)]
     ;; Numerical gradient for each parameter
     (doseq [k [:w1 :b1 :w2 :b2]]
-      (let [grad (numerical-gradient model k tokens label 1e-4)]
+      (let [grad (numerical-gradient model k input-vec label 1e-4)]
         (sgd-update! (get model k) grad lr)))
     loss))
 
@@ -201,8 +189,8 @@
             (let [indices (shuffle (range n))
                   batch   (take batch-size indices)
                   losses  (mapv (fn [idx]
-                                  (let [{:keys [tokens label]} (nth examples idx)]
-                                    (train-step! model tokens label learning-rate)))
+                                  (let [{:keys [input label]} (nth examples idx)]
+                                    (train-step! model input label learning-rate)))
                                 batch)]
               (recur (inc epoch)
                      (+ total-loss (apply + losses))
@@ -215,8 +203,8 @@
   [model dataset]
   (let [examples (:examples dataset)]
     (if (seq examples)
-      (let [results (mapv (fn [{:keys [tokens label]}]
-                            (let [preds (predict model tokens 3)]
+      (let [results (mapv (fn [{:keys [input label]}]
+                            (let [preds (predict model input 3)]
                               {:correct? (= label (:index (first preds)))
                                :in-top3? (some #(= label (:index %)) preds)}))
                           examples)

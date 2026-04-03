@@ -15,9 +15,14 @@
     (is (= (* 16 4) (alength ^doubles (:w2 m))))
     (is (= 4 (alength ^doubles (:b2 m))))))
 
+(defn- test-input
+  "Create a test input vector matching embedding-dim."
+  ^doubles [& vals]
+  (double-array (take 8 (concat vals (repeat 0.0)))))
+
 (deftest forward-produces-probabilities
   (let [m     (model/init-model test-config)
-        probs (model/forward m [1 2 3])]
+        probs (model/forward m (test-input 1.0 0.5 0.3))]
     (is (= 4 (alength probs)))
     ;; probabilities sum to ~1
     (is (< (Math/abs (- 1.0 (reduce + (vec probs)))) 0.001))
@@ -25,17 +30,17 @@
     (is (every? #(>= % 0.0) (vec probs)))))
 
 (deftest predict-returns-top-k
-  (let [m    (model/init-model test-config)
-        preds (model/predict m [1 2 3] 2)]
+  (let [m     (model/init-model test-config)
+        preds (model/predict m (test-input 1.0 0.5 0.3) 2)]
     (is (= 2 (count preds)))
     (is (every? :index preds))
     (is (every? :probability preds))))
 
 (deftest train-respects-time-budget
   (let [m       (model/init-model test-config)
-        dataset {:examples [{:tokens [1 2 3] :label 0}
-                            {:tokens [4 5 6] :label 1}
-                            {:tokens [7 8 9] :label 2}]
+        dataset {:examples [{:input (test-input 1.0 0.5 0.3) :label 0}
+                            {:input (test-input 0.0 1.0 0.5) :label 1}
+                            {:input (test-input 0.3 0.0 1.0) :label 2}]
                  :n-classes 4}
         result  (model/train! m dataset (assoc test-config :time-budget-sec 1))]
     (is (pos? (:steps result)))
@@ -67,17 +72,17 @@
         result (model/train! m {:examples []} (assoc test-config :time-budget-sec 1))]
     (is (zero? (:steps result)))))
 
-(deftest forward-with-empty-tokens
-  ;; Must not throw on empty input
+(deftest forward-with-zero-input
+  ;; Must not throw on zero input
   (let [m     (model/init-model test-config)
-        probs (model/forward m [])]
+        probs (model/forward m (double-array 8))]
     (is (= 4 (alength probs)))
     (is (< (Math/abs (- 1.0 (reduce + (vec probs)))) 0.001))))
 
 (deftest cross-entropy-oob-label
   ;; Label beyond output-dim must not crash
   (let [m (model/init-model test-config)]
-    (is (number? (model/train-step! m [1 2 3] 999 0.01)))))
+    (is (number? (model/train-step! m (test-input 1.0 0.5 0.3) 999 0.01)))))
 
 ;; --- Model save/load round-trip ---
 
@@ -92,8 +97,9 @@
       (is (= (vec (:b2 m1)) (vec (:b2 m2))))
       (is (= (:config m1) (:config m2)))
       ;; Predictions should be identical
-      (let [p1 (vec (model/forward m1 [1 2 3]))
-            p2 (vec (model/forward m2 [1 2 3]))]
+      (let [input (test-input 1.0 0.5 0.3)
+            p1    (vec (model/forward m1 input))
+            p2    (vec (model/forward m2 input))]
         (is (= p1 p2)))
       (finally
         (.delete (java.io.File. path))))))
@@ -128,19 +134,20 @@
 
 (deftest training-reduces-loss
   (let [m       (model/init-model test-config)
-        dataset {:examples [{:tokens [1 2 3] :label 0}
-                            {:tokens [4 5 6] :label 1}
-                            {:tokens [7 8 9] :label 2}
-                            {:tokens [1 4 7] :label 0}
-                            {:tokens [2 5 8] :label 1}]
+        input-0 (test-input 1.0 0.5 0.3)
+        dataset {:examples [{:input input-0 :label 0}
+                            {:input (test-input 0.0 1.0 0.5) :label 1}
+                            {:input (test-input 0.3 0.0 1.0) :label 2}
+                            {:input (test-input 0.8 0.3 0.6) :label 0}
+                            {:input (test-input 0.1 0.9 0.4) :label 1}]
                  :n-classes 4}
         ;; Get initial loss
-        initial-probs (model/forward m [1 2 3])
+        initial-probs (model/forward m input-0)
         initial-loss  (- (Math/log (Math/max 1e-7 (aget initial-probs 0))))
         ;; Train
         _       (model/train! m dataset (assoc test-config :time-budget-sec 2))
         ;; Get final loss
-        final-probs (model/forward m [1 2 3])
+        final-probs (model/forward m input-0)
         final-loss  (- (Math/log (Math/max 1e-7 (aget final-probs 0))))]
     ;; Loss should decrease (or at least not increase dramatically)
     (is (<= final-loss (+ initial-loss 1.0))

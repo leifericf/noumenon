@@ -2,16 +2,19 @@
 ;; This is the "train.py" equivalent — the single artifact the introspect
 ;; loop optimizes when targeting :model.
 ;;
-;; Architecture: bag-of-words → dense → ReLU → dense → softmax
-;; Input: question text (tokenized to vocab indices, averaged)
+;; Architecture: TF-IDF → dense → ReLU → dense → softmax
+;; Input: TF-IDF vector from embed.clj (dim = vocab size)
 ;; Output: probability distribution over named query patterns
+;;
+;; Note: embedding-dim is overridden at train time to match the TF-IDF
+;; vocabulary size from the dataset. The value here is a default/fallback.
 ;;
 ;; To ship pre-trained weights:
 ;;   cp data/models/latest.edn resources/model/weights.edn
 ;; The agent will load bundled weights automatically when no local model exists.
 
-{:vocab-size      2048        ;; BPE vocabulary size
- :embedding-dim   64          ;; Token embedding dimension
+{:vocab-size      2048        ;; Max vocabulary size for TF-IDF
+ :embedding-dim   2048        ;; Overridden by TF-IDF vocab size at train time
  :hidden-dim      128         ;; Hidden layer dimension
  :output-dim      48          ;; Number of named query patterns
  :learning-rate   0.001       ;; Adam learning rate
