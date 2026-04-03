@@ -307,6 +307,48 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
 
 <hr class="divider">
 
+<!-- Server mode -->
+<section id="server-mode" class="section-alt">
+  <div class="container section-center">
+    <h2 class="section-title">Share one knowledge graph across your team</h2>
+    <p class="section-sub">
+      Run Noumenon as a shared service for up to 200 concurrent users. One Docker command to deploy, token-based access, and all tools work transparently against the remote instance.
+    </p>
+    <div class="problem-grid">
+      <div class="card">
+        <h3>One-command deploy</h3>
+        <p>Docker Compose with env-var config. No Clojure knowledge needed. Health checks, auto-restart, and named volumes included.</p>
+      </div>
+      <div class="card">
+        <h3>Role-based access</h3>
+        <p>Admin tokens manage the server. Reader tokens for everyone else. The server manages its own git clones and refresh schedule.</p>
+      </div>
+      <div class="card">
+        <h3>Zero-config clients</h3>
+        <p><code>noum connect &lt;url&gt;</code> makes every CLI command and MCP tool route to the shared instance. Local paths are translated automatically.</p>
+      </div>
+    </div>
+    <div class="terminal" style="margin-top: 2.5rem;">
+      <div class="terminal-header">
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-dot"></span>
+        <span class="terminal-title">Terminal</span>
+      </div>
+      <pre><span class="prompt">$</span> docker compose up -d
+<span class="comment"># Noumenon daemon listening on 0.0.0.0:7891</span>
+
+<span class="prompt">$</span> noum connect https://noumenon.corp.example.com --token noum_abc...
+<span class="green">Connected to noumenon.corp.example.com as 'com'.</span>
+
+<span class="prompt">$</span> noum ask ./my-local-repo <span class="green">"What are the risk hotspots?"</span>
+<span class="comment"># queries the shared knowledge graph transparently</span></pre>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
 <!-- Query showcase -->
 <section id="queries">
   <div class="container">
