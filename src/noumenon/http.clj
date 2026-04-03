@@ -90,10 +90,12 @@
 ;; --- Auth ---
 
 (defn- constant-time=
-  "Constant-time string comparison to prevent timing attacks."
+  "Constant-time string comparison to prevent timing attacks.
+   Hashes both inputs first to ensure fixed-length comparison."
   [a b]
-  (MessageDigest/isEqual (.getBytes (str a) "UTF-8")
-                         (.getBytes (str b) "UTF-8")))
+  (let [digest #(.digest (MessageDigest/getInstance "SHA-256")
+                         (.getBytes (str %) "UTF-8"))]
+    (MessageDigest/isEqual (digest a) (digest b))))
 
 (defn- extract-bearer [request]
   (some-> (get-in request [:headers "authorization"] "")
@@ -1074,7 +1076,7 @@
                                  :query-params qp)]
               (or (check-auth request config method path)
                   (when (and (:read-only config)
-                             (auth/requires-admin? method path))
+                             (auth/writes-data? method path))
                     (error-response 503 "Server is in read-only mode"))
                   (try
                     (handler request config)
@@ -1127,7 +1129,7 @@
   [{:keys [port bind db-dir provider model token read-only
            max-ask-sessions max-llm-concurrency log-format
            webhook-secret poll-interval]}]
-  (let [resolved-token   (or token (util/env "NOUMENON_TOKEN"))
+  (let [resolved-token   (not-empty (or token (util/env "NOUMENON_TOKEN")))
         resolved-bind    (or bind (System/getenv "NOUMENON_BIND") "127.0.0.1")
         resolved-port    (or port (util/env-int "NOUMENON_PORT") 0)]
     {:port               resolved-port
@@ -1153,7 +1155,7 @@
     (throw (ex-info "Daemon already running" {})))
   (let [{:keys [bind token] :as config} (resolve-server-config opts)
         ;; Refuse to bind to non-localhost without auth
-        _ (when (and (not= bind "127.0.0.1") (not token))
+        _ (when (and (not= bind "127.0.0.1") (str/blank? token))
             (throw (ex-info (str "Cannot bind to " bind " without --token or NOUMENON_TOKEN. "
                                  "Remote access requires authentication.")
                             {})))

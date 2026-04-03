@@ -100,6 +100,11 @@
     "/api/tokens" "/api/repos" "/api/webhook"
     "/api/settings"})
 
+(def ^:private write-prefixes
+  "URI path prefixes that perform writes (used for read-only mode checks).
+   Superset of admin-only-prefixes plus endpoints that write to meta-db."
+  (into admin-only-prefixes #{"/api/ask"}))
+
 (def ^:private admin-only-methods
   "Method + path combos that need admin even though GET is normally reader-safe."
   #{[:delete "/api/databases"]})
@@ -111,3 +116,10 @@
       (and (= method :delete)
            (some #(clojure.string/starts-with? path (second %))
                  (filter #(= (first %) :delete) admin-only-methods)))))
+
+(defn writes-data?
+  "True if this request performs writes (superset of requires-admin?)."
+  [method path]
+  (or (requires-admin? method path)
+      (and (= method :post)
+           (some #(clojure.string/starts-with? path %) write-prefixes))))

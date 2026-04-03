@@ -136,7 +136,7 @@
 (defn- load-config []
   (if (fs/exists? paths/config-path)
     (do (paths/ensure-private! paths/config-path)
-        (edn/read-string (slurp paths/config-path)))
+        (edn/read-string {:readers {}} (slurp paths/config-path)))
     {}))
 
 (defn- save-config! [config]

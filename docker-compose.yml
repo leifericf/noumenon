@@ -6,8 +6,7 @@ services:
     ports:
       - "${NOUMENON_PORT:-7891}:7891"
     environment:
-      - NOUMENON_TOKEN=${NOUMENON_TOKEN}
-      - NOUMENON_BIND=0.0.0.0
+      - NOUMENON_TOKEN=${NOUMENON_TOKEN:?Set NOUMENON_TOKEN in .env — required for remote access}
       - NOUMENON_LLM_PROVIDER=${NOUMENON_LLM_PROVIDER:-}
       - NOUMENON_LLM_MODEL=${NOUMENON_LLM_MODEL:-}
       - NOUMENON_ZAI_TOKEN=${NOUMENON_ZAI_TOKEN:-}

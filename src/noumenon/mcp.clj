@@ -1006,7 +1006,7 @@
   []
   (let [config-path (str (io/file (System/getProperty "user.home") ".noumenon" "config.edn"))]
     (when (.exists (io/file config-path))
-      (let [config (edn/read-string (slurp config-path))
+      (let [config (edn/read-string {:readers {}} (slurp config-path))
             active (:active config)]
         (when (and active (not= active "local"))
           (get-in config [:connections active]))))))
@@ -1081,16 +1081,17 @@
                       (assoc arguments "repo_path" db-name)
                       arguments)]
       (try
-        (let [resp (case method
+        (let [;; Pass auth header via stdin to avoid token in process list
+              curl-config (str "header = \"Authorization: Bearer " token "\"\n"
+                               "header = \"Content-Type: application/json\"\n")
+              resp (case method
                      :get  (shell/sh
-                            "curl" "-s" "-X" "GET" url
-                            "-H" (str "Authorization: Bearer " token)
-                            "-H" "Content-Type: application/json")
+                            "curl" "-s" "--config" "-" "-X" "GET" url
+                            :in curl-config)
                      :post (shell/sh
-                            "curl" "-s" "-X" "POST" url
-                            "-H" (str "Authorization: Bearer " token)
-                            "-H" "Content-Type: application/json"
-                            "-d" (json/write-str args)))
+                            "curl" "-s" "--config" "-" "-X" "POST" url
+                            "-d" (json/write-str args)
+                            :in curl-config))
               body (json/read-str (:out resp))]
           (if (get body "ok")
             (tool-result (json/write-str (get body "data")))
