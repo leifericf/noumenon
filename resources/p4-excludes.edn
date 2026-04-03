@@ -30,7 +30,7 @@
 
  :compiled
  ["*.dll" "*.so" "*.dylib" "*.exe" "*.lib" "*.a" "*.o" "*.pdb" "*.ilk"
-  "*.jar" "*.war" "*.class" "*.pyc" "*.pyo" "*.whl"]
+  "*.exp" "*.jar" "*.war" "*.class" "*.pyc" "*.pyo" "*.whl"]
 
  :archives
  ["*.pak" "*.zip" "*.tar" "*.gz" "*.7z" "*.rar"]
