@@ -13,6 +13,7 @@
             [noumenon.artifacts :as artifacts]
             [noumenon.benchmark :as bench]
             [noumenon.db :as db]
+            [noumenon.embed :as embed]
             [noumenon.files :as files]
             [noumenon.git :as git]
             [noumenon.imports :as imports]
@@ -389,12 +390,13 @@
           (with-sse request (partial run-digest ctx params config))
           (ok (run-digest ctx params config nil)))))))
 
-(defn- run-ask [{:keys [db meta-db meta-conn db-name]} params config progress-fn]
+(defn- run-ask [{:keys [db meta-db meta-conn db-dir db-name]} params config progress-fn]
   (let [{:keys [invoke-fn]}
         (llm/make-messages-fn-from-opts
          (merge (resolve-provider params config)
                 {:temperature 0.3 :max-tokens 4096}))
         max-iter   (min (or (:max_iterations params) 10) 50)
+        eidx       (embed/get-cached-index db-dir db-name)
         started-at (java.util.Date.)
         start-ms   (System/currentTimeMillis)
         channel    (get #{:ui :cli :mcp :api} (keyword (or (:channel params) "")) :unknown)
@@ -402,6 +404,7 @@
         result     (agent/ask meta-db db (:question params)
                               {:invoke-fn      invoke-fn
                                :repo-name      db-name
+                               :embed-index    eidx
                                :max-iterations max-iter
                                :continue-from  (:continue_from params)
                                :on-iteration   progress-fn})

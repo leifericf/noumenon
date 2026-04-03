@@ -103,7 +103,10 @@
              (pr-str (:suggested-queries reflection)))
 
       (seq (:notes reflection))
-      (assoc :ask.session/agent-notes (:notes reflection)))))
+      (assoc :ask.session/agent-notes (:notes reflection))
+
+      (seq (:seed-results result))
+      (assoc :ask.session/seed-results (pr-str (:seed-results result))))))
 
 (defn save-session!
   "Persist a completed ask session to Datomic.

@@ -4,6 +4,7 @@
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
             [noumenon.artifacts :as artifacts]
+            [noumenon.embed :as embed]
             [noumenon.llm :as llm]
             [noumenon.model :as model]
             [noumenon.query :as query]))
@@ -366,6 +367,31 @@
                :total-usage usage
                :max-iterations max-iterations})))))))
 
+(defn- vector-seed
+  "Find top-N semantically similar files/components for the question.
+   Returns a hint string or nil."
+  [embed-index question]
+  (when-let [results (seq (embed/search embed-index question :limit 8))]
+    (let [files  (filter #(= :file (:kind %)) results)
+          comps  (filter #(= :component (:kind %)) results)]
+      (str "\n\nSemantic search suggests these may be relevant (query them first):"
+           (when (seq files)
+             (str "\n  Files:"
+                  (->> (take 5 files)
+                       (map (fn [{:keys [path text score]}]
+                              (str "\n  - " path " — "
+                                   (first (str/split-lines text))
+                                   " (" (format "%.2f" score) ")")))
+                       (str/join ""))))
+           (when (seq comps)
+             (str "\n  Components:"
+                  (->> (take 3 comps)
+                       (map (fn [{:keys [name text score]}]
+                              (str "\n  - " name " — "
+                                   (first (str/split-lines text))
+                                   " (" (format "%.2f" score) ")")))
+                       (str/join ""))))))))
+
 (defn- model-hint
   "If a trained model and embed index are available, generate a hint suggesting
    which named queries to try first. Returns a string or nil."
@@ -391,8 +417,9 @@
                         :or   {max-iterations default-max-iterations}}]
   (let [sys-prompt (build-system-prompt meta-db db repo-name)
         context    {:meta-db meta-db :db db :invoke-fn invoke-fn :system-prompt sys-prompt}
+        seed       (vector-seed embed-index question)
         hint       (model-hint meta-db embed-index question)
-        user-msg   (if hint (str question hint) question)
+        user-msg   (cond-> question seed (str seed) hint (str hint))
         initial    (if-let [prev (when continue-from (load-session! continue-from))]
                      (assoc prev :max-iterations (+ (:iterations prev) max-iterations))
                      {:messages [{:role "user" :content user-msg}]
@@ -409,13 +436,17 @@
       (let [step-start (System/currentTimeMillis)
             nxt        (next-state context state)]
         (if-let [done (:done nxt)]
-          (do (when on-iteration
-                (on-iteration {:type      "done"
-                               :current   (get-in done [:usage :iterations])
-                               :total     (get-in done [:usage :iterations])
-                               :message   "Composing answer"
-                               :elapsed   (- (System/currentTimeMillis) start-ms)}))
-              done)
+          (let [seed-results (when embed-index
+                               (embed/search embed-index question :limit 8))
+                done (cond-> done
+                       (seq seed-results) (assoc :seed-results seed-results))]
+            (when on-iteration
+              (on-iteration {:type      "done"
+                             :current   (get-in done [:usage :iterations])
+                             :total     (get-in done [:usage :iterations])
+                             :message   "Composing answer"
+                             :elapsed   (- (System/currentTimeMillis) start-ms)}))
+            done)
           (let [elapsed (- (System/currentTimeMillis) step-start)
                 nxt     (update nxt :steps
                                 (fn [ss] (if (seq ss)

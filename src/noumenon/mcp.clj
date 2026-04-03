@@ -9,6 +9,7 @@
             [noumenon.analyze :as analyze]
             [noumenon.artifacts :as artifacts]
             [noumenon.db :as db]
+            [noumenon.embed :as embed]
             [noumenon.files :as files]
             [noumenon.git :as git]
             [noumenon.benchmark :as bench]
@@ -305,7 +306,7 @@
             (log! "auto-update" (str "failed, continuing: " (.getMessage e))))))
       (f {:conn conn :db (d/db conn)
           :meta-conn meta-conn :meta-db (d/db meta-conn)
-          :repo-path repo-path :db-name db-name}))))
+          :repo-path repo-path :db-dir db-dir :db-name db-name}))))
 
 (defn- format-import-summary [git-r files-r]
   (str "Import complete. "
@@ -421,16 +422,18 @@
   (util/validate-string-length! "question" (args "question") max-question-len)
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [db meta-db db-name]}]
+    (fn [{:keys [db meta-db db-dir db-name]}]
       (let [{:keys [invoke-fn]}
             (llm/make-messages-fn-from-opts {:provider    (or (args "provider") (:provider defaults))
                                              :model       (or (args "model") (:model defaults))
                                              :temperature 0.3
                                              :max-tokens  4096})
             max-iter    (min (or (args "max_iterations") 10) 50)
+            eidx        (embed/get-cached-index db-dir db-name)
             result      (agent/ask meta-db db (args "question")
                                    {:invoke-fn      invoke-fn
                                     :repo-name      db-name
+                                    :embed-index    eidx
                                     :max-iterations max-iter
                                     :continue-from  (args "continue_from")})
             usage       (:usage result)

@@ -131,4 +131,9 @@
  {:db/ident       :ask.session/agent-notes
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "Free-text observations from the agent about the data"}]
+  :db/doc         "Free-text observations from the agent about the data"}
+
+ {:db/ident       :ask.session/seed-results
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "EDN vector of TF-IDF seed results [{:kind :path/:name :score}]"}]
