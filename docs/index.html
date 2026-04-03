@@ -39,6 +39,10 @@
   </div>
 </nav>
 
+<div class="container" style="text-align:center; padding: 0.6rem 1rem; margin-top: 0.5rem;">
+  <p style="margin:0; font-size:0.85rem; color: #f0c674; opacity:0.9;">Early beta &mdash; data model and interfaces are unstable before v1.0.0. Expect breaking changes between releases.</p>
+</div>
+
 <!-- Hero -->
 <section class="hero">
   <div class="container">
@@ -47,7 +51,7 @@
     </div>
     <h1>Precise, grounded answers<br>about your codebase.</h1>
     <p class="hero-sub">
-      Noumenon compiles your repository into a <a href="https://www.datomic.com">Datomic</a> knowledge graph: git objects, code segments, files, and architectural components. AI agents query the graph instead of scanning raw source into context windows. Pre-compiled knowledge means fewer tokens, fewer iterations, and facts instead of hallucinations. Across 9 repos and 8 languages, graph-augmented answers scored <strong>2.8&times; higher</strong>.
+      Compile your repository into a <a href="https://www.datomic.com">Datomic</a> knowledge graph. AI agents query structured facts instead of scanning raw source &mdash; fewer tokens, fewer iterations, <strong>2.8&times; better</strong> answers.
     </p>
     <div class="hero-actions">
       <a href="#get-started" class="btn btn-primary">Get Started</a>
@@ -111,8 +115,9 @@
   <div class="container section-center">
     <h2 class="section-title">How it works</h2>
     <p class="section-sub">
-      Four stages compile raw git data into a queryable knowledge graph. Each stage builds on the last.
+      Five stages compile raw git data into a queryable knowledge graph. Each stage builds on the last.
     </p>
+    <p style="font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">Build</p>
     <div class="pipeline">
       <div class="pipeline-step">
         <strong>Import</strong>
@@ -134,10 +139,18 @@
       <span class="pipeline-arrow">&rarr;</span>
       <div class="pipeline-step" style="border-color: rgba(96, 165, 250, 0.3);">
         <strong>Synthesize</strong>
-        <span>Components &amp; architecture</span>
+        <span>Components &amp; arch</span>
         <span class="step-note" style="color: #60a5fa;">macro / LLM</span>
       </div>
       <span class="pipeline-arrow">&rarr;</span>
+      <div class="pipeline-step">
+        <strong>Embed</strong>
+        <span>Vector search index</span>
+        <span class="step-note">deterministic</span>
+      </div>
+    </div>
+    <p style="font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; margin-top: 1.25rem;">Use</p>
+    <div class="pipeline">
       <div class="pipeline-step">
         <strong>Query / Ask / Serve</strong>
         <span>Use the graph</span>
@@ -150,20 +163,6 @@
         <span class="step-note" style="color: #d2a8ff;">autonomous</span>
       </div>
     </div>
-    <div class="problem-grid" style="margin-top: 2.5rem;">
-      <div class="card">
-        <h3>Import &amp; Enrich</h3>
-        <p><strong>Deterministic foundation.</strong> Commits, files, authors, diffs, and resolved cross-file import edges. No LLM. Fully reproducible.</p>
-      </div>
-      <div class="card">
-        <h3>Analyze (micro)</h3>
-        <p><strong>Per-file understanding.</strong> An LLM reads each file and extracts code segments with complexity, smells, safety concerns, and architectural hints.</p>
-      </div>
-      <div class="card">
-        <h3>Synthesize (macro)</h3>
-        <p><strong>Codebase-level architecture.</strong> Queries the knowledge graph to identify logical components, classify files into layers, and map component dependencies.</p>
-      </div>
-    </div>
   </div>
 </section>
 
@@ -174,22 +173,8 @@
   <div class="container section-center">
     <h2 class="section-title">Self-improving introspection</h2>
     <p class="section-sub">
-      An autonomous loop that proposes changes, evaluates them against the benchmark, and keeps what works. Inspired by <a href="https://github.com/karpathy/autoresearch">autoresearch</a>.
+      An autonomous loop proposes changes, evaluates them against the benchmark, and keeps what works. Five targets: prompts, examples, rules, source code, and model config. Capped by iterations, hours, or cost.
     </p>
-    <div class="problem-grid">
-      <div class="card">
-        <h3>Closed-loop optimization</h3>
-        <p>Propose a change, re-evaluate, keep or revert. Five targets: prompts, examples, rules, source code, and model config. Evaluates across multiple repos to prevent overfitting.</p>
-      </div>
-      <div class="card">
-        <h3>Budget-controlled</h3>
-        <p>Cap by iterations, hours, or dollar cost. Run <code>--max-hours 8</code> for an overnight session that stops automatically.</p>
-      </div>
-      <div class="card">
-        <h3>On-device ML model</h3>
-        <p>A pure-Clojure neural network learns which Datalog queries to try first. Trains locally at zero token cost.</p>
-      </div>
-    </div>
     <div class="terminal" style="margin-top: 2.5rem;">
       <div class="terminal-header">
         <span class="terminal-dot"></span>
@@ -266,44 +251,28 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
     <h2 class="section-title">Features</h2>
     <div class="features-grid">
       <div class="card">
-        <h3>Git history as first-class data</h3>
-        <p>Commits, authorship, change frequency, co-changed files, and fix-commit ratios. All queryable.</p>
-      </div>
-      <div class="card">
         <h3>MCP server</h3>
         <p>The full knowledge graph as MCP tools for Claude Desktop, Claude Code, or any MCP client.</p>
       </div>
       <div class="card">
-        <h3>Multi-language imports</h3>
-        <p>Deterministic import graphs for Clojure, Python, JS/TS, Rust, Java, C#, C/C++, Go, Elixir, and Erlang.</p>
+        <h3>10+ languages</h3>
+        <p>Import graphs for Clojure, Python, JS/TS, Rust, Java, C#, C/C++, Go, Elixir, and Erlang.</p>
+      </div>
+      <div class="card">
+        <h3>Visual desktop UI</h3>
+        <p>Force-directed graph, three-level drill-down, floating Ask overlay. <code>noum open</code></p>
+      </div>
+      <div class="card">
+        <h3>Sensitive file protection</h3>
+        <p><code>.env</code>, <code>*.pem</code>, credentials: tracked but never read or sent to LLMs.</p>
       </div>
       <div class="card">
         <h3>Cost transparency</h3>
         <p>Token estimates before you start, per-file telemetry as it runs, totals when done.</p>
       </div>
       <div class="card">
-        <h3>Sensitive file protection</h3>
-        <p><code>.env</code>, <code>*.pem</code>, credentials: tracked as entities but never read or sent to LLMs.</p>
-      </div>
-      <div class="card">
-        <h3>Architecture synthesis</h3>
-        <p>Identifies components, layers, and dependencies from the full codebase. Language-agnostic.</p>
-      </div>
-      <div class="card">
-        <h3>Interactive TUI</h3>
-        <p>Run <code>noum</code> with no arguments for a menu-driven terminal interface. Browse commands, select repositories and sessions from live data &mdash; no memorizing IDs.</p>
-      </div>
-      <div class="card">
-        <h3>Visual desktop UI</h3>
-        <p>Electron app with a force-directed graph, three-level drill-down, floating Ask overlay, and Canvas rendering at 60fps. <code>noum open</code></p>
-      </div>
-      <div class="card">
-        <h3>Concurrent and incremental</h3>
-        <p>Up to 20 parallel workers with automatic retry. Incremental sync picks up new commits only.</p>
-      </div>
-      <div class="card">
-        <h3>Self-improving</h3>
-        <p>Autonomous introspect loop proposes changes to prompts, rules, and code, then benchmarks them. Keeps what works, reverts what doesn't.</p>
+        <h3>Incremental sync</h3>
+        <p>Up to 20 parallel workers. After first import, only new commits are processed.</p>
       </div>
     </div>
   </div>
@@ -316,22 +285,8 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
   <div class="container section-center">
     <h2 class="section-title">Share one knowledge graph across your team</h2>
     <p class="section-sub">
-      Run Noumenon as a shared service for up to 200 concurrent users. One Docker command to deploy, token-based access, and all tools work transparently against the remote instance.
+      One Docker command. Token-based access. All CLI and MCP tools work transparently against the remote instance.
     </p>
-    <div class="problem-grid">
-      <div class="card">
-        <h3>One-command deploy</h3>
-        <p>Docker Compose with env-var config. No Clojure knowledge needed. Health checks, auto-restart, and named volumes included.</p>
-      </div>
-      <div class="card">
-        <h3>Role-based access</h3>
-        <p>Admin tokens manage the server. Reader tokens for everyone else. The server manages its own git clones and refresh schedule.</p>
-      </div>
-      <div class="card">
-        <h3>Zero-config clients</h3>
-        <p><code>noum connect &lt;url&gt;</code> makes every CLI command and MCP tool route to the shared instance. Local paths are translated automatically.</p>
-      </div>
-    </div>
     <div class="terminal" style="margin-top: 2.5rem;">
       <div class="terminal-header">
         <span class="terminal-dot"></span>
@@ -358,16 +313,10 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
   <div class="container">
     <div class="showcase">
       <div class="showcase-text">
-        <h2 class="section-title">Named queries</h2>
+        <h2 class="section-title">65+ named queries</h2>
         <p>
-          65+ pre-built Datalog queries in EDN, from file-level hotspots to component-level architecture. Deterministic, reproducible, composable.
+          Pre-built Datalog queries: hotspots, bug-prone files, contributor graphs, dependency analysis, component coupling, LLM cost tracking. Deterministic and composable.
         </p>
-        <ul>
-          <li>Complexity and change hotspots</li>
-          <li>Bug-prone files and co-change pairs</li>
-          <li>Contributor and dependency graphs</li>
-          <li>LLM cost tracking by model and file</li>
-        </ul>
       </div>
       <div class="terminal">
         <div class="terminal-header">
@@ -415,48 +364,28 @@ src/auth/session.ts       28       complex</span></pre>
         <div class="step-number">1</div>
         <div class="step-content">
           <h3>Install</h3>
-          <p>Single binary. Auto-downloads everything it needs on first use.</p>
           <code>curl -sSL https://noumenon.leifericf.com/install | bash</code>
-          <p style="margin-top: 0.75rem;">Or via <a href="https://brew.sh">Homebrew</a> (macOS / Linux) or <a href="https://scoop.sh">Scoop</a> (Windows):</p>
-          <code>brew install leifericf/noumenon/noumenon</code>
-          <code style="margin-top: 0.25rem;">scoop bucket add noumenon https://github.com/leifericf/scoop-noumenon &amp;&amp; scoop install noumenon</code>
+          <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #8b949e;">Also via <a href="https://brew.sh">Homebrew</a>: <code>brew install leifericf/noumenon/noumenon</code></p>
         </div>
       </div>
       <div class="step">
         <div class="step-number">2</div>
         <div class="step-content">
-          <h3>Launch interactive mode</h3>
-          <p>A menu-driven TUI that lets you browse commands by category, select repositories and sessions from live data &mdash; no memorizing IDs.</p>
-          <code>noum</code>
+          <h3>Try the demo</h3>
+          <code>noum demo</code>
+          <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #8b949e;">Pre-built knowledge graph. No LLM credentials needed.</p>
         </div>
       </div>
       <div class="step">
         <div class="step-number">3</div>
         <div class="step-content">
-          <h3>Try the demo</h3>
-          <p>Downloads a pre-built knowledge graph. No LLM credentials needed.</p>
-          <code>noum demo</code>
-        </div>
-      </div>
-      <div class="step">
-        <div class="step-number">4</div>
-        <div class="step-content">
           <h3>Ask a question</h3>
-          <p>Natural-language questions answered by iterative Datalog queries against the knowledge graph.</p>
           <code>noum ask noumenon "Which files are the biggest risk hotspots?"</code>
-        </div>
-      </div>
-      <div class="step">
-        <div class="step-number">5</div>
-        <div class="step-content">
-          <h3>Open the visual UI</h3>
-          <p>Force-directed graph visualization with three-level drill-down and a floating Ask overlay. <a href="https://nodejs.org">Node.js</a> must be installed.</p>
-          <code>noum open</code>
         </div>
       </div>
     </div>
     <p class="section-sub" style="margin-top: 1.5rem;">
-      Or import your own repo: <code>noum import /path/to/your/repo</code>
+      Or: <code>noum digest /path/to/your/repo</code> to build your own knowledge graph.
     </p>
   </div>
 </section>

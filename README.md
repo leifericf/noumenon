@@ -1,5 +1,7 @@
 # Noumenon
 
+> **Early beta.** Data model and interfaces are unstable before v1.0.0. Expect breaking changes between releases.
+
 **Precise, grounded answers about your codebase.**
 
 Noumenon compiles repositories into a [Datomic](https://www.datomic.com) knowledge graph — commits, code segments, files, and architectural components — so AI agents answer codebase questions more accurately, faster, and cheaper than scanning raw source into context windows. Supports Git repositories and Perforce depots (via [git-p4](https://git-scm.com/docs/git-p4)).
@@ -52,7 +54,7 @@ noum digest /path/to/repo --provider glm    # full pipeline
 noum ask /path/to/repo "Which files are the biggest risk hotspots?"
 ```
 
-Or run stages individually: `noum import`, `noum enrich`, `noum analyze`, `noum synthesize`.
+Or run stages individually: `noum import`, `noum enrich`, `noum analyze`, `noum synthesize`, `noum embed`.
 
 ### Visual UI
 
@@ -64,7 +66,7 @@ Electron desktop app with force-directed graph visualization, three-level drill-
 
 ## How It Works
 
-Four pipeline stages compile raw git data into a queryable knowledge graph:
+Five pipeline stages compile raw git data into a queryable knowledge graph:
 
 | Stage | What it does | LLM? |
 |-------|-------------|------|
@@ -72,8 +74,9 @@ Four pipeline stages compile raw git data into a queryable knowledge graph:
 | **Enrich** | Cross-file import edges (10+ languages) | No |
 | **Analyze** | Per-file summaries, code segments, complexity, smells | Yes |
 | **Synthesize** | Components, layers, architectural dependencies | Yes |
+| **Embed** | TF-IDF vector index for semantic search | No |
 
-Three query interfaces sit on top: Datalog queries, natural-language Ask, and MCP tools. `introspect` uses benchmarks to autonomously improve the Ask agent.
+Three query interfaces sit on top: Datalog queries, natural-language Ask, and MCP tools. The Ask agent uses TF-IDF vector search to seed relevant files before querying the graph. `introspect` uses benchmarks to autonomously improve the Ask agent.
 
 ## MCP Server
 
@@ -110,12 +113,6 @@ Run `noum help` for the full command list. The CLI and MCP server expose the sam
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for setup, architecture, and project layout.
-
-## Status
-
-**Early beta, under rapid development.** APIs and CLI interfaces may change between releases.
-
-Built with [Claude Code Toolkit](https://github.com/leifericf/claude-code-toolkit).
 
 ## License
 
