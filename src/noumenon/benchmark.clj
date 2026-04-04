@@ -1005,10 +1005,17 @@
       (judge-prompt (:judge-template rubric-map) q-text (:rubric question)
                     (get-in stages [[qid layer :answer] :result]))
       ;; :answer stage — context depends on layer
-      (case layer
-        :raw      (answer-prompt q-text raw-ctx)
-        :embedded (answer-prompt q-text (embed-context embed-ctx q-text))
-        (answer-prompt q-text (query-context meta-db db (:query-name question)))))))
+      (let [kg-ctx    (when-not (= :raw layer)
+                        (query-context meta-db db (:query-name question)))
+            embed-str (when (and embed-ctx (not= :raw layer) (not= :embedded layer))
+                        (embed-context embed-ctx q-text))
+            context   (case layer
+                        :raw      raw-ctx
+                        :embedded (embed-context embed-ctx q-text)
+                        (if embed-str
+                          (str kg-ctx "\n\n--- Semantic search results ---\n\n" embed-str)
+                          kg-ctx))]
+        (answer-prompt q-text context)))))
 
 (defn- run-deterministic-stage
   "Score a deterministic (non-LLM) judge stage. Pure except for logging."
