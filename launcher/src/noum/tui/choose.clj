@@ -65,17 +65,19 @@
                                  (style/cursor-up n)))
                 (cond
                   (#{key-enter key-cr} ch)
-                  (do (tui/eprint (str (style/green "✓ ") message " → "
-                                       (style/cyan (nth labels selected)) "\r\n"))
-                      (nth options selected))
+                  (let [chosen (nth options selected)]
+                    (when-not (= :back (:value chosen))
+                      (tui/eprint (str (style/green "✓ ") message " → "
+                                       (style/cyan (nth labels selected)) "\r\n")))
+                    chosen)
 
                   (= key-escape ch)
                   (let [_ (.read tty)
                         arrow (.read tty)]
-                    (recur (case (int arrow)
-                             arrow-up   (mod (dec selected) n)
-                             arrow-down (mod (inc selected) n)
-                             selected)))
+                    (recur (cond
+                             (= arrow 65) (mod (dec selected) n)
+                             (= arrow 66) (mod (inc selected) n)
+                             :else selected)))
 
                   (= key-k ch) (recur (mod (dec selected) n))
                   (= key-j ch) (recur (mod (inc selected) n))

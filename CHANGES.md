@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.1
+
+TUI hotfix.
+
+### Fixes
+
+- **Arrow key navigation** — Menu selector now uses `cond` instead of `case` for escape sequence matching (Babashka's `case` doesn't resolve var references)
+- **Menu line breaks** — Raw terminal mode uses `\r\n` instead of `\n` for correct vertical layout
+- **Back navigation** — Selecting "← Back" no longer leaves a stray line in the console
+- **Key input** — Reads from `/dev/tty` directly instead of `System/in` for reliable raw-mode input
+
+### New
+
+- **`embed` command** in launcher — help text and Pipeline menu entry
+
 ## 0.5.0
 
 TF-IDF vector search, hierarchical synthesis, and cross-repo benchmarks.

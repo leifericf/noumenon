@@ -74,6 +74,9 @@
    "synthesize" {:summary "Identify architectural components from analyzed data"
                  :usage   "noum synthesize <repo> [options]"
                  :api-path "/api/synthesize" :api-method :post :min-args 1}
+   "embed"      {:summary "Build TF-IDF vector index for semantic search"
+                 :usage   "noum embed <repo>"
+                 :api-path "/api/embed" :api-method :post :min-args 1}
    "demo"       {:summary "Download pre-built demo database for instant querying"
                  :usage   "noum demo [--force]\n\n  Downloads a fully analyzed knowledge graph of the Noumenon repository.\n  No LLM credentials needed — try queries immediately:\n\n    noum ask noumenon \"Describe the architecture\"\n    noum query components noumenon\n    noum status noumenon"}
    "setup"      {:summary "Configure MCP for Claude Desktop or Code"
