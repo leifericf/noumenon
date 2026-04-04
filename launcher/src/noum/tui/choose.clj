@@ -15,20 +15,23 @@
 (def ^:private ^:const arrow-down   66)
 
 (defn- with-raw-mode
-  "Execute f with terminal in raw mode. Restores original settings on exit."
+  "Execute f with terminal in raw mode, reading from /dev/tty.
+   Passes the tty InputStream to f for direct key reads."
   [f]
   (let [saved (-> (Runtime/getRuntime)
                   (.exec (into-array String ["/bin/sh" "-c" "stty -g < /dev/tty"]))
                   (doto .waitFor)
                   .getInputStream
                   slurp
-                  str/trim)]
+                  str/trim)
+        tty   (java.io.FileInputStream. "/dev/tty")]
     (try
       (-> (Runtime/getRuntime)
           (.exec (into-array String ["/bin/sh" "-c" "stty raw -echo < /dev/tty"]))
           .waitFor)
-      (f)
+      (f tty)
       (finally
+        (.close tty)
         (-> (Runtime/getRuntime)
             (.exec (into-array String ["/bin/sh" "-c" (str "stty " saved " < /dev/tty")]))
             .waitFor)))))
@@ -48,14 +51,14 @@
       (tui/eprint (style/hide-cursor))
       (try
         (with-raw-mode
-          (fn []
+          (fn [tty]
             (loop [selected 0]
               (doseq [i (range n)]
                 (tui/eprint (str (if (= i selected)
                                    (str (style/cyan "▸ ") (style/bold (nth labels i)))
                                    (str "  " (nth labels i)))
                                  "\r\n")))
-              (let [ch (.read System/in)]
+              (let [ch (.read tty)]
                 ;; Erase the menu lines for redraw
                 (tui/eprint (str (style/cursor-up n)
                                  (str/join (repeat n (str (style/clear-line) "\r\n")))
@@ -67,8 +70,8 @@
                       (nth options selected))
 
                   (= key-escape ch)
-                  (let [_ (.read System/in)
-                        arrow (.read System/in)]
+                  (let [_ (.read tty)
+                        arrow (.read tty)]
                     (recur (case (int arrow)
                              arrow-up   (mod (dec selected) n)
                              arrow-down (mod (inc selected) n)
