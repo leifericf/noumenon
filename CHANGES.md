@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.0-rc1
+
+TF-IDF vector search, hierarchical synthesis, and cross-repo benchmarks.
+
+### New
+
+- **TF-IDF vector search** — `embed` pipeline stage builds a vocabulary and vector index from file and component summaries. Pure Clojure, no external dependencies beyond Nippy for serialization.
+- **`noumenon_search` MCP tool** — Semantic file/component search without the agent loop. Zero LLM calls, millisecond responses.
+- **Ask agent seeding** — The ask agent is seeded with TF-IDF search results before querying the knowledge graph, giving it a warm start on relevant files and components.
+- **`embedded` benchmark layer** — Measures TF-IDF retrieval quality alongside raw and full KG layers.
+- **`:full` layer enriched** — Benchmark's full layer now includes both KG query results and TF-IDF search results when available — representing everything Noumenon has.
+- **Hierarchical map-reduce synthesis** — Repos with 250+ files are synthesized per directory partition, then merged. Fixes guava (3,333 files) and redis (1,754 files) which previously returned 0 components.
+- **Session seed logging** — Ask sessions persist TF-IDF seed results to Datomic for analytics.
+
+### Changed
+
+- **Neural net input** — Query routing model now uses TF-IDF vectors instead of bag-of-words, giving it term-importance weighting. Existing trained models require retraining.
+- **MCP digest handler** — Now includes synthesize and embed steps (was missing both).
+- **Raw context limit** — Reduced from 800K to 500K chars to stay within the ~200K token API limit.
+- **Default benchmark provider** — Falls back to GLM instead of Claude CLI.
+
+### Fixes
+
+- MCP benchmark handler wasn't passing model-config, causing raw layer to silently fail via Claude CLI
+- Synthesize retraction + creation in same Datomic transaction caused datoms-conflict on re-synthesis
+- MCP synthesize and digest handlers weren't seeding new prompt templates
+- Recursive directory partitioning caused StackOverflowError on flat directory structures (redis)
+- Merge synthesis validator rejected components with `:source-components` instead of `:files`
+
+### Benchmarks
+
+Cross-repo benchmark (8 repos, 7 languages, 22 deterministic questions each):
+
+| Metric | Without Noumenon | With Noumenon | Improvement |
+|--------|-----------------|---------------|-------------|
+| Accuracy | 20% | 53% | 2.7x |
+| Token cost | 37K | 7K | 80% cheaper |
+| Speed | 13.6s | 6.1s | 55% faster |
+
 ## 0.4.0
 
 Architectural synthesis, visual desktop UI, and interactive CLI.

@@ -550,7 +550,7 @@
 (defn- handle-synthesize [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [conn meta-conn meta-db db-name]}]
+    (fn [{:keys [conn meta-conn db-name]}]
       (artifacts/reseed! meta-conn)
       (let [meta-db   (d/db meta-conn)
             {:keys [prompt-fn model-id]}
@@ -725,7 +725,7 @@
 (defn- handle-digest [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [conn meta-conn meta-db db-dir db-name repo-path]}]
+    (fn [{:keys [conn meta-conn db-dir db-name repo-path]}]
       (artifacts/reseed! meta-conn)
       (let [meta-db (d/db meta-conn)
             {:keys [prompt-fn model-id]}
