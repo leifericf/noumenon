@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0-rc1
+## 0.5.0
 
 TF-IDF vector search, hierarchical synthesis, and cross-repo benchmarks.
 
