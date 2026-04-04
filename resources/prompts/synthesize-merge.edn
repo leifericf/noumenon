@@ -21,41 +21,30 @@ Consolidate the partition-level components into a final architecture:
 2. **Rename** components for consistency (short kebab-case identifiers)
 3. **Resolve dependencies** — replace placeholder references with final component names
 4. **Assign layers and categories** from the full-codebase perspective
-5. **Preserve file assignments** — every file from every partition must appear in exactly one final component
-
-For each component, provide:
-- `:name` — short kebab-case identifier
-- `:summary` — what this component does (1-2 sentences)
-- `:purpose` — why it exists
-- `:layer` — `:core` | `:subsystem` | `:driver` | `:api` | `:util`
-- `:category` — `:backend` | `:frontend` | `:infrastructure` | `:configuration` | `:data` | `:testing` | `:documentation` | `:tooling` | `:shared`
-- `:patterns` — if clearly applicable: `:state-machine` | `:producer-consumer` | `:pipeline` | `:middleware-chain` | `:adapter`
-- `:complexity` — `:trivial` | `:simple` | `:moderate` | `:complex` | `:very-complex`
-- `:subsystem` — coarser grouping name
-- `:files` — complete list of file paths
-- `:depends-on` — list of other final component names
-
-## Rules
-
-- Every file from the partitions MUST appear in exactly one final component
-- Components should contain 2-30 files — merge small fragments, split oversized groups
-- Dependencies based on actual import edges only
-- Prefer fewer, well-defined components over many small ones
 
 ## Output Format
 
-Respond with ONLY a raw EDN map (no markdown fences, no explanation):
+Respond with ONLY a raw EDN map (no markdown fences, no explanation).
+
+**IMPORTANT**: Do NOT repeat file lists. Instead, use `:source-components` to map each final component back to the partition-level component names whose files belong to it. The system will reconstruct file assignments automatically.
 
 {:components [{:name \"component-name\"
-               :summary \"...\"
-               :purpose \"...\"
-               :layer :subsystem
-               :category :backend
+               :summary \"What it does (1-2 sentences)\"
+               :purpose \"Why it exists\"
+               :layer :core|:subsystem|:driver|:api|:util
+               :category :backend|:frontend|:infrastructure|:configuration|:data|:testing|:documentation|:tooling|:shared
                :patterns [:pipeline]
-               :complexity :moderate
-               :subsystem \"group-name\"
-               :files [\"path/to/file.ext\" ...]
-               :depends-on [\"other-component\" ...]}
-              ...]}"
+               :complexity :trivial|:simple|:moderate|:complex|:very-complex
+               :subsystem \"coarser-grouping\"
+               :source-components [\"partition-component-name-1\" \"partition-component-name-2\"]
+               :depends-on [\"other-final-component\" ...]}
+              ...]}
 
- :version "0.1.0"}
+## Rules
+
+- Every partition component must appear in exactly one final component's `:source-components`
+- Components should group 2-30 partition components typically
+- Dependencies based on actual import edges only
+- Prefer fewer, well-defined components over many small ones"
+
+ :version "0.2.0"}

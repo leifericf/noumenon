@@ -550,8 +550,10 @@
 (defn- handle-synthesize [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [conn meta-db db-name]}]
-      (let [{:keys [prompt-fn model-id]}
+    (fn [{:keys [conn meta-conn meta-db db-name]}]
+      (artifacts/reseed! meta-conn)
+      (let [meta-db   (d/db meta-conn)
+            {:keys [prompt-fn model-id]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                               :model    (or (args "model") (:model defaults))})
             result (synthesize/synthesize-repo!
@@ -560,9 +562,15 @@
         (tool-result (str "Synthesis complete. "
                           (:components result 0) " components identified, "
                           (:files-classified result 0) " files classified"
+                          (when-let [m (:mode result)]
+                            (str " (mode: " (name m)
+                                 (when-let [p (:partitions result)] (str ", " p " partitions"))
+                                 ")"))
                           (when-let [u (:usage result)]
                             (str " (" (:input-tokens u 0) " in / "
                                  (:output-tokens u 0) " out tokens)"))
+                          (when-let [e (:error result)]
+                            (str "\nError: " e))
                           "."))))))
 
 (defn- format-pipeline-stages
@@ -717,8 +725,10 @@
 (defn- handle-digest [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [conn meta-db db-dir db-name repo-path]}]
-      (let [{:keys [prompt-fn model-id]}
+    (fn [{:keys [conn meta-conn meta-db db-dir db-name repo-path]}]
+      (artifacts/reseed! meta-conn)
+      (let [meta-db (d/db meta-conn)
+            {:keys [prompt-fn model-id]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                               :model    (or (args "model") (:model defaults))})
             repo-uri (if (str/starts-with? (str repo-path) "db://")

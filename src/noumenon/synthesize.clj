@@ -147,6 +147,33 @@
       (string? subsystem)            (assoc :subsystem subsystem)
       (seq depends-on)               (assoc :depends-on (vec (filter string? depends-on))))))
 
+(defn- validate-merge-component
+  "Validate a component from the merge response (has :source-components instead of :files)."
+  [{:keys [name summary purpose layer category patterns
+           complexity subsystem source-components depends-on]}]
+  (when (and (string? name) (seq name) (seq source-components))
+    (cond-> {:name name :source-components (vec (filter string? source-components))}
+      (string? summary)              (assoc :summary (clamp summary))
+      (string? purpose)              (assoc :purpose (clamp purpose))
+      (valid-layer layer)            (assoc :layer layer)
+      (valid-category category)      (assoc :category category)
+      (seq (filter valid-patterns patterns)) (assoc :patterns (vec (filter valid-patterns patterns)))
+      (valid-complexity complexity)  (assoc :complexity complexity)
+      (string? subsystem)            (assoc :subsystem subsystem)
+      (seq depends-on)               (assoc :depends-on (vec (filter string? depends-on))))))
+
+(defn- parse-merge-response
+  "Parse and validate a merge synthesis response (source-components instead of files)."
+  [text]
+  (when text
+    (let [cleaned (analyze/strip-markdown-fences text)
+          parsed  (try (edn/read-string cleaned)
+                       (catch Exception e
+                         (log! "synthesize/parse-merge" (.getMessage e))
+                         nil))]
+      (when (map? parsed)
+        {:components (->> (:components parsed) (keep validate-merge-component) vec)}))))
+
 (defn parse-response
   "Parse and validate the LLM synthesis response."
   [text]
@@ -284,6 +311,10 @@
   "Directories with fewer files than this get merged into an 'other' bucket."
   5)
 
+(def ^:private max-partition-size
+  "Partitions larger than this get split by second-level directory."
+  150)
+
 (defn- invoke-and-parse
   "Render prompt, invoke LLM, and parse the response. Retries once on parse failure.
    Returns {:parsed map :usage map :resolved-model string}."
@@ -309,18 +340,40 @@
 
 ;; --- Hierarchical map-reduce ---
 
-(defn- top-level-dir
-  "Extract the top-level directory from a file path. Root files go to '(root)'."
-  [path]
+(defn- dir-at-depth
+  "Extract directory path at a given depth from a file path."
+  [path depth]
   (let [parts (str/split path #"/")]
-    (if (> (count parts) 1) (first parts) "(root)")))
+    (if (> (count parts) depth)
+      (str/join "/" (take depth parts))
+      (str/join "/" (butlast parts)))))
+
+(defn- split-recursively
+  "Recursively split a file group by increasing directory depth until all
+   partitions are <= max-partition-size. Returns {dir-name [files]}."
+  [dir-name files depth]
+  (if (<= (count files) max-partition-size)
+    {dir-name files}
+    (let [sub (group-by #(dir-at-depth (:path %) depth) files)]
+      (if (= 1 (count sub))
+        ;; Can't split further (flat directory) — keep as-is
+        {dir-name files}
+        (reduce-kv
+         (fn [acc k v]
+           (merge acc (split-recursively k v (inc depth))))
+         {} sub)))))
 
 (defn- partition-by-directory
-  "Group files by top-level directory. Merge small groups into an 'other' bucket."
+  "Group files by directory, recursively splitting until all partitions
+   are <= max-partition-size. Merge tiny groups into an '(other)' bucket."
   [files]
-  (let [groups   (group-by #(top-level-dir (:path %)) files)
-        small    (into {} (filter #(< (count (val %)) min-partition-size) groups))
-        large    (into {} (remove #(< (count (val %)) min-partition-size) groups))
+  (let [groups   (group-by #(dir-at-depth (:path %) 1) files)
+        expanded (reduce-kv
+                  (fn [acc dir-name dir-files]
+                    (merge acc (split-recursively dir-name dir-files 2)))
+                  {} groups)
+        small    (into {} (filter #(< (count (val %)) min-partition-size) expanded))
+        large    (into {} (remove #(< (count (val %)) min-partition-size) expanded))
         other    (vec (mapcat val small))]
     (cond-> large
       (seq other) (assoc "(other)" other))))
@@ -373,13 +426,16 @@
   "Synthesize components for one directory partition. Returns {:partition-name :components :usage}."
   [invoke-llm template repo-name partition-name partition-files full-data]
   (let [prompt (render-partition-prompt template repo-name partition-name partition-files full-data)
+        _      (log! "synthesize/partition" (str partition-name ": prompt=" (count prompt) " chars"))
         invoke-once (fn []
                       (let [{:keys [text usage resolved-model]} (invoke-llm prompt)]
+                        (log! "synthesize/partition" (str partition-name ": response=" (count (str text)) " chars"))
                         {:parsed (parse-response text) :usage usage :resolved-model resolved-model}))
         r1 (invoke-once)
         result (if (and (:parsed r1) (seq (:components (:parsed r1))))
                  r1
-                 (invoke-once))]
+                 (do (log! "synthesize/partition" (str partition-name ": retry (no components parsed)"))
+                     (invoke-once)))]
     {:partition-name partition-name
      :components     (get-in result [:parsed :components] [])
      :usage          (:usage result)
@@ -394,7 +450,7 @@
                         (log! "synthesize" (str "Merge response: " (count text) " chars"))
                         (when (seq text)
                           (log! "synthesize/tail" (subs text (max 0 (- (count text) 200)))))
-                        {:parsed (parse-response text) :usage usage :resolved-model resolved-model}))
+                        {:parsed (parse-merge-response text) :usage usage :resolved-model resolved-model}))
         r1 (invoke-once)]
     (if (and (:parsed r1) (seq (:components (:parsed r1))))
       r1
@@ -409,6 +465,12 @@
   (let [meta-db         (or meta-db (throw (ex-info "meta-db required" {})))
         partition-tmpl  (artifacts/load-prompt meta-db "synthesize-partition")
         merge-tmpl      (artifacts/load-prompt meta-db "synthesize-merge")
+        _               (log! "synthesize" (str "partition-tmpl: " (if partition-tmpl
+                                                                     (str (count partition-tmpl) " chars")
+                                                                     "NOT FOUND")))
+        _               (log! "synthesize" (str "merge-tmpl: " (if merge-tmpl
+                                                                 (str (count merge-tmpl) " chars")
+                                                                 "NOT FOUND")))
         _               (when-not (and partition-tmpl merge-tmpl)
                           (throw (ex-info "Hierarchical prompts not found — run 'reseed' first"
                                           {:status 400})))
@@ -439,8 +501,24 @@
              (on-progress {:phase :merge :current 1 :total 1 :components total-partition-comps}))
         merge-result (invoke-merge invoke-llm merge-tmpl repo-name
                                    (count (:files data)) partition-results data)
-        total-usage  (llm/sum-usage partition-usage (:usage merge-result))]
-    {:parsed         (:parsed merge-result)
+        total-usage  (llm/sum-usage partition-usage (:usage merge-result))
+        ;; Reconstruct file lists from source-components mapping
+        part-comp-index (into {}
+                              (for [pr partition-results
+                                    c  (:components pr)]
+                                [(:name c) (:files c)]))
+        resolved (when-let [comps (get-in merge-result [:parsed :components])]
+                   {:components
+                    (mapv (fn [c]
+                            (let [sources  (:source-components c)
+                                  files    (if (seq sources)
+                                             (vec (distinct (mapcat #(get part-comp-index % []) sources)))
+                                             (:files c))]
+                              (-> c (assoc :files files) (dissoc :source-components))))
+                          comps)})]
+    (log! "synthesize" (str "merge resolved: " (count (:components resolved)) " components, "
+                            (count (distinct (mapcat :files (:components resolved)))) " files"))
+    {:parsed         (or resolved (:parsed merge-result))
      :usage          total-usage
      :resolved-model (:resolved-model merge-result)
      :mode           :hierarchical
