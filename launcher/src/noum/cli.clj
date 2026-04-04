@@ -103,7 +103,7 @@
 
 (def command-groups
   [["Get Started" ["demo" "setup"]]
-   ["Pipeline"   ["digest" "import" "analyze" "enrich" "synthesize" "update" "watch"]]
+   ["Pipeline"   ["digest" "import" "analyze" "enrich" "synthesize" "embed" "update" "watch"]]
    ["Query"      ["ask" "query" "queries" "sessions" "feedback" "schema" "status"]]
    ["Benchmark"  ["bench" "results" "compare"]]
    ["Introspect" ["introspect"]]

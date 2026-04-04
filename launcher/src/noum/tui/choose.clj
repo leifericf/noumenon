@@ -51,18 +51,19 @@
           (fn []
             (loop [selected 0]
               (doseq [i (range n)]
-                (tui/eprintln (str (if (= i selected)
-                                     (str (style/cyan "▸ ") (style/bold (nth labels i)))
-                                     (str "  " (nth labels i))))))
+                (tui/eprint (str (if (= i selected)
+                                   (str (style/cyan "▸ ") (style/bold (nth labels i)))
+                                   (str "  " (nth labels i)))
+                                 "\r\n")))
               (let [ch (.read System/in)]
                 ;; Erase the menu lines for redraw
                 (tui/eprint (str (style/cursor-up n)
-                                 (str/join (repeat n (str (style/clear-line) "\n")))
+                                 (str/join (repeat n (str (style/clear-line) "\r\n")))
                                  (style/cursor-up n)))
                 (cond
                   (#{key-enter key-cr} ch)
-                  (do (tui/eprintln (str (style/green "✓ ") message " → "
-                                         (style/cyan (nth labels selected))))
+                  (do (tui/eprint (str (style/green "✓ ") message " → "
+                                       (style/cyan (nth labels selected)) "\r\n"))
                       (nth options selected))
 
                   (= key-escape ch)
