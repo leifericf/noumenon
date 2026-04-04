@@ -732,6 +732,26 @@
                                          {:meta-db meta-db :model-id model-id :concurrency 3
                                           :progress-fn (:progress-fn defaults)})]
             (swap! results assoc :analyze r)))
+        ;; Synthesize
+        (when-not (args "skip_analyze")
+          (try
+            (let [synth-llm (llm/wrap-as-prompt-fn-from-opts
+                             {:provider (or (args "provider") (:provider defaults))
+                              :model    (or (args "model") (:model defaults))
+                              :max-tokens 16384})
+                  r (synthesize/synthesize-repo!
+                     conn (:prompt-fn synth-llm)
+                     {:meta-db meta-db :model-id (:model-id synth-llm) :repo-name db-name})]
+              (swap! results assoc :synthesize r))
+            (catch Exception e
+              (log! "digest/synthesize" (str "skipped: " (.getMessage e))))))
+        ;; Embed
+        (let [db (d/db conn)]
+          (try
+            (let [idx (embed/build-index! db db-dir db-name)]
+              (swap! results assoc :embed {:entries (count (:entries idx))}))
+            (catch Exception e
+              (log! "digest/embed" (str "skipped: " (.getMessage e))))))
         ;; Benchmark
         (when-not (args "skip_benchmark")
           (let [db     (d/db conn)
