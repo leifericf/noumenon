@@ -602,10 +602,13 @@
             layers      (validate-layers (args "layers"))
             mode        (cond-> {}
                           layers (assoc :layers layers))
+            model-cfg   {:provider (or (args "provider") (:provider defaults))
+                         :model    (or (args "model") (:model defaults))}
             result      (bench/run-benchmark! db repo-path prompt-fn
                                               :meta-db meta-db
                                               :conn conn
                                               :mode mode
+                                              :model-config model-cfg
                                               :budget {:max-questions (args "max_questions")}
                                               :report? (args "report")
                                               :progress-fn (:progress-fn defaults)
@@ -757,9 +760,12 @@
           (let [db     (d/db conn)
                 layers (validate-layers (args "layers"))
                 mode   (cond-> {} layers (assoc :layers layers))
+                model-cfg {:provider (or (args "provider") (:provider defaults))
+                           :model    (or (args "model") (:model defaults))}
                 r      (bench/run-benchmark! db repo-path prompt-fn
                                              :meta-db meta-db
                                              :conn conn :mode mode
+                                             :model-config model-cfg
                                              :budget {:max-questions (args "max_questions")}
                                              :report? (args "report")
                                              :concurrency 3

@@ -63,9 +63,10 @@
 ;; --- Context assembly ---
 
 (def ^:private max-total-context-chars
-  "Maximum total characters for context passed to LLM. Prevents HTTP 413
-   on very large repos. ~800KB leaves room for prompt framing + question."
-  800000)
+  "Maximum total characters for raw context passed to LLM.
+   500K chars ≈ ~160K tokens, staying within the 200K token API limit
+   with room for prompt framing and the question."
+  500000)
 
 (defn query-context
   "Build context string from a named query's results for the given condition.
@@ -1269,7 +1270,7 @@
     {:checkpoint-dir checkpoint-dir
      :budget         budget
      :judge-llm      (or judge-llm invoke-llm)
-     :model-config   (or model-config {:provider "claude"})
+     :model-config   (or model-config {:provider "glm"})
      :concurrency    (max 1 (min 20 concurrency))
      :min-delay-ms   (max 0 min-delay-ms)
      :mode           mode}))
