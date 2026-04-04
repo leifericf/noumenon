@@ -551,11 +551,13 @@
                 :error "Failed to parse synthesis response"}
                mode-info))
     (let [template-str (pr-str mode-info)
-          tx-data (vec (concat (retraction-tx-data (d/db conn))
-                               (components->tx-data (:components parsed))
-                               [(build-provenance-tx template-str model-id
-                                                     resolved-model usage)]))]
-      (d/transact conn {:tx-data tx-data})
+          retract-tx (retraction-tx-data (d/db conn))
+          _          (when (seq retract-tx)
+                       (d/transact conn {:tx-data retract-tx}))
+          create-tx  (vec (concat (components->tx-data (:components parsed))
+                                  [(build-provenance-tx template-str model-id
+                                                        resolved-model usage)]))]
+      (d/transact conn {:tx-data create-tx})
       (let [{:keys [edges-derived]} (derive-component-deps! conn)
             n-files (count (distinct (mapcat :files (:components parsed))))
             elapsed (- (System/currentTimeMillis) start-ms)]

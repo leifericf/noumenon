@@ -1,6 +1,6 @@
 # Noumenon
 
-> **Early beta.** Data model and interfaces are unstable before v1.0.0. Expect breaking changes between releases.
+> **Experimental, early beta** — data model and interfaces are unstable. Expect breaking changes between releases.
 
 **Precise, grounded answers about your codebase.**
 

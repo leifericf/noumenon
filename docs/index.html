@@ -40,7 +40,7 @@
 </nav>
 
 <div class="container" style="text-align:center; padding: 0.6rem 1rem; margin-top: 0.5rem;">
-  <p style="margin:0; font-size:0.85rem; color: #f0c674; opacity:0.9;">Early beta &mdash; data model and interfaces are unstable before v1.0.0. Expect breaking changes between releases.</p>
+  <p style="margin:0; font-size:0.85rem; color: #f0c674; opacity:0.9;">Experimental, early beta &mdash; data model and interfaces are unstable. Expect breaking changes between releases.</p>
 </div>
 
 <!-- Hero -->
@@ -51,7 +51,7 @@
     </div>
     <h1>Precise, grounded answers<br>about your codebase.</h1>
     <p class="hero-sub">
-      Compile your repository into a <a href="https://www.datomic.com">Datomic</a> knowledge graph. AI agents query structured facts instead of scanning raw source &mdash; <strong>+14pp better</strong> answers across 9 repos and 8 languages.
+      Compile your repository into a <a href="https://www.datomic.com">Datomic</a> knowledge graph. AI agents query structured facts instead of scanning raw source &mdash; <strong>2.7&times; more accurate</strong>, <strong>80% cheaper</strong>, <strong>55% faster</strong> across 8 repos.
     </p>
     <div class="hero-actions">
       <a href="#get-started" class="btn btn-primary">Get Started</a>
@@ -85,9 +85,7 @@
 <section id="layers" class="section-alt">
   <div class="container section-center">
     <h2 class="section-title">Three levels of understanding</h2>
-    <p class="section-sub">
-      The pipeline builds a multi-level graph. Queries traverse between levels naturally.
-    </p>
+    <p class="section-sub">A multi-level graph. Queries traverse between levels naturally.</p>
     <div class="layers-grid">
       <div class="card card-green">
         <span class="tag tag-green">Micro</span>
@@ -114,36 +112,34 @@
 <section id="how-it-works">
   <div class="container section-center">
     <h2 class="section-title">How it works</h2>
-    <p class="section-sub">
-      Five stages compile raw git data into a queryable knowledge graph. Each stage builds on the last.
-    </p>
+    <p class="section-sub">Five stages, each building on the last.</p>
     <p style="font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">Build</p>
     <div class="pipeline">
-      <div class="pipeline-step">
+      <div class="pipeline-step" data-tip="Commits, files, authors, diffs, and directories parsed from git history into Datomic. No LLM calls. Fully reproducible.">
         <strong>Import</strong>
         <span>Git history &amp; files</span>
         <span class="step-note">deterministic</span>
       </div>
       <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-step">
+      <div class="pipeline-step" data-tip="Cross-file import/dependency edges resolved by parsing source code. Supports 10+ languages: Clojure, Python, JS/TS, Rust, Java, C#, C/C++, Go, Elixir, Erlang. No LLM calls.">
         <strong>Enrich</strong>
         <span>Import graph</span>
         <span class="step-note">deterministic</span>
       </div>
       <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-step">
+      <div class="pipeline-step" data-tip="An LLM reads each file and extracts code segments with complexity ratings, code smells, safety concerns, purity analysis, and architectural hints. Parallel processing with configurable concurrency.">
         <strong>Analyze</strong>
         <span>Per-file semantics</span>
         <span class="step-note">micro / LLM</span>
       </div>
       <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-step" style="border-color: rgba(96, 165, 250, 0.3);">
+      <div class="pipeline-step" style="border-color: rgba(96, 165, 250, 0.3);" data-tip="Queries the knowledge graph to identify logical components, classify files into architectural layers, and map component dependencies. Uses hierarchical map-reduce for large repos (1000+ files).">
         <strong>Synthesize</strong>
         <span>Components &amp; arch</span>
         <span class="step-note" style="color: #60a5fa;">macro / LLM</span>
       </div>
       <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-step">
+      <div class="pipeline-step" data-tip="Builds a TF-IDF vector index from file and component summaries. Enables semantic search (noumenon_search) and seeds the Ask agent with relevant files before querying. No LLM calls.">
         <strong>Embed</strong>
         <span>Vector search index</span>
         <span class="step-note">deterministic</span>
@@ -151,13 +147,13 @@
     </div>
     <p style="font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; margin-top: 1.25rem;">Use</p>
     <div class="pipeline">
-      <div class="pipeline-step">
+      <div class="pipeline-step" data-tip="65+ named Datalog queries, natural-language Ask agent with TF-IDF seeding, and MCP server for Claude Desktop/Code. Query the graph via CLI, HTTP API, or MCP tools.">
         <strong>Query / Ask / Serve</strong>
         <span>Use the graph</span>
         <span class="step-note">iterative</span>
       </div>
       <span class="pipeline-arrow">&rarr;</span>
-      <div class="pipeline-step" style="border-color: rgba(210, 168, 255, 0.3);">
+      <div class="pipeline-step" style="border-color: rgba(210, 168, 255, 0.3);" data-tip="Autonomous loop: propose a change to prompts, examples, rules, or code, benchmark it, keep if improved, revert if not. Capped by iterations, hours, or cost.">
         <strong>Introspect</strong>
         <span>Self-improve</span>
         <span class="step-note" style="color: #d2a8ff;">autonomous</span>
@@ -172,9 +168,7 @@
 <section id="introspect">
   <div class="container section-center">
     <h2 class="section-title">Self-improving introspection</h2>
-    <p class="section-sub">
-      An autonomous loop proposes changes, evaluates them against the benchmark, and keeps what works. Five targets: prompts, examples, rules, source code, and model config. Capped by iterations, hours, or cost.
-    </p>
+    <p class="section-sub">Propose a change, benchmark it, keep or revert. Five targets: prompts, examples, rules, source code, and model config.</p>
     <div class="terminal" style="margin-top: 2.5rem;">
       <div class="terminal-header">
         <span class="terminal-dot"></span>
@@ -197,9 +191,6 @@
 
 Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
     </div>
-    <p class="section-sub" style="margin-top: 1.5rem;">
-      <a href="https://github.com/leifericf/noumenon/blob/main/reports/introspect-development-2026-03-28.md">Development report &rarr;</a>
-    </p>
   </div>
 </section>
 
@@ -209,33 +200,45 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
 <section id="benchmarks" class="section-alt">
   <div class="container section-center">
     <h2 class="section-title">Measured on real codebases</h2>
-    <p class="section-sub">
-      40 questions per repo, two conditions: <strong>Raw</strong> (source files only) vs. <strong>Full</strong> (knowledge graph). Sonnet via GLM, April 2026.
-    </p>
+    <p class="section-sub">40 questions per repo, 8 repos, 7 languages.<br><strong>Without</strong> = source files only. <strong>With</strong> = Noumenon.</p>
+    <div class="layers-grid" style="margin-bottom: 2.5rem;">
+      <div class="card card-green" style="text-align:center;">
+        <span style="font-size: 2rem; font-weight: 700; color: #3fb950;">2.7&times;</span>
+        <h3>More accurate</h3>
+        <p>20% &rarr; 53% mean score</p>
+      </div>
+      <div class="card card-green" style="text-align:center;">
+        <span style="font-size: 2rem; font-weight: 700; color: #3fb950;">55% faster</span>
+        <h3>Less waiting</h3>
+        <p>13.6s &rarr; 6.1s per question</p>
+      </div>
+      <div class="card card-green" style="text-align:center;">
+        <span style="font-size: 2rem; font-weight: 700; color: #3fb950;">80% cheaper</span>
+        <h3>Fewer tokens</h3>
+        <p>37K &rarr; 7K input tokens</p>
+      </div>
+    </div>
     <table class="benchmark-table">
       <thead>
         <tr>
           <th>Repository</th>
           <th>Language</th>
-          <th>Raw</th>
-          <th>Full</th>
-          <th>Improvement</th>
+          <th>Accuracy (Without &rarr; With)</th>
+          <th>Tokens (Without &rarr; With)</th>
+          <th>Speed (Without &rarr; With)</th>
         </tr>
       </thead>
       <tbody>
-        <tr><td>ripgrep</td><td>Rust</td><td>41.9%</td><td>75.0%</td><td class="text-green"><strong>+33.1pp</strong></td></tr>
-        <tr><td>ring</td><td>Clojure</td><td>52.6%</td><td>75.7%</td><td class="text-green"><strong>+23.1pp</strong></td></tr>
-        <tr><td>flask</td><td>Python</td><td>44.9%</td><td>65.4%</td><td class="text-green"><strong>+20.5pp</strong></td></tr>
-        <tr><td>fresh</td><td>TypeScript</td><td>48.7%</td><td>67.1%</td><td class="text-green"><strong>+18.4pp</strong></td></tr>
-        <tr><td>noumenon</td><td>Clojure</td><td>44.7%</td><td>56.8%</td><td class="text-green"><strong>+12.1pp</strong></td></tr>
-        <tr><td>guava</td><td>Java</td><td>43.1%</td><td>51.5%</td><td class="text-green"><strong>+8.4pp</strong></td></tr>
-        <tr><td>redis</td><td>C</td><td>38.2%</td><td>46.2%</td><td class="text-green"><strong>+8.0pp</strong></td></tr>
-        <tr><td>fzf</td><td>Go</td><td>52.7%</td><td>56.9%</td><td class="text-green"><strong>+4.2pp</strong></td></tr>
-        <tr><td>express</td><td>JavaScript</td><td>62.2%</td><td>63.5%</td><td class="text-green"><strong>+1.3pp</strong></td></tr>
+        <tr><td>flask</td><td>Python</td><td>13 &rarr; <strong>68%</strong></td><td>41K &rarr; <strong>8K</strong></td><td>14.5s &rarr; <strong>7.1s</strong></td></tr>
+        <tr><td>ripgrep</td><td>Rust</td><td>17 &rarr; <strong>67%</strong></td><td>44K &rarr; <strong>6K</strong></td><td>14.0s &rarr; <strong>5.3s</strong></td></tr>
+        <tr><td>ring</td><td>Clojure</td><td>28 &rarr; <strong>60%</strong></td><td>27K &rarr; <strong>4K</strong></td><td>12.2s &rarr; <strong>5.3s</strong></td></tr>
+        <tr><td>fresh</td><td>TypeScript</td><td>25 &rarr; <strong>55%</strong></td><td>23K &rarr; <strong>10K</strong></td><td>12.7s &rarr; <strong>5.2s</strong></td></tr>
+        <tr><td>noumenon</td><td>Clojure</td><td>16 &rarr; <strong>48%</strong></td><td>30K &rarr; <strong>6K</strong></td><td>10.9s &rarr; <strong>5.2s</strong></td></tr>
+        <tr><td>fzf</td><td>Go</td><td>22 &rarr; <strong>47%</strong></td><td>43K &rarr; <strong>1K</strong></td><td>15.4s &rarr; <strong>5.1s</strong></td></tr>
+        <tr><td>express</td><td>JavaScript</td><td>25 &rarr; <strong>47%</strong></td><td>39K &rarr; <strong>7K</strong></td><td>12.7s &rarr; <strong>5.2s</strong></td></tr>
+        <tr><td>redis</td><td>C</td><td>10 &rarr; <strong>31%</strong></td><td>53K &rarr; <strong>18K</strong></td><td>16.6s &rarr; <strong>10.5s</strong></td></tr>
       </tbody>
-      <tfoot>
-        <tr><td><strong>Average</strong></td><td></td><td><strong>47.7%</strong></td><td><strong>62.0%</strong></td><td class="text-green"><strong>+14.3pp</strong></td></tr>
-      </tfoot>
+    </table>
   </div>
 </section>
 
@@ -248,7 +251,7 @@ Introspect complete: 2 improvements in 3 iterations (final score: 68.2%)</pre>
     <div class="features-grid">
       <div class="card">
         <h3>MCP server</h3>
-        <p>The full knowledge graph as MCP tools for Claude Desktop, Claude Code, or any MCP client.</p>
+        <p>Full knowledge graph as MCP tools. Works with Claude Desktop, Claude Code, or any MCP client.</p>
       </div>
       <div class="card">
         <h3>10+ languages</h3>
@@ -361,7 +364,7 @@ src/auth/session.ts       28       complex</span></pre>
         <div class="step-content">
           <h3>Install</h3>
           <code>curl -sSL https://noumenon.leifericf.com/install | bash</code>
-          <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #8b949e;">Also via <a href="https://brew.sh">Homebrew</a>: <code>brew install leifericf/noumenon/noumenon</code></p>
+          <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #8b949e;">Also via <a href="https://brew.sh">Homebrew</a> or <a href="https://scoop.sh">Scoop</a> (Windows)</p>
         </div>
       </div>
       <div class="step">
