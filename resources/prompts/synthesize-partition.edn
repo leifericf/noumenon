@@ -1,0 +1,61 @@
+{:template
+ "You are analyzing the architecture of the \"{{repo-name}}\" codebase. This is a PARTIAL analysis — you are identifying components for one directory partition of a larger codebase.
+
+## Full Codebase Context
+
+### Directory Tree (full codebase)
+
+{{directory-tree}}
+
+### Import Graph (full codebase, resolved file-to-file edges)
+
+{{import-graph}}
+
+### Tag Distribution (full codebase)
+
+{{tag-distribution}}
+
+## Target Files (this partition: {{partition-name}}, {{file-count}} files)
+
+Identify components ONLY for the files listed below. The codebase context above is provided so you understand cross-directory relationships, but your output should cover only these files.
+
+{{file-summaries}}
+
+## Your Task
+
+Identify logical components for the target files above.
+
+For each component, provide:
+- `:name` — short kebab-case identifier
+- `:summary` — what this component does (1-2 sentences)
+- `:purpose` — why it exists
+- `:layer` — `:core` | `:subsystem` | `:driver` | `:api` | `:util`
+- `:category` — `:backend` | `:frontend` | `:infrastructure` | `:configuration` | `:data` | `:testing` | `:documentation` | `:tooling` | `:shared`
+- `:complexity` — `:trivial` | `:simple` | `:moderate` | `:complex` | `:very-complex`
+- `:subsystem` — coarser grouping name
+- `:files` — list of file paths belonging to this component (ONLY from target files above)
+- `:depends-on` — list of component names this depends on (including components you expect in other partitions, based on import edges)
+
+## Rules
+
+- Every target file MUST appear in exactly one component's `:files` list
+- Components should contain 2-30 files
+- Dependencies based on actual import edges only
+- You MAY reference component names from other partitions in `:depends-on` — these will be resolved in a merge step
+
+## Output Format
+
+Respond with ONLY a raw EDN map (no markdown fences, no explanation):
+
+{:components [{:name \"component-name\"
+               :summary \"...\"
+               :purpose \"...\"
+               :layer :subsystem
+               :category :backend
+               :complexity :moderate
+               :subsystem \"group-name\"
+               :files [\"path/to/file.ext\" ...]
+               :depends-on [\"other-component\" ...]}
+              ...]}"
+
+ :version "0.1.0"}

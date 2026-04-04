@@ -276,6 +276,14 @@
 
 ;; --- Main orchestration ---
 
+(def ^:private single-call-threshold
+  "Max file count for single-call synthesis. Above this, use hierarchical."
+  250)
+
+(def ^:private min-partition-size
+  "Directories with fewer files than this get merged into an 'other' bucket."
+  5)
+
 (defn- invoke-and-parse
   "Render prompt, invoke LLM, and parse the response. Retries once on parse failure.
    Returns {:parsed map :usage map :resolved-model string}."
@@ -299,6 +307,145 @@
                 (assoc :resolved-model (:resolved-model r1))
                 (update :usage #(llm/sum-usage (:usage r1) %))))))))
 
+;; --- Hierarchical map-reduce ---
+
+(defn- top-level-dir
+  "Extract the top-level directory from a file path. Root files go to '(root)'."
+  [path]
+  (let [parts (str/split path #"/")]
+    (if (> (count parts) 1) (first parts) "(root)")))
+
+(defn- partition-by-directory
+  "Group files by top-level directory. Merge small groups into an 'other' bucket."
+  [files]
+  (let [groups   (group-by #(top-level-dir (:path %)) files)
+        small    (into {} (filter #(< (count (val %)) min-partition-size) groups))
+        large    (into {} (remove #(< (count (val %)) min-partition-size) groups))
+        other    (vec (mapcat val small))]
+    (cond-> large
+      (seq other) (assoc "(other)" other))))
+
+(defn- render-partition-prompt
+  "Render the partition-level synthesis prompt."
+  [template repo-name partition-name partition-files full-data]
+  (let [formatted (format-prefetch {:files partition-files
+                                    :tags  (:tags full-data)
+                                    :edges (:edges full-data)
+                                    :dirs  (:dirs full-data)})]
+    (-> template
+        (str/replace "{{repo-name}}" (str/replace (str repo-name) #"[^a-zA-Z0-9._/-]" "_"))
+        (str/replace "{{partition-name}}" (str partition-name))
+        (str/replace "{{file-count}}" (str (count partition-files)))
+        (str/replace "{{directory-tree}}" (escape-double-mustache (:directory-tree formatted)))
+        (str/replace "{{file-summaries}}" (escape-double-mustache
+                                           (format-file-summaries partition-files)))
+        (str/replace "{{import-graph}}" (escape-double-mustache (:import-graph formatted)))
+        (str/replace "{{tag-distribution}}" (escape-double-mustache (:tag-distribution formatted))))))
+
+(defn- format-partition-components
+  "Format partition-level components for the merge prompt."
+  [partition-results]
+  (->> partition-results
+       (map (fn [{:keys [partition-name components]}]
+              (str "### Partition: " partition-name "\n"
+                   (->> components
+                        (map (fn [{:keys [name summary files depends-on]}]
+                               (str "- **" name "** — " summary
+                                    "\n  Files: " (str/join ", " (take 10 files))
+                                    (when (> (count files) 10) (str " (+" (- (count files) 10) " more)"))
+                                    (when (seq depends-on) (str "\n  Depends on: " (str/join ", " depends-on))))))
+                        (str/join "\n")))))
+       (str/join "\n\n")))
+
+(defn- render-merge-prompt
+  "Render the merge-level synthesis prompt."
+  [template repo-name total-files partition-results full-data]
+  (let [formatted (format-prefetch full-data)]
+    (-> template
+        (str/replace "{{repo-name}}" (str/replace (str repo-name) #"[^a-zA-Z0-9._/-]" "_"))
+        (str/replace "{{file-count}}" (str total-files))
+        (str/replace "{{directory-tree}}" (escape-double-mustache (:directory-tree formatted)))
+        (str/replace "{{import-graph}}" (escape-double-mustache (:import-graph formatted)))
+        (str/replace "{{partition-components}}"
+                     (escape-double-mustache (format-partition-components partition-results))))))
+
+(defn- invoke-partition
+  "Synthesize components for one directory partition. Returns {:partition-name :components :usage}."
+  [invoke-llm template repo-name partition-name partition-files full-data]
+  (let [prompt (render-partition-prompt template repo-name partition-name partition-files full-data)
+        invoke-once (fn []
+                      (let [{:keys [text usage resolved-model]} (invoke-llm prompt)]
+                        {:parsed (parse-response text) :usage usage :resolved-model resolved-model}))
+        r1 (invoke-once)
+        result (if (and (:parsed r1) (seq (:components (:parsed r1))))
+                 r1
+                 (invoke-once))]
+    {:partition-name partition-name
+     :components     (get-in result [:parsed :components] [])
+     :usage          (:usage result)
+     :resolved-model (:resolved-model result)}))
+
+(defn- invoke-merge
+  "Merge partition-level components into final component map. Returns {:parsed :usage}."
+  [invoke-llm template repo-name total-files partition-results full-data]
+  (let [prompt (render-merge-prompt template repo-name total-files partition-results full-data)
+        invoke-once (fn []
+                      (let [{:keys [text usage resolved-model]} (invoke-llm prompt)]
+                        (log! "synthesize" (str "Merge response: " (count text) " chars"))
+                        (when (seq text)
+                          (log! "synthesize/tail" (subs text (max 0 (- (count text) 200)))))
+                        {:parsed (parse-response text) :usage usage :resolved-model resolved-model}))
+        r1 (invoke-once)]
+    (if (and (:parsed r1) (seq (:components (:parsed r1))))
+      r1
+      (do (log! "synthesize" "Merge retry...")
+          (invoke-once)))))
+
+(defn- synthesize-hierarchical
+  "Hierarchical map-reduce synthesis for large repos.
+   Level 1: synthesize per top-level directory.
+   Level 2: merge partition results into final component map."
+  [invoke-llm data {:keys [meta-db repo-name on-progress]}]
+  (let [meta-db         (or meta-db (throw (ex-info "meta-db required" {})))
+        partition-tmpl  (artifacts/load-prompt meta-db "synthesize-partition")
+        merge-tmpl      (artifacts/load-prompt meta-db "synthesize-merge")
+        _               (when-not (and partition-tmpl merge-tmpl)
+                          (throw (ex-info "Hierarchical prompts not found — run 'reseed' first"
+                                          {:status 400})))
+        partitions      (partition-by-directory (:files data))
+        n-partitions    (count partitions)
+        _               (log! "synthesize" (str (count (:files data)) " files across "
+                                                n-partitions " partitions (hierarchical mode)"))
+        ;; Level 1: per-partition synthesis
+        partition-results
+        (vec (map-indexed
+              (fn [i [dir-name dir-files]]
+                (when on-progress
+                  (on-progress {:phase :partition :current (inc i) :total n-partitions
+                                :directory dir-name}))
+                (log! "synthesize" (str "[" (inc i) "/" n-partitions "] "
+                                        dir-name " (" (count dir-files) " files)"))
+                (let [result (invoke-partition invoke-llm partition-tmpl repo-name
+                                               dir-name dir-files data)]
+                  (log! "synthesize" (str "[" (inc i) "/" n-partitions "] "
+                                          dir-name " — " (count (:components result)) " components"))
+                  result))
+              (sort-by key partitions)))
+        partition-usage (reduce llm/sum-usage llm/zero-usage (map :usage partition-results))
+        total-partition-comps (reduce + (map #(count (:components %)) partition-results))
+        ;; Level 2: merge
+        _  (log! "synthesize" (str "merging " total-partition-comps " partition components..."))
+        _  (when on-progress
+             (on-progress {:phase :merge :current 1 :total 1 :components total-partition-comps}))
+        merge-result (invoke-merge invoke-llm merge-tmpl repo-name
+                                   (count (:files data)) partition-results data)
+        total-usage  (llm/sum-usage partition-usage (:usage merge-result))]
+    {:parsed         (:parsed merge-result)
+     :usage          total-usage
+     :resolved-model (:resolved-model merge-result)
+     :mode           :hierarchical
+     :partitions     n-partitions}))
+
 (defn- build-provenance-tx
   "Build the provenance transaction entity for a synthesis run."
   [template model-id resolved-model usage]
@@ -316,44 +463,64 @@
       (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
       (pos? cost)            (assoc :tx/cost-usd cost))))
 
+(defn- transact-and-finalize!
+  "Retract old synthesis, transact new components, derive deps. Returns result map."
+  [conn parsed model-id resolved-model usage start-ms mode-info]
+  (if-not (and parsed (seq (:components parsed)))
+    (do (log! "synthesize/error" "Failed to parse synthesis response")
+        (merge {:components 0 :files-classified 0
+                :elapsed-ms (- (System/currentTimeMillis) start-ms)
+                :error "Failed to parse synthesis response"}
+               mode-info))
+    (let [template-str (pr-str mode-info)
+          tx-data (vec (concat (retraction-tx-data (d/db conn))
+                               (components->tx-data (:components parsed))
+                               [(build-provenance-tx template-str model-id
+                                                     resolved-model usage)]))]
+      (d/transact conn {:tx-data tx-data})
+      (let [{:keys [edges-derived]} (derive-component-deps! conn)
+            n-files (count (distinct (mapcat :files (:components parsed))))
+            elapsed (- (System/currentTimeMillis) start-ms)]
+        (when (pos? edges-derived)
+          (log! "synthesize" (str "Derived " edges-derived
+                                  " component dependency edges from import graph")))
+        (log! "synthesize" (str "Done. " (count (:components parsed)) " components, "
+                                n-files " files classified (" elapsed "ms)"))
+        (merge {:components       (count (:components parsed))
+                :files-classified n-files
+                :edges-derived    edges-derived
+                :elapsed-ms       elapsed
+                :usage            usage}
+               mode-info)))))
+
 (defn synthesize-repo!
   "Identify components and classify files architecturally.
    `invoke-llm` is (prompt -> {:text string :usage map :resolved-model string}).
-   Returns {:components n :files-classified n :elapsed-ms n :usage map}."
-  [conn invoke-llm {:keys [meta-db model-id repo-name]}]
+   opts: {:meta-db :model-id :repo-name :on-progress}
+   Returns {:components n :files-classified n :elapsed-ms n :usage map :mode kw}."
+  [conn invoke-llm {:keys [meta-db model-id repo-name on-progress]}]
   (let [start-ms (System/currentTimeMillis)
         db       (d/db conn)
         data     (prefetch-codebase-data db)]
     (if-not (seq (:files data))
       (do (log! "synthesize" "No analyzed files found — run analyze first")
           {:components 0 :files-classified 0 :elapsed-ms 0})
-      (let [meta-db  (or meta-db db)
-            template (artifacts/load-prompt meta-db "synthesize")
-            _        (when-not template
-                       (throw (ex-info "Synthesize prompt not found — run 'reseed' first"
-                                       {:status 400 :message "Synthesize prompt not seeded. Run: noum reseed"})))
-            {:keys [parsed usage resolved-model]}
-            (invoke-and-parse invoke-llm template repo-name data)]
-        (if-not (and parsed (seq (:components parsed)))
-          (do (log! "synthesize/error" "Failed to parse synthesis response")
-              {:components 0 :files-classified 0
-               :elapsed-ms (- (System/currentTimeMillis) start-ms)
-               :error "Failed to parse synthesis response"})
-          (let [tx-data (vec (concat (retraction-tx-data (d/db conn))
-                                     (components->tx-data (:components parsed))
-                                     [(build-provenance-tx template model-id
-                                                           resolved-model usage)]))]
-            (d/transact conn {:tx-data tx-data})
-            (let [{:keys [edges-derived]} (derive-component-deps! conn)
-                  n-files (count (distinct (mapcat :files (:components parsed))))
-                  elapsed (- (System/currentTimeMillis) start-ms)]
-              (when (pos? edges-derived)
-                (log! "synthesize" (str "Derived " edges-derived
-                                        " component dependency edges from import graph")))
-              (log! "synthesize" (str "Done. " (count (:components parsed)) " components, "
-                                      n-files " files classified (" elapsed "ms)"))
-              {:components       (count (:components parsed))
-               :files-classified n-files
-               :edges-derived    edges-derived
-               :elapsed-ms       elapsed
-               :usage            usage})))))))
+      (let [meta-db (or meta-db db)
+            n-files (count (:files data))]
+        (if (<= n-files single-call-threshold)
+          ;; Small repo: single-call path (unchanged behavior)
+          (let [template (artifacts/load-prompt meta-db "synthesize")
+                _        (when-not template
+                           (throw (ex-info "Synthesize prompt not found — run 'reseed' first"
+                                           {:status 400 :message "Run: noum reseed"})))
+                {:keys [parsed usage resolved-model]}
+                (invoke-and-parse invoke-llm template repo-name data)]
+            (transact-and-finalize! conn parsed model-id resolved-model usage start-ms
+                                    {:mode :single-call}))
+          ;; Large repo: hierarchical map-reduce
+          (let [{:keys [parsed usage resolved-model mode partitions]}
+                (synthesize-hierarchical invoke-llm data
+                                         {:meta-db meta-db :repo-name repo-name
+                                          :on-progress on-progress})]
+            (transact-and-finalize! conn parsed model-id resolved-model usage start-ms
+                                    {:mode mode :partitions partitions})))))))

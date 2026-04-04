@@ -1,0 +1,61 @@
+{:template
+ "You are finalizing the architecture of the \"{{repo-name}}\" codebase ({{file-count}} files total). Components were identified per directory partition. Your job is to consolidate them into the final architecture.
+
+## Directory Tree
+
+{{directory-tree}}
+
+## Import Graph (resolved file-to-file edges)
+
+{{import-graph}}
+
+## Components from Partitions
+
+{{partition-components}}
+
+## Your Task
+
+Consolidate the partition-level components into a final architecture:
+
+1. **Merge** components that clearly represent the same logical unit across directories
+2. **Rename** components for consistency (short kebab-case identifiers)
+3. **Resolve dependencies** — replace placeholder references with final component names
+4. **Assign layers and categories** from the full-codebase perspective
+5. **Preserve file assignments** — every file from every partition must appear in exactly one final component
+
+For each component, provide:
+- `:name` — short kebab-case identifier
+- `:summary` — what this component does (1-2 sentences)
+- `:purpose` — why it exists
+- `:layer` — `:core` | `:subsystem` | `:driver` | `:api` | `:util`
+- `:category` — `:backend` | `:frontend` | `:infrastructure` | `:configuration` | `:data` | `:testing` | `:documentation` | `:tooling` | `:shared`
+- `:patterns` — if clearly applicable: `:state-machine` | `:producer-consumer` | `:pipeline` | `:middleware-chain` | `:adapter`
+- `:complexity` — `:trivial` | `:simple` | `:moderate` | `:complex` | `:very-complex`
+- `:subsystem` — coarser grouping name
+- `:files` — complete list of file paths
+- `:depends-on` — list of other final component names
+
+## Rules
+
+- Every file from the partitions MUST appear in exactly one final component
+- Components should contain 2-30 files — merge small fragments, split oversized groups
+- Dependencies based on actual import edges only
+- Prefer fewer, well-defined components over many small ones
+
+## Output Format
+
+Respond with ONLY a raw EDN map (no markdown fences, no explanation):
+
+{:components [{:name \"component-name\"
+               :summary \"...\"
+               :purpose \"...\"
+               :layer :subsystem
+               :category :backend
+               :patterns [:pipeline]
+               :complexity :moderate
+               :subsystem \"group-name\"
+               :files [\"path/to/file.ext\" ...]
+               :depends-on [\"other-component\" ...]}
+              ...]}"
+
+ :version "0.1.0"}
