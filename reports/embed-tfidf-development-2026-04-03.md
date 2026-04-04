@@ -306,6 +306,31 @@ The embedded layer delivers **3.7x better quality-per-token** than the full KG. 
 
 ---
 
+### 10.7 Cross-repo benchmark (9 repos, corrected)
+
+After fixing two bugs in the benchmark runner (MCP handler defaulting to Claude CLI for raw layer, and raw context exceeding the ~200K token API limit at 800K chars), a clean run across all 9 repos with `raw,full,embedded` layers:
+
+| Repository | Language | Raw | Full | Embedded | Full vs Raw |
+|---|---|---|---|---|---|
+| ripgrep | Rust | 41.9% | 75.0% | 47.2% | +33.1pp |
+| ring | Clojure | 52.6% | 75.7% | 45.9% | +23.1pp |
+| flask | Python | 44.9% | 65.4% | 46.1% | +20.5pp |
+| fresh | TypeScript | 48.7% | 67.1% | 47.4% | +18.4pp |
+| noumenon | Clojure | 44.7% | 56.8% | 35.1% | +12.1pp |
+| guava | Java | 43.1% | 51.5% | 22.2% | +8.4pp |
+| redis | C | 38.2% | 46.2% | 39.7% | +8.0pp |
+| fzf | Go | 52.7% | 56.9% | 48.6% | +4.2pp |
+| express | JavaScript | 62.2% | 63.5% | 50.0% | +1.3pp |
+| **Average** | | **47.7%** | **62.0%** | **42.5%** | **+14.3pp** |
+
+**Full KG vs raw**: +14.3pp average improvement. Largest gains on repos with complex dependency structures (ripgrep +33.1pp, ring +23.1pp).
+
+**Embedded vs raw**: Embedded averages 42.5% — slightly below raw (47.7%). This makes sense: TF-IDF summaries contain less information than the actual source code. The value of embedded is not in replacing raw, but in **seeding the agent** with relevant files before the agent queries the full KG. The two-tier approach (TF-IDF seed → Datalog precision) is where the real gain is.
+
+**Guava's low embedded score** (22.2%): Guava and redis failed to synthesize (0 components), so their embed indexes have file-level entries only, no component data. This is being addressed by the hierarchical synthesize refactor.
+
+---
+
 ## 11. Future Directions
 
 1. **Component-file relationships in embeddings** — Currently, component and file entries are independent vectors. Enriching component text with its file list ("Files: agent.clj, ask_store.clj, ...") would let a search for "agent" boost the component that contains `agent.clj`. Risk: file paths may dilute the semantic signal. Easy to test.
