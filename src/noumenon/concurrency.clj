@@ -46,13 +46,17 @@
 (defn register-ask-session!
   "Register an ask session for a token. Returns session-id or throws if at limit."
   [token-hash session-id]
-  (let [current (get @ask-sessions token-hash #{})]
-    (when (>= (count current) max-per-token)
+  (let [result (swap! ask-sessions
+                      (fn [m]
+                        (let [current (get m token-hash #{})]
+                          (if (>= (count current) max-per-token)
+                            m
+                            (update m token-hash (fnil conj #{}) session-id)))))]
+    (when-not (contains? (get result token-hash) session-id)
       (throw (ex-info (str "Maximum " max-per-token " concurrent ask sessions per token")
                       {:status 429
                        :message (str "Maximum " max-per-token " concurrent ask sessions. "
                                      "Wait for a session to complete.")})))
-    (swap! ask-sessions update token-hash (fnil conj #{}) session-id)
     session-id))
 
 (defn unregister-ask-session!
