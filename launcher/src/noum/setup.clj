@@ -127,7 +127,7 @@ case \"$TOOL_NAME\" in
     *) exit 0 ;;
 esac
 
-STATE_DIR=\"/tmp/noumenon-mcp-sessions\"
+STATE_DIR=\"${XDG_RUNTIME_DIR:-${HOME}/.noumenon/tmp}/mcp-sessions\"
 STATE_FILE=\"$STATE_DIR/$SESSION_ID\"
 
 [ -f \"$STATE_FILE\" ] && exit 0
