@@ -450,7 +450,7 @@
               result     (query/run-named-query meta-db db query-name kw-params)]
           (if (:ok result)
             (let [rows  (:ok result)
-                  limit (min (or (:limit params) 500) 10000)]
+                  limit (min (or (some-> (:limit params) str parse-long) 500) 10000)]
               (ok {:query   query-name
                    :total   (count rows)
                    :results (take limit rows)}))
@@ -461,7 +461,7 @@
     (with-repo params (:db-dir config)
       (fn [{:keys [db]}]
         (let [query-edn (:query params)
-              limit     (min (or (:limit params) 500) 10000)]
+              limit     (min (or (some-> (:limit params) str parse-long) 500) 10000)]
           (when-not query-edn
             (throw (ex-info "Missing query" {:status 400 :message "query is required (EDN string)"})))
           (validate-string-length! "query" query-edn max-param-value-len)
@@ -488,7 +488,7 @@
               raw-params (or (:params params) {})
               kw-params  (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
               _          (validate-query-params! kw-params)
-              limit      (min (or (:limit params) 500) 10000)]
+              limit      (min (or (some-> (:limit params) str parse-long) 500) 10000)]
           (when-not as-of-str
             (throw (ex-info "Missing as_of" {:status 400 :message "as_of is required (ISO-8601 or epoch ms)"})))
           (let [as-of-inst (try
