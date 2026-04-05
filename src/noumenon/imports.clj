@@ -10,7 +10,32 @@
             [noumenon.analyze :as analyze]
             [noumenon.files :as files]
             [noumenon.util :refer [log!]])
-  (:import [java.io PushbackReader StringReader]))
+  (:import [java.io PushbackReader StringReader]
+           [java.util.concurrent TimeUnit]))
+
+(def ^:private subprocess-timeout-secs
+  "Maximum seconds for a subprocess import extraction call."
+  30)
+
+(defn- sh-with-timeout
+  "Like shell/sh but with a timeout. Returns {:exit :out :err} or {:exit 124 :err \"timeout\"}."
+  [& args]
+  (let [opts      (when (keyword? (last (butlast args))) (apply hash-map (drop-while (complement keyword?) args)))
+        cmd-args  (take-while (complement keyword?) args)
+        pb        (ProcessBuilder. ^java.util.List (vec (map str cmd-args)))
+        _         (when-let [d (:dir opts)] (.directory pb (java.io.File. (str d))))
+        proc      (.start pb)
+        stdin-val (:in opts)]
+    (when stdin-val
+      (let [os (.getOutputStream proc)]
+        (.write os (.getBytes (str stdin-val) "UTF-8"))
+        (.close os)))
+    (if (.waitFor proc subprocess-timeout-secs TimeUnit/SECONDS)
+      {:exit (.exitValue proc)
+       :out  (slurp (.getInputStream proc))
+       :err  (slurp (.getErrorStream proc))}
+      (do (.destroyForcibly proc)
+          {:exit 124 :out "" :err "timeout"}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Shared helpers
@@ -162,8 +187,8 @@ print(json.dumps(imports))")
 
 (defmethod extract-imports :python [_ text]
   (try
-    (let [{:keys [exit out]} (shell/sh "python3" "-c" python-extract-script
-                                       :in text)]
+    (let [{:keys [exit out]} (sh-with-timeout "python3" "-c" python-extract-script
+                                              :in text)]
       (when (zero? exit)
         (json/read-str (str/trim out))))
     (catch Exception _ [])))
@@ -207,7 +232,7 @@ console.log(JSON.stringify(imports))")
 
 (defmethod extract-imports :javascript [_ text]
   (try
-    (let [{:keys [exit out]} (shell/sh "node" "-e" node-extract-script :in text)]
+    (let [{:keys [exit out]} (sh-with-timeout "node" "-e" node-extract-script :in text)]
       (when (zero? exit)
         (json/read-str (str/trim out))))
     (catch Exception _ [])))
@@ -346,7 +371,7 @@ console.log(JSON.stringify(imports))")
                         (throw (ex-info "Path traversal blocked"
                                         {:source-path source-path})))
             {:keys [exit out err]}
-            (apply shell/sh cc "-MM" full-path
+            (apply sh-with-timeout cc "-MM" full-path
                    (concat include-flags [:dir (str repo-path)]))]
         (if (zero? exit)
           {:status :ok :deps (parse-mm-output out repo-path)}
@@ -381,8 +406,8 @@ end")
 
 (defmethod extract-imports :elixir [_ text]
   (try
-    (let [{:keys [exit out]} (shell/sh "elixir" "-e" elixir-extract-script
-                                       :in text)]
+    (let [{:keys [exit out]} (sh-with-timeout "elixir" "-e" elixir-extract-script
+                                              :in text)]
       (when (zero? exit)
         (->> (str/split-lines out)
              (remove str/blank?)
