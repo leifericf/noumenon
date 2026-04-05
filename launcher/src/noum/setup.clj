@@ -4,6 +4,7 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [noum.tui.core :as tui]
+            [noum.tui.prompt :as prompt]
             [noum.tui.style :as style]))
 
 (defn- claude-desktop-config-path []
@@ -32,6 +33,62 @@
                      {"command" (noum-bin-path)
                       "args"    ["serve"]})))))
 
+(def ^:private credentials-path
+  (str (fs/path (fs/home) ".noumenon" "credentials")))
+
+(defn- read-credentials
+  "Read existing credentials file as {key value} map. Returns {} if missing."
+  []
+  (if (fs/exists? credentials-path)
+    (->> (str/split-lines (slurp credentials-path))
+         (keep (fn [line]
+                 (when-let [[_ k v] (re-matches #"(?:export\s+)?([A-Z_]+)=(.+)" (str/trim line))]
+                   [k (-> v str/trim (str/replace #"^[\"']|[\"']$" ""))])))
+         (into {}))
+    {}))
+
+(defn- write-credentials!
+  "Write credentials map to file. Preserves comments from existing file."
+  [creds]
+  (fs/create-dirs (str (fs/path (fs/home) ".noumenon")))
+  (let [header "# Noumenon credentials\n# https://github.com/leifericf/noumenon\n\n"
+        lines  (->> creds
+                    (map (fn [[k v]] (str k "=" v)))
+                    (str/join "\n"))]
+    (spit credentials-path (str header lines "\n"))
+    (try
+      (fs/set-posix-file-permissions credentials-path "rw-------")
+      (catch Exception _))))
+
+(defn- ensure-credentials!
+  "Prompt for LLM provider tokens. Idempotent: existing values shown as defaults,
+   blank input keeps the current value, new input overwrites."
+  []
+  (let [existing (read-credentials)
+        zai-cur  (get existing "NOUMENON_ZAI_TOKEN")
+        ant-cur  (get existing "ANTHROPIC_API_KEY")
+        has-any  (or zai-cur ant-cur)]
+    (if has-any
+      (tui/eprintln (str (style/green "✓") " Credentials configured"
+                         (when zai-cur " (GLM)")
+                         (when ant-cur " (Anthropic)")
+                         "."))
+      (tui/eprintln (str (style/dim "  LLM credentials — at least one provider token is needed."))))
+    (let [zai-new (prompt/ask-secret
+                   (str "GLM token (NOUMENON_ZAI_TOKEN)"
+                        (when zai-cur (str " " (style/dim "[configured]")))))
+          ant-new (prompt/ask-secret
+                   (str "Anthropic API key (ANTHROPIC_API_KEY)"
+                        (when ant-cur (str " " (style/dim "[configured]")))))
+          final   (cond-> existing
+                    zai-new (assoc "NOUMENON_ZAI_TOKEN" zai-new)
+                    ant-new (assoc "ANTHROPIC_API_KEY" ant-new))]
+      (when (or zai-new ant-new)
+        (write-credentials! final)
+        (tui/eprintln (str (style/green "✓") " Saved to " credentials-path)))
+      (when (and (not has-any) (not zai-new) (not ant-new))
+        (tui/eprintln (str (style/dim "  Skipped. Add tokens later: ") credentials-path))))))
+
 (defn setup-desktop!
   "Write MCP config for Claude Desktop."
   []
@@ -45,7 +102,8 @@
       (do (fs/create-dirs (fs/parent path))
           (spit path content)
           (tui/eprintln (str (style/green "✓") " Wrote MCP config to " path))
-          (tui/eprintln "  Restart Claude Desktop to activate.")))))
+          (tui/eprintln "  Restart Claude Desktop to activate."))))
+  (ensure-credentials!))
 
 ;; --- Hook script ---
 
@@ -185,4 +243,5 @@ A PreToolUse hook enforces this — file-reading tools are blocked until a Noume
   (write-hook!)
   (write-settings!)
   (write-claude-md!)
+  (ensure-credentials!)
   (tui/eprintln "\n  Run this command from your project directory."))

@@ -292,21 +292,21 @@
           (str/split-lines (slurp env-file)))))
 
 (def ^:private trusted-env-paths
-  "Trusted directories for .env files: user home, explicit project dir,
-   and CWD only when deps.edn is present (dev environment indicator).
-   Never reads .env from an arbitrary untrusted CWD."
-  (let [home-env (java.io.File. (System/getProperty "user.home") ".env")
+  "Trusted locations for credentials (KEY=VALUE format):
+   ~/.noumenon/credentials (primary), explicit project dir .env,
+   and CWD .env only when deps.edn is present (dev indicator)."
+  (let [creds    (java.io.File. (System/getProperty "user.home") ".noumenon/credentials")
         proj-dir (System/getProperty "noumenon.project.dir")
         cwd      (System/getProperty "user.dir")]
-    (cond-> [home-env]
+    (cond-> [creds]
       proj-dir
       (conj (java.io.File. proj-dir ".env"))
       (and (not proj-dir) cwd (.exists (java.io.File. cwd "deps.edn")))
       (conj (java.io.File. cwd ".env")))))
 
 (defn- read-env-var
-  "Read an environment variable, falling back to .env in trusted locations only.
-   Checks ~/.env and the project root .env. Returns the trimmed value, or nil."
+  "Read an environment variable, falling back to credentials file.
+   Checks ~/.noumenon/credentials, then project .env. Returns the trimmed value, or nil."
   [env-var]
   (or (System/getenv env-var)
       (some #(read-env-from-file % env-var) trusted-env-paths)))
@@ -324,7 +324,7 @@
     (if-let [{:keys [env-var base-url]} (api-provider-config kw)]
       (let [token (read-env-var env-var)]
         (when-not token
-          (throw (ex-info (str env-var " environment variable is not set. Set " env-var " in your environment or in ~/.env.")
+          (throw (ex-info (str env-var " is not set. Add it to ~/.noumenon/credentials or set it in your environment.")
                           {:provider kw})))
         (fn invoke
           ([messages] (invoke messages nil))
