@@ -132,32 +132,42 @@
                          (when-let [b @bar-atom]
                            ((:done b))
                            (reset! bar-atom nil)))
-          handler      (fn [{:keys [current total message]}]
-                         (cond
-                           ;; Indeterminate: use spinner, stop previous spinner on message change
-                           (zero? total)
-                           (let [prev @spinner-atom]
-                             (when (and prev (not= (:message prev) message))
-                               ((:stop (:spinner prev)) (:message prev)))
-                             (when (or (nil? prev) (not= (:message prev) message))
-                               (let [s (spinner/start message)]
-                                 (reset! spinner-atom {:spinner s :message message}))))
+          handler      (fn [evt]
+                         (let [total   (or (:total evt) 0)
+                               current (or (:current evt) 0)
+                               message (:message evt)]
+                           (cond
+                             ;; Indeterminate: use spinner
+                             (zero? total)
+                             (do (when-let [b @bar-atom]
+                                   ((:done b))
+                                   (reset! bar-atom nil))
+                                 (let [prev @spinner-atom]
+                                   (when (and prev (not= (:message prev) message))
+                                     ((:stop (:spinner prev)) (:message prev)))
+                                   (when (or (nil? prev) (not= (:message prev) message))
+                                     (let [s (spinner/start message)]
+                                       (reset! spinner-atom {:spinner s :message message})))))
 
-                           ;; Start determinate bar
-                           (nil? @bar-atom)
-                           (do (when-let [prev @spinner-atom]
-                                 ((:stop (:spinner prev)) (:message prev))
-                                 (reset! spinner-atom nil))
-                               (let [b (progress/bar command total)]
-                                 (reset! bar-atom b)
-                                 ((:update b) current)))
+                             ;; Start determinate bar (or restart when total changes)
+                             (or (nil? @bar-atom)
+                                 (not= (:total (meta @bar-atom)) total))
+                             (do (when-let [b @bar-atom]
+                                   ((:done b)))
+                                 (when-let [prev @spinner-atom]
+                                   ((:stop (:spinner prev)) (:message prev))
+                                   (reset! spinner-atom nil))
+                                 (let [b (progress/bar (or message command) total)]
+                                   (reset! bar-atom (with-meta b {:total total}))
+                                   ((:update b) current)))
 
-                           ;; Update / finish determinate bar
-                           :else
-                           (let [b @bar-atom]
-                             (if (= current total)
-                               ((:done b))
-                               ((:update b) current)))))]
+                             ;; Update / finish determinate bar
+                             :else
+                             (let [b @bar-atom]
+                               (if (= current total)
+                                 (do ((:done b))
+                                     (reset! bar-atom nil))
+                                 ((:update b) current))))))]
       {:handler handler :cleanup cleanup!})))
 
 (defn do-api-command [{:keys [command flags positional]}]
