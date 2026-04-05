@@ -350,6 +350,9 @@
                         (when progress-fn
                           (progress-fn {:current 0 :total 0 :message (str "digest: " step-name "...")}))
                         (inner-fn))
+        step-fn     (fn [step-name]
+                      (when progress-fn
+                        (fn [evt] (progress-fn (assoc evt :step step-name)))))
         update-r  (when-not (or (:skip_import params) (:skip_enrich params))
                     (step-progress "update"
                                    #(sync/update-repo! conn repo-path repo-path {:concurrency 8})))
@@ -357,7 +360,7 @@
                     (step-progress "analyze"
                                    #(let [r (analyze/analyze-repo! conn repo-path prompt-fn
                                                                    {:meta-db meta-db :model-id model-id
-                                                                    :concurrency 3 :progress-fn progress-fn})]
+                                                                    :concurrency 3 :progress-fn (step-fn "analyze")})]
                                       (select-keys r [:files-analyzed :total-usage]))))
         synth-r   (when-not (:skip_synthesize params)
                     (step-progress "synthesize"
@@ -375,7 +378,7 @@
                                                                        :budget {:max-questions (:max_questions params)}
                                                                        :report? (:report params)
                                                                        :concurrency 3
-                                                                       :progress-fn progress-fn
+                                                                       :progress-fn (step-fn "benchmark")
                                                                        :db-dir db-dir :db-name db-name)]
                                       (select-keys r [:run-id :aggregate :stop-reason :report-path]))))]
     (cond-> {}
