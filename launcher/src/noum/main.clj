@@ -35,19 +35,28 @@
       :else     (str d "d " (mod h 24) "h"))))
 
 (defn- format-value [k v]
-  (if (= k :uptime-ms) (format-duration v) v))
+  (cond
+    (= k :uptime-ms) (format-duration v)
+    (float? v)       (format "%.2f" (double v))
+    :else            v))
+
+(defn- print-flat-map
+  "Print a flat map indented by prefix. Skips nil/empty values."
+  [m prefix]
+  (doseq [[k v] (sort-by key m)
+          :when (and (some? v) (not (and (coll? v) (empty? v))))]
+    (if (map? v)
+      (do (tui/eprintln (str prefix (name k) ":"))
+          (print-flat-map v (str prefix "  ")))
+      (tui/eprintln (str prefix (name k) ": " (format-value k v))))))
 
 (defn- print-result [data]
   (cond
-    (map? data)    (doseq [[k v] (sort-by key data)
-                           :when (and (some? v) (not (and (coll? v) (empty? v))))]
-                     (tui/eprintln (str "  " (name k) ": " (format-value k v))))
+    (map? data)    (print-flat-map data "  ")
     (vector? data) (doseq [item data]
                      (if (map? item)
                        (do (tui/eprintln (str "  " (or (:name item) (pr-str item))))
-                           (doseq [[k v] (dissoc item :name)
-                                   :when (and (some? v) (not (and (coll? v) (empty? v))))]
-                             (tui/eprintln (str "    " (name k) ": " v))))
+                           (print-flat-map (dissoc item :name) "    "))
                        (tui/eprintln (str "  " item))))
     :else          (tui/eprintln (str "  " data))))
 
