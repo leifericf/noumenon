@@ -349,9 +349,11 @@
                       :status     :answered}})
             ;; Execute non-answer, non-reflect tool calls
             (let [exec-calls (remove #(= :reflect (:tool %)) parsed)
-                  results    (if (<= (count exec-calls) 1)
-                               [(dispatch-tool meta-db db (first exec-calls))]
-                               (pmap #(dispatch-tool meta-db db %) exec-calls))
+                  results    (if (empty? exec-calls)
+                               [{:result "No tool calls to execute."}]
+                               (if (<= (count exec-calls) 1)
+                                 [(dispatch-tool meta-db db (first exec-calls))]
+                                 (pmap #(dispatch-tool meta-db db %) exec-calls)))
                   combined   (if (= 1 (count results))
                                (:result (first results))
                                (->> results
