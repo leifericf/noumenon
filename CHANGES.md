@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **Demo release fallback** — `noum demo` now searches the 5 most recent GitHub releases for a demo tarball instead of only checking the latest. Prevents "not found" errors when a patch release ships without a new demo database.
+- **Progress bar lifecycle** — The launcher's progress handler now resets the bar on completion and creates a new bar when the total changes. Fixes the flashing green bar during digest benchmark and spurious "✓ digest done." lines between steps.
+- **Progress bar step labels** — Digest sub-steps (analyze, benchmark) tag their SSE progress events with `:step`, so the bar shows "✓ analyze done." instead of "✓ digest done."
+- **Synthesize progress event** — Added missing `:current`/`:total` keys to the synthesize progress event, preventing NPE in the launcher handler.
+- **Digest output formatting** — Nested result maps (analyze, benchmark, synthesize) are now printed as an indented tree with floats rounded to 2 decimal places, instead of raw EDN.
+
 ## 0.5.3
 
 ### Fixes
