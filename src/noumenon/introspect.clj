@@ -531,11 +531,12 @@
   [content]
   (try
     (let [rdr (java.io.PushbackReader. (java.io.StringReader. content))]
-      (loop []
-        (let [form (read {:eof ::done} rdr)]
-          (if (= ::done form)
-            nil ;; all forms read successfully
-            (recur)))))
+      (binding [*read-eval* false]
+        (loop []
+          (let [form (read {:eof ::done :read-cond :preserve} rdr)]
+            (if (= ::done form)
+              nil ;; all forms read successfully
+              (recur))))))
     (catch Exception e
       (str "Syntax error: " (.getMessage e)))))
 

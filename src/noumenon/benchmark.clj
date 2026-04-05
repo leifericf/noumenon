@@ -536,7 +536,7 @@
   (when-not (str/blank? raw)
     (let [try-parse (fn [s]
                       (try
-                        (let [result (edn/read-string s)]
+                        (let [result (edn/read-string {:readers {}} s)]
                           (when (and (map? result) (contains? score-values (:score result)))
                             result))
                         (catch Exception _ nil)))]
@@ -881,10 +881,10 @@
                 (when (not= stored-hash actual)
                   (throw (ex-info "Checkpoint integrity check failed: SHA-256 mismatch"
                                   {:path path :expected stored-hash :actual actual})))
-                (edn/read-string edn-str))
+                (edn/read-string {:readers {}} edn-str))
               ;; Legacy checkpoint without checksum — read as-is
               (do (log! "WARNING: checkpoint has no integrity checksum — may be tampered")
-                  (edn/read-string raw)))]
+                  (edn/read-string {:readers {}} raw)))]
     (validate-run-id (:run-id cp))
     (validate-checkpoint-stages cp)))
 

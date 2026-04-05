@@ -57,7 +57,7 @@
   [history-path]
   (let [f (io/file history-path)]
     (when (.exists f)
-      (let [history (edn/read-string (slurp f))]
+      (let [history (edn/read-string {:readers {}} (slurp f))]
         (->> history
              (filter #(= :improved (:outcome %)))
              (mapcat (fn [h]
@@ -109,4 +109,4 @@
   [path]
   (let [f (io/file path)]
     (when (.exists f)
-      (edn/read-string (slurp f)))))
+      (edn/read-string {:readers {}} (slurp f)))))

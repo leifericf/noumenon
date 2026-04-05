@@ -167,7 +167,7 @@
   [text]
   (when text
     (let [cleaned (analyze/strip-markdown-fences text)
-          parsed  (try (edn/read-string cleaned)
+          parsed  (try (edn/read-string {:readers {}} cleaned)
                        (catch Exception e
                          (log! "synthesize/parse-merge" (.getMessage e))
                          nil))]
@@ -179,7 +179,7 @@
   [text]
   (when text
     (let [cleaned (analyze/strip-markdown-fences text)
-          parsed  (try (edn/read-string cleaned)
+          parsed  (try (edn/read-string {:readers {}} cleaned)
                        (catch Exception e
                          (log! "synthesize/parse" (.getMessage e))
                          nil))]

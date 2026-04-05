@@ -200,7 +200,7 @@
   (when-not (str/blank? raw)
     (let [try-parse (fn [s]
                       (try
-                        (let [result (edn/read-string s)]
+                        (let [result (edn/read-string {:readers {}} s)]
                           (when (map? result) result))
                         (catch Exception _ nil)))
           parsed    (or (try-parse (str/trim raw))
