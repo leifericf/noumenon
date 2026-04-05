@@ -51,16 +51,17 @@
 
 (deftest invoke-api-429-throws
   (testing "HTTP 429 throws ex-info with status code"
-    (let [mock-request (fn [_opts]
-                         (delay {:status 429 :body "rate limited" :error nil}))]
-      (with-redefs [org.httpkit.client/request mock-request]
-        (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo
-             #"API error: HTTP 429"
-             (llm/invoke-api [{:role "user" :content "test"}]
-                             {:model "m" :temperature 0.1
-                              :max-tokens 128 :base-url "https://x"
-                              :auth-token "t"})))))))
+    (binding [llm/*max-retries* 1]
+      (let [mock-request (fn [_opts]
+                           (delay {:status 429 :body "rate limited" :error nil}))]
+        (with-redefs [org.httpkit.client/request mock-request]
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo
+               #"API error: HTTP 429"
+               (llm/invoke-api [{:role "user" :content "test"}]
+                               {:model "m" :temperature 0.1
+                                :max-tokens 128 :base-url "https://x"
+                                :auth-token "t"}))))))))
 
 (deftest invoke-api-500-throws
   (testing "HTTP 500 throws ex-info with status code after retries exhausted"
