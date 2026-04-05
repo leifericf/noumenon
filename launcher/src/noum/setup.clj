@@ -22,6 +22,7 @@
 
 (defn- noum-bin-path []
   (or (System/getenv "NOUM_BIN")
+      (some-> (fs/which "noum") str)
       (str (fs/path (fs/home) ".local" "bin" "noum"))))
 
 (defn- merge-mcp-config [existing]

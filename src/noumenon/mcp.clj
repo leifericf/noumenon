@@ -22,7 +22,8 @@
             [noumenon.sync :as sync]
             [noumenon.synthesize :as synthesize]
             [noumenon.util :as util :refer [log!]])
-  (:import [java.io BufferedReader PrintWriter]))
+  (:import [java.io BufferedReader PrintWriter]
+           [java.lang ProcessHandle]))
 
 ;; --- Helpers ---
 
@@ -1031,12 +1032,21 @@
                              (assoc defaults :progress-fn progress-fn)
                              defaults))
         (catch clojure.lang.ExceptionInfo e
-          (log! "tool/error" tool-name (.getMessage e))
-          (tool-error (or (:user-message (ex-data e))
-                          (str "Internal error: " (.getMessage e)))))
+          (let [msg (.getMessage e)
+                user-msg (:user-message (ex-data e))]
+            (log! "tool/error" tool-name msg)
+            (tool-error (or user-msg
+                            (str "Internal error: " msg)))))
         (catch Exception e
-          (log! "tool/error" tool-name (.getMessage e))
-          (tool-error "An unexpected internal error occurred.")))
+          (let [msg (.getMessage e)]
+            (log! "tool/error" tool-name msg)
+            (tool-error
+             (if (and msg (str/includes? msg ".lock"))
+               (str "FATAL: Database locked by another process (likely a running daemon). "
+                    "DO NOT RETRY — all Noumenon tool calls will fail until the lock is released. "
+                    "Tell the user to kill the daemon: ps aux | grep 'noumenon.*daemon' | grep -v grep | awk '{print $2}' | xargs kill")
+               (str "Internal error in " tool-name ": " msg
+                    ". DO NOT RETRY — report this error to the user."))))))
       (tool-error (str "Unknown tool: " tool-name)))))
 
 ;; --- Main loop ---
@@ -1079,6 +1089,19 @@
             active (:active config)]
         (when (and active (not= active "local"))
           (get-in config [:connections active]))))))
+
+(defn- detect-local-daemon
+  "Check ~/.noumenon/daemon.edn for a running local daemon.
+   Returns a proxy connection map if the daemon PID is alive, nil otherwise."
+  []
+  (let [daemon-file (io/file (System/getProperty "user.home") ".noumenon" "daemon.edn")]
+    (when (.exists daemon-file)
+      (try
+        (let [{:keys [port pid]} (edn/read-string {:readers {}} (slurp daemon-file))
+              handle (.orElse (ProcessHandle/of pid) nil)]
+          (when (and handle (.isAlive handle) port)
+            {:host (str "http://127.0.0.1:" port)}))
+        (catch Exception _ nil)))))
 
 (defn- repo-path->db-name
   "Translate a local repo_path to a database name for remote queries.
@@ -1163,7 +1186,8 @@
                       arguments)]
       (try
         (let [;; Pass auth header via stdin to avoid token in process list
-              curl-config (str "header = \"Authorization: Bearer " token "\"\n"
+              curl-config (str (when token
+                                 (str "header = \"Authorization: Bearer " token "\"\n"))
                                "header = \"Content-Type: application/json\"\n")
               ;; For GET, append non-empty args as query params
               get-url (if (and (= method :get) (seq args))
@@ -1211,7 +1235,7 @@
   (log! "noumenon MCP server starting")
   (let [reader      (BufferedReader. (io/reader System/in))
         writer      (PrintWriter. System/out true)
-        remote-conn (load-connection-config)
+        remote-conn (or (load-connection-config) (detect-local-daemon))
         defaults    (cond-> (select-keys opts [:db-dir :provider :model])
                       (:no-auto-update opts) (assoc :auto-update false))
         dispatch    (fn [id method params]
@@ -1225,7 +1249,8 @@
                         "resources/list"          (format-response id {:resources []})
                         (format-error id -32601 (str "Method not found: " method))))]
     (when remote-conn
-      (log! (str "MCP proxy mode: forwarding to " (:host remote-conn))))
+      (log! (str "MCP proxy mode: forwarding to " (:host remote-conn)
+                 (when-not (load-connection-config) " (auto-detected local daemon)"))))
     (log! "noumenon MCP server ready")
     (loop []
       (when-let [line (try
