@@ -622,10 +622,11 @@ end")
 (defn- file->tx-data
   "Build tx-data for one file's resolved imports and raw dependency names."
   [file-path {:keys [resolved raw]}]
-  (when (or (seq resolved) (seq raw))
-    (cond-> {:file/path file-path}
-      (seq resolved) (assoc :file/imports (mapv (fn [p] [:file/path p]) resolved))
-      (seq raw)      (assoc :sem/dependencies raw))))
+  (cond-> {:file/path file-path}
+    true           (assoc :file/imports (if (seq resolved)
+                                          (mapv (fn [p] [:file/path p]) resolved)
+                                          []))
+    (seq raw)      (assoc :sem/dependencies raw)))
 
 (def ^:private batch-size 50)
 
