@@ -70,7 +70,7 @@
                  :usage   "noum reseed"
                  :api-path "/api/reseed" :api-method :post}
    "history"    {:summary "Show artifact change history"
-                 :usage   "noum history rules\n  noum history prompt <name>\n\n  Prompt names: analyze-file, agent-system, introspect"}
+                 :usage   "noum history rules\n  noum history prompt <name>\n\n  Run `noum history prompt` to see available prompt names."}
    "synthesize" {:summary "Identify architectural components from analyzed data"
                  :usage   "noum synthesize <repo> [options]"
                  :api-path "/api/synthesize" :api-method :post :min-args 1}
