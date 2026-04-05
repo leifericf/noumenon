@@ -1604,7 +1604,7 @@
         cp-path        (str (io/file checkpoint-dir (str run-id ".edn")))
         start-ms       (System/currentTimeMillis)
         session-cost   (atom 0.0)
-        stop-flag      (atom nil)
+        stop-flag      (or (:stop-flag opts) (atom nil))
         error-atom     (atom nil)
         rate-gate      (atom 0)
         initial-stages (if resuming? (:stages resume-checkpoint) {})
