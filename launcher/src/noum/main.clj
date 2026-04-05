@@ -157,7 +157,8 @@
                                  (when-let [prev @spinner-atom]
                                    ((:stop (:spinner prev)) (:message prev))
                                    (reset! spinner-atom nil))
-                                 (let [b (progress/bar (or message command) total)]
+                                 (let [label (or (:step evt) message command)
+                                       b     (progress/bar label total)]
                                    (reset! bar-atom (with-meta b {:total total}))
                                    ((:update b) current)))
 
