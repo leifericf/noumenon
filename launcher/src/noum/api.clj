@@ -200,7 +200,7 @@
     (if-let [host (:host effective)]
       {:host host :token (:token effective) :insecure (:insecure effective)}
       (let [jre-path (jre/ensure!)
-            jar-path (jar/ensure!)]
+            jar-path (jar/ensure! paths/version)]
         (daemon/ensure! (merge {:jre-path jre-path :jar-path jar-path}
                                (select-keys effective [:db-dir :provider :model :token])))))))
 

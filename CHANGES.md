@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.3
+
+### Fixes
+
+- **Stale JAR auto-update** — `jar/ensure!` now reads `version.edn` from the installed JAR and compares against the launcher version. On mismatch, stops the daemon, downloads the matching release, and restarts fresh. Previously, an existing JAR was never re-checked, so Homebrew launcher updates silently ran against an old backend.
+- **Daemon bounce on upgrade** — `noum upgrade` now stops the running daemon after downloading a new JAR, so the next command starts with the updated code.
+- **Version def shared** — Moved from `main.clj` (private) to `paths.clj` so both `main` and `api` pass it to `jar/ensure!`.
+
 ## 0.5.2
 
 Security hardening, bug fixes, and UX polish.

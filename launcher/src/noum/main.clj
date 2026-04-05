@@ -4,7 +4,6 @@
             [babashka.http-client :as http]
             [babashka.process :as proc]
             [cheshire.core :as json]
-            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [noum.api :as api]
@@ -23,10 +22,7 @@
             [noum.tui.spinner :as spinner]
             [noum.tui.style :as style]))
 
-(def ^:private version
-  (or (try (:version (edn/read-string (slurp (io/resource "version.edn"))))
-           (catch Exception _ nil))
-      "dev"))
+(def ^:private version paths/version)
 
 ;; --- Output ---
 
@@ -240,7 +236,8 @@
   (let [s (spinner/start "Downloading latest version...")]
     (try
       (if (jar/download!)
-        (do ((:stop s) "Noumenon updated.")
+        (do (when (daemon/running?) (daemon/stop!))
+            ((:stop s) "Noumenon updated.")
             (tui/eprintln "To update the noum launcher itself, re-run the installer.")
             0)
         (do ((:stop s) "Already at latest version.")
@@ -252,7 +249,7 @@
 
 (defn- do-serve [{:keys [flags]}]
   (let [jre-path (jre/ensure!)
-        jar-path (jar/ensure!)
+        jar-path (jar/ensure! version)
         java-bin (str (fs/path jre-path "bin" "java"))
         args     (cond-> [java-bin "-jar" jar-path "serve"]
                    (:db-dir flags)   (into ["--db-dir" (:db-dir flags)])

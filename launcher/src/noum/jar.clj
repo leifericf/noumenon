@@ -3,6 +3,7 @@
   (:require [babashka.fs :as fs]
             [babashka.http-client :as http]
             [cheshire.core :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [noum.daemon :as daemon]
             [noum.paths :as paths]
@@ -63,15 +64,14 @@
                             {:expected expected :actual actual})))))
     (tui/eprintln "  Warning: no .sha256 sidecar in release, skipping checksum verification.")))
 
-(defn- current-version
-  "Read the installed JAR's version from the running daemon, or nil."
+(defn- jar-version
+  "Read version.edn from the installed JAR, or nil."
   []
-  (when-let [{:keys [port]} (daemon/connection)]
+  (when (installed?)
     (try
-      (let [resp (http/get (str "http://127.0.0.1:" port "/health")
-                           {:timeout 2000 :throw false})]
-        (when (= 200 (:status resp))
-          (-> (json/parse-string (:body resp) true) :data :version)))
+      (let [jar-url (java.net.URL. (str "jar:file:" paths/jar-path "!/version.edn"))]
+        (with-open [in (.openStream jar-url)]
+          (:version (edn/read-string (slurp in)))))
       (catch Exception _ nil))))
 
 (defn download!
@@ -84,7 +84,7 @@
       ((:stop s) "No JAR found in release")
       (throw (ex-info (str "No JAR asset found in release " (:tag release)) {})))
     (let [remote-ver (:tag release)
-          local-ver  (current-version)]
+          local-ver  (jar-version)]
       (if (and local-ver (= (str "v" local-ver) remote-ver))
         (do ((:stop s) (str "Already at latest version (" remote-ver ").")) nil)
         (do ((:stop s) (str "Found " remote-ver (when local-ver (str " (current: v" local-ver ")"))))
@@ -98,10 +98,24 @@
             (verify-checksum! paths/jar-path (:assets release) (:name asset))
             paths/jar-path)))))
 
+(defn- stale?
+  "True when the installed JAR version doesn't match the launcher version."
+  [launcher-version]
+  (when launcher-version
+    (let [jar-ver (jar-version)]
+      (and jar-ver (not= jar-ver launcher-version)))))
+
 (defn ensure!
-  "Ensure noumenon.jar is installed. Download if not. Returns jar path."
-  []
-  (if (installed?)
-    paths/jar-path
-    (do (tui/eprintln "First run: downloading noumenon.jar (~50MB) to ~/.noumenon/")
-        (download!))))
+  "Ensure noumenon.jar is installed and up to date. Returns jar path.
+   When launcher-version is supplied, triggers download if the running
+   JAR version differs."
+  ([] (ensure! nil))
+  ([launcher-version]
+   (if (installed?)
+     (if (stale? launcher-version)
+       (do (daemon/stop!)
+           (download!)
+           paths/jar-path)
+       paths/jar-path)
+     (do (tui/eprintln "First run: downloading noumenon.jar (~50MB) to ~/.noumenon/")
+         (download!)))))
