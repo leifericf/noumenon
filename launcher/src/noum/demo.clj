@@ -30,14 +30,19 @@
 
 ;; --- GitHub release asset discovery ---
 
-(defn- latest-release-assets []
-  (let [url  (str "https://api.github.com/repos/" github-repo "/releases/latest")
-        resp (http/get url {:headers {"Accept" "application/vnd.github.v3+json"}})]
-    (when (= 200 (:status resp))
-      (let [body (json/parse-string (:body resp) true)]
-        {:tag    (:tag_name body)
-         :assets (mapv (fn [a] {:name (:name a) :url (:browser_download_url a)})
-                       (:assets body))}))))
+(defn- parse-release [body]
+  {:tag    (:tag_name body)
+   :assets (mapv (fn [a] {:name (:name a) :url (:browser_download_url a)})
+                 (:assets body))})
+
+(defn- recent-releases
+  "Fetch up to n recent releases (default 5)."
+  ([] (recent-releases 5))
+  ([n]
+   (let [url  (str "https://api.github.com/repos/" github-repo "/releases?per_page=" n)
+         resp (http/get url {:headers {"Accept" "application/vnd.github.v3+json"}})]
+     (when (= 200 (:status resp))
+       (mapv parse-release (json/parse-string (:body resp) true))))))
 
 (defn- find-asset [assets pattern]
   (first (filter #(re-matches pattern (:name %)) assets)))
@@ -66,21 +71,23 @@
                             {:expected expected :actual actual})))))))
 
 (defn- resolve-release-assets!
-  "Find release and locate tarball + SHA assets. Throws if unavailable."
+  "Find a release containing a demo tarball. Checks the latest release first,
+   then walks back through recent releases as a fallback."
   []
-  (let [s       (spinner/start "Checking latest release for demo database...")
-        release (latest-release-assets)]
-    (when-not release
+  (let [s        (spinner/start "Checking releases for demo database...")
+        releases (recent-releases)]
+    (when-not (seq releases)
       ((:fail s))
       (throw (ex-info "Cannot reach GitHub. Check your internet connection." {})))
-    (let [tarball-asset (find-asset (:assets release) asset-pattern)]
-      (when-not tarball-asset
-        ((:fail s) "Not found")
-        (throw (ex-info (str "No demo database found in release " (:tag release)
-                             ". The maintainer may not have uploaded it yet.") {})))
-      ((:stop s) (str "Found demo database in " (:tag release)))
-      {:tarball-asset tarball-asset
-       :sha-asset     (find-asset (:assets release) sha-pattern)})))
+    (if-let [{:keys [tag] :as hit}
+             (first (filter #(find-asset (:assets %) asset-pattern) releases))]
+      (do ((:stop s) (str "Found demo database in " tag))
+          {:tarball-asset (find-asset (:assets hit) asset-pattern)
+           :sha-asset     (find-asset (:assets hit) sha-pattern)})
+      (do ((:fail s) "Not found")
+          (throw (ex-info (str "No demo database found in the last "
+                               (count releases) " releases.")
+                          {}))))))
 
 (defn- download-and-verify!
   "Download the demo tarball and verify SHA256. Returns path to verified tarball."
