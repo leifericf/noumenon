@@ -131,7 +131,10 @@ async function createWindow() {
 
   // Restrict navigation to app-owned origins only
   win.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith('file://') && !url.startsWith('http://localhost')) {
+    const allowedPrefix = daemonPort
+      ? `http://localhost:${daemonPort}`
+      : 'http://localhost';
+    if (!url.startsWith('file://') && !url.startsWith(allowedPrefix)) {
       event.preventDefault();
     }
   });
