@@ -41,9 +41,11 @@
    Returns the selected option (string or map). Non-interactive: returns first option."
   [message options]
   (if-not (tui/interactive?)
-    (do (tui/eprintln (str message " → " (if (map? (first options))
-                                           (:label (first options))
-                                           (first options))))
+    (do (binding [*out* *err*]
+          (println (str "WARNING: Non-interactive, auto-selecting: "
+                        (if (map? (first options))
+                          (:label (first options))
+                          (first options)))))
         (first options))
     (let [labels (mapv #(if (map? %) (:label %) %) options)
           n      (count options)]

@@ -7,7 +7,7 @@
 (defn ask
   "Prompt for y/n confirmation. Returns true/false.
    Non-interactive: returns default-val and logs the auto-accept."
-  ([message] (ask message true))
+  ([message] (ask message false))
   ([message default-val]
    (if-not (tui/interactive?)
      (do (tui/eprintln (str message " → " (if default-val "yes" "no") " (non-interactive)"))
