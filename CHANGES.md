@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+## 0.5.4
+
 ### Fixes
 
+- **MCP daemon lock contention** — `noum serve` now auto-detects a running local daemon via `daemon.edn` and proxies tool calls to it instead of opening the database directly. Previously, the daemon's exclusive file lock caused every MCP tool call to fail with a generic "unexpected internal error."
+- **MCP error messages** — Tool call errors now include the actual cause and tool name instead of "An unexpected internal error occurred." Database lock errors include actionable kill instructions and explicitly tell AI agents not to retry.
+- **MCP proxy auth header** — Proxy mode no longer sends `Authorization: Bearer null` when connecting to a local daemon without a token.
+- **Setup binary path** — `noum setup code` now resolves the `noum` binary via `PATH` (e.g. Homebrew at `/opt/homebrew/bin/noum`) instead of always hardcoding `~/.local/bin/noum`.
 - **Demo release fallback** — `noum demo` now searches the 5 most recent GitHub releases for a demo tarball instead of only checking the latest. Prevents "not found" errors when a patch release ships without a new demo database.
 - **Progress bar lifecycle** — The launcher's progress handler now resets the bar on completion and creates a new bar when the total changes. Fixes the flashing green bar during digest benchmark and spurious "✓ digest done." lines between steps.
 - **Progress bar step labels** — Digest sub-steps (analyze, benchmark) tag their SSE progress events with `:step`, so the bar shows "✓ analyze done." instead of "✓ digest done."
