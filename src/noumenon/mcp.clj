@@ -812,7 +812,8 @@
                              :max-hours           (args "max_hours")
                              :max-cost            (args "max_cost")
                              :eval-runs           (or (args "eval_runs") 1)
-                             :git-commit?         (args "git_commit")
+                             :git-commit?         (and (args "git_commit")
+                                                       (not (:read-only defaults)))
                              :model-config        {:provider provider :model model}
                              :progress-fn         (:progress-fn defaults)}
                       (args "target")
@@ -1127,6 +1128,14 @@
    "noumenon_reseed"            {:path "/api/reseed" :method :post}
    "noumenon_artifact_history"  {:path "/api/artifacts/history" :method :get}})
 
+(def ^:private read-only-proxy-tools
+  "Tools safe to proxy without admin privileges."
+  #{"noumenon_status" "noumenon_query" "noumenon_list_queries"
+    "noumenon_get_schema" "noumenon_list_databases" "noumenon_ask"
+    "noumenon_search" "noumenon_benchmark_results" "noumenon_benchmark_compare"
+    "noumenon_introspect_status" "noumenon_introspect_history"
+    "noumenon_artifact_history"})
+
 (defn- proxy-tool-call
   "Forward a tool call to the remote HTTP API."
   [tool-name arguments remote-conn]
@@ -1134,6 +1143,8 @@
         {:keys [host token]} remote-conn]
     (when-not path
       (throw (ex-info (str "Unknown tool: " tool-name) {})))
+    (when-not (read-only-proxy-tools tool-name)
+      (log! (str "proxy: forwarding admin tool " tool-name " to remote")))
     (let [;; Translate repo_path to db-name
           db-name   (repo-path->db-name (get arguments "repo_path"))
           base-url  (if (or (str/starts-with? host "http://")
