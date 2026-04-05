@@ -577,8 +577,6 @@
       (do (let [client (db/create-client db-dir)]
             (db/delete-db client db-name))
           (db/evict-conn! db-dir db-name)
-          (when (.isDirectory db-path)
-            (run! io/delete-file (reverse (file-seq db-path))))
           (ok {:deleted db-name}))
       (error-response 404 (str "Database not found: " db-name)))))
 
