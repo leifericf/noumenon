@@ -1,6 +1,7 @@
 (ns noum.paths
   "Shared path constants for ~/.noumenon/."
-  (:require [babashka.fs :as fs]))
+  (:require [babashka.fs :as fs]
+            [clojure.string :as str]))
 
 (defn ensure-private!
   "Set file permissions to owner-only (600) if the file exists.
@@ -20,3 +21,8 @@
 (def daemon-log  (str (fs/path noum-dir "daemon.log")))
 (def data-dir    (str (fs/path noum-dir "data")))
 (def demo-manifest (str (fs/path data-dir "noumenon" "manifest.edn")))
+(def ui-dir      (str (fs/path noum-dir "ui")))
+(def electron-app
+  (if (str/starts-with? (System/getProperty "os.name" "") "Mac")
+    (str (fs/path ui-dir "Noumenon.app"))
+    (str (fs/path ui-dir "Noumenon.AppImage"))))

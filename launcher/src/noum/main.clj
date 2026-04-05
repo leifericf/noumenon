@@ -12,6 +12,7 @@
             [noum.interactive :as interactive]
             [noum.daemon :as daemon]
             [noum.demo :as demo]
+            [noum.electron :as electron]
             [noum.jar :as jar]
             [noum.jre :as jre]
             [noum.paths :as paths]
@@ -356,23 +357,34 @@
 
 (defn- do-open [{:keys [flags]}]
   (let [conn (api/ensure-backend! flags)
-        port (:port conn)]
+        port (:port conn)
+        dev? (System/getenv "NOUMENON_ROOT")]
     (tui/eprintln (str "Opening Noumenon UI (daemon on port " port ")..."))
-    (let [exit-code (try
-                      (:exit @(proc/process
-                               {:cmd ["npx" "electron" "ui/"]
-                                :dir (or (System/getenv "NOUMENON_ROOT") ".")
-                                :env (assoc (into {} (System/getenv))
-                                            "NOUMENON_PORT" (str port))
-                                :inherit true}))
-                      (catch Exception e
-                        (tui/eprintln (str (style/red "Error: ") (.getMessage e)))
-                        127))]
-      (when-not (zero? exit-code)
+    (let [exit-code
+          (try
+            (if dev?
+              ;; Dev mode: source checkout with npx
+              (:exit @(proc/process
+                       {:cmd ["npx" "electron" "ui/"]
+                        :dir dev?
+                        :env (assoc (into {} (System/getenv))
+                                    "NOUMENON_PORT" (str port))
+                        :inherit true}))
+              ;; Installed: download packaged app and launch
+              (let [app-path (electron/ensure!)]
+                (:exit @(proc/process
+                         {:cmd (electron/launch-cmd app-path port)
+                          :env (electron/launch-env port)
+                          :inherit true}))))
+            (catch Exception e
+              (tui/eprintln (str (style/red "Error: ") (.getMessage e)))
+              127))]
+      (when-not (zero? (or exit-code 0))
         (tui/eprintln (str (style/red "Error: ") "Electron UI exited with code " exit-code "."))
-        (tui/eprintln "  Ensure Node.js is installed (https://nodejs.org) and run:")
-        (tui/eprintln "    cd ui && npm install"))
-      exit-code)))
+        (when dev?
+          (tui/eprintln "  Ensure Node.js is installed (https://nodejs.org) and run:")
+          (tui/eprintln "    cd ui && npm install")))
+      (or exit-code 0))))
 
 ;; --- Query (raw + as-of) ---
 
