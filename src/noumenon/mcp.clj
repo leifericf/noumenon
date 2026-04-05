@@ -746,7 +746,7 @@
                                           :progress-fn (:progress-fn defaults)})]
             (swap! results assoc :analyze r)))
         ;; Synthesize
-        (when-not (args "skip_analyze")
+        (when-not (args "skip_synthesize")
           (try
             (let [synth-llm (llm/wrap-as-prompt-fn-from-opts
                              {:provider (or (args "provider") (:provider defaults))
