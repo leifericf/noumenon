@@ -123,38 +123,46 @@
   "Create an SSE on-progress callback that drives a TUI progress bar.
    Uses a spinner for indeterminate (total=0) operations.
    Starts a waiting spinner immediately so the user sees feedback.
-   Returns the callback fn (or nil if non-interactive)."
+   Returns {:handler callback-fn :cleanup cleanup-fn} or nil if non-interactive."
   [command]
   (when (and (tui/interactive?) (progress-commands command))
     (let [bar-atom     (atom nil)
           spinner-atom (atom {:spinner (spinner/start (str command "..."))
-                              :message (str command "...")})]
-      (fn [{:keys [current total message]}]
-        (cond
-          ;; Indeterminate: use spinner, stop previous spinner on message change
-          (zero? total)
-          (let [prev @spinner-atom]
-            (when (and prev (not= (:message prev) message))
-              ((:stop (:spinner prev)) (:message prev)))
-            (when (or (nil? prev) (not= (:message prev) message))
-              (let [s (spinner/start message)]
-                (reset! spinner-atom {:spinner s :message message}))))
+                              :message (str command "...")})
+          cleanup!     (fn []
+                         (when-let [prev @spinner-atom]
+                           ((:fail (:spinner prev)) (:message prev))
+                           (reset! spinner-atom nil))
+                         (when-let [b @bar-atom]
+                           ((:done b))
+                           (reset! bar-atom nil)))
+          handler      (fn [{:keys [current total message]}]
+                         (cond
+                           ;; Indeterminate: use spinner, stop previous spinner on message change
+                           (zero? total)
+                           (let [prev @spinner-atom]
+                             (when (and prev (not= (:message prev) message))
+                               ((:stop (:spinner prev)) (:message prev)))
+                             (when (or (nil? prev) (not= (:message prev) message))
+                               (let [s (spinner/start message)]
+                                 (reset! spinner-atom {:spinner s :message message}))))
 
-          ;; Start determinate bar
-          (nil? @bar-atom)
-          (do (when-let [prev @spinner-atom]
-                ((:stop (:spinner prev)) (:message prev))
-                (reset! spinner-atom nil))
-              (let [b (progress/bar command total)]
-                (reset! bar-atom b)
-                ((:update b) current)))
+                           ;; Start determinate bar
+                           (nil? @bar-atom)
+                           (do (when-let [prev @spinner-atom]
+                                 ((:stop (:spinner prev)) (:message prev))
+                                 (reset! spinner-atom nil))
+                               (let [b (progress/bar command total)]
+                                 (reset! bar-atom b)
+                                 ((:update b) current)))
 
-          ;; Update / finish determinate bar
-          :else
-          (let [b @bar-atom]
-            (if (= current total)
-              ((:done b))
-              ((:update b) current))))))))
+                           ;; Update / finish determinate bar
+                           :else
+                           (let [b @bar-atom]
+                             (if (= current total)
+                               ((:done b))
+                               ((:update b) current)))))]
+      {:handler handler :cleanup cleanup!})))
 
 (defn do-api-command [{:keys [command flags positional]}]
   (let [{:keys [api-path api-method min-args usage] :as cmd-def} (cli/commands command)]
@@ -169,12 +177,16 @@
           1)
 
       :else
-      (let [conn        (api/ensure-backend! flags)
-            body        (build-api-body flags positional cmd-def)
-            progress-fn (make-progress-handler command)]
-        (print-api-result (case api-method
-                            :post (api/post! conn api-path body progress-fn)
-                            :get  (api/get! conn api-path)))))))
+      (let [conn     (api/ensure-backend! flags)
+            body     (build-api-body flags positional cmd-def)
+            progress (make-progress-handler command)]
+        (try
+          (print-api-result (case api-method
+                              :post (api/post! conn api-path body (:handler progress))
+                              :get  (api/get! conn api-path)))
+          (finally
+            (when-let [cleanup (:cleanup progress)]
+              (cleanup))))))))
 
 (defn- do-db-get
   "GET endpoint addressed by database name. Accepts a path or name."
@@ -196,8 +208,12 @@
 
 (defn- do-setup [{:keys [positional]}]
   (case (first positional)
-    "desktop" (do (setup/setup-desktop!) 0)
-    "code"    (do (setup/setup-code!) 0)
+    "desktop" (do (setup/setup-desktop!)
+                  (tui/eprintln (str (style/green "Setup complete.") " Run `noum status` to verify."))
+                  0)
+    "code"    (do (setup/setup-code!)
+                  (tui/eprintln (str (style/green "Setup complete.") " Run `noum status` to verify."))
+                  0)
     (do (tui/eprintln "Usage: noum setup <desktop|code>") 1)))
 
 (defn- do-start [{:keys [flags]}]
@@ -221,17 +237,18 @@
     (do (tui/eprintln (str (style/red "✗") " Daemon not running. Run 'noum start' to start it.")) 1)))
 
 (defn- do-upgrade [_]
-  (try
-    (if (jar/download!)
-      (do (tui/eprintln (str (style/green "✓") " Noumenon updated."))
-          (tui/eprintln "To update the noum launcher itself, re-run the installer.")
-          0)
-      (do (tui/eprintln (str (style/green "✓") " Already at latest version."))
-          (tui/eprintln "To update the noum launcher itself, re-run the installer.")
-          0))
-    (catch Exception e
-      (tui/eprintln (str (style/red "Error: ") "upgrade failed: " (.getMessage e)))
-      1)))
+  (let [s (spinner/start "Downloading latest version...")]
+    (try
+      (if (jar/download!)
+        (do ((:stop s) "Noumenon updated.")
+            (tui/eprintln "To update the noum launcher itself, re-run the installer.")
+            0)
+        (do ((:stop s) "Already at latest version.")
+            (tui/eprintln "To update the noum launcher itself, re-run the installer.")
+            0))
+      (catch Exception e
+        ((:fail s) (str "upgrade failed: " (.getMessage e)))
+        1))))
 
 (defn- do-serve [{:keys [flags]}]
   (let [jre-path (jre/ensure!)
@@ -256,17 +273,23 @@
       (tui/eprintln (str "Watching " repo-path " (polling every " interval-s "s). Ctrl+C to stop."))
       (loop [failures 0]
         (let [resp (try (api/post! conn "/api/update" body)
-                        (catch Exception e {:ok false :error (.getMessage e)}))]
+                        (catch Exception e
+                          {:ok false :error (or (.getMessage e) (str (class e)))}))]
           (if (:ok resp)
             (do (when (not= :up-to-date (get-in resp [:data :status]))
                   (tui/eprintln (str "  Updated: " (get-in resp [:data :added] 0) " added, "
                                      (get-in resp [:data :modified] 0) " modified")))
                 (Thread/sleep (* interval-s 1000))
                 (recur 0))
-            (let [n (inc failures)]
-              (tui/eprintln (str (style/yellow "  Warning: ") repo-path ": update failed (" n "/3): " (:error resp)))
+            (let [n       (inc failures)
+                  err-msg (str/replace (or (:error resp) "unknown error")
+                                       #"(?:java\.\w+\.)*(\w+Exception): " "$1: ")]
+              (tui/eprintln (str (style/yellow "  Warning: ") repo-path ": update failed (" n "/3): " err-msg))
               (if (>= n 3)
-                (do (tui/eprintln (str (style/red "Error: ") repo-path ": 3 consecutive failures, stopping watch.")) 1)
+                (do (tui/eprintln (str (style/red "Error: ") repo-path ": 3 consecutive failures, stopping watch."))
+                    (tui/eprintln (str "  Last error: " err-msg))
+                    (tui/eprintln "  Try `noum status` to check daemon health, or restart with `noum stop && noum start`.")
+                    1)
                 (do (Thread/sleep (* interval-s 1000))
                     (recur n))))))))))
 
@@ -325,9 +348,14 @@
       (do (tui/eprintln (str "Unknown type: " atype ". Must be 'prompt' or 'rules'.")) 1)
 
       (and (= "prompt" atype) (nil? aname))
-      (do (tui/eprintln "Usage: noum history prompt <name>")
-          (tui/eprintln "Hint: prompt names include 'analyze-file', 'agent-system', 'introspect'.")
-          1)
+      (let [names (->> (io/resource "prompts/")
+                       io/file .listFiles seq
+                       (keep #(when (str/ends-with? (.getName %) ".edn")
+                                (str/replace (.getName %) ".edn" "")))
+                       sort)]
+        (tui/eprintln "Usage: noum history prompt <name>")
+        (tui/eprintln (str "Available prompts: " (str/join ", " (map #(str "'" % "'") names))))
+        1)
 
       :else
       (let [conn   (api/ensure-backend! flags)
@@ -345,14 +373,17 @@
 
 (defn- do-version [_]
   (tui/eprintln (str "noum " version))
-  (when (jar/installed?)
+  (if-not (jar/installed?)
+    (tui/eprintln "Daemon: not installed")
     (try
-      (when-let [conn (daemon/connection)]
+      (if-let [conn (daemon/connection)]
         (let [resp (api/get! conn "/health")]
-          (when (:ok resp)
-            (tui/eprintln (str "noumenon " (get-in resp [:data :version]))))))
+          (if (:ok resp)
+            (tui/eprintln (str "noumenon " (get-in resp [:data :version])))
+            (tui/eprintln "Daemon: not responding")))
+        (tui/eprintln "Daemon: not running"))
       (catch Exception _
-        (tui/eprintln "  (daemon not reachable)"))))
+        (tui/eprintln "Daemon: not reachable"))))
   0)
 
 (defn- do-open [{:keys [flags]}]
@@ -382,7 +413,9 @@
       (when-not (zero? (or exit-code 0))
         (tui/eprintln (str (style/red "Error: ") "Electron UI exited with code " exit-code "."))
         (when dev?
-          (tui/eprintln "  Ensure Node.js is installed (https://nodejs.org) and run:")
+          (tui/eprintln "  Ensure Node.js is installed (https://nodejs.org) and Electron is available:")
+          (tui/eprintln "    node --version && npx electron --version")
+          (tui/eprintln "  Then run:")
           (tui/eprintln "    cd ui && npm install")))
       (or exit-code 0))))
 

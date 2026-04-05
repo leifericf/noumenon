@@ -1,6 +1,7 @@
 (ns noum.interactive
   "Interactive TUI menu for noum (no-args mode)."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [noum.api :as api]
             [noum.cli :as cli]
             [noum.tui.choose :as choose]
@@ -182,10 +183,14 @@
                                                    {:label "prompt" :value "prompt"}])]
     (if (= "rules" (:value atype))
       {:command "history" :flags {} :positional ["rules"]}
-      (when-let [pname (choose/select "prompt" [{:label "analyze-file"  :value "analyze-file"}
-                                                {:label "agent-system"  :value "agent-system"}
-                                                {:label "introspect"    :value "introspect"}])]
-        {:command "history" :flags {} :positional ["prompt" (:value pname)]}))))
+      (let [prompt-names (->> (io/resource "prompts/")
+                              io/file .listFiles seq
+                              (keep #(when (str/ends-with? (.getName %) ".edn")
+                                       (str/replace (.getName %) ".edn" "")))
+                              sort)
+            options      (mapv (fn [n] {:label n :value n}) prompt-names)]
+        (when-let [pname (choose/select "prompt" options)]
+          {:command "history" :flags {} :positional ["prompt" (:value pname)]})))))
 
 (def ^:private arg-collectors
   "Commands that need interactive arg collection. Missing = dispatch immediately."
