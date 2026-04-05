@@ -140,9 +140,11 @@
     {}))
 
 (defn- save-config! [config]
-  (fs/create-dirs (fs/parent paths/config-path))
-  (spit paths/config-path (pr-str config))
-  (paths/ensure-private! paths/config-path))
+  (let [parent (fs/parent paths/config-path)]
+    (fs/create-dirs parent)
+    (paths/ensure-private! parent)
+    (spit paths/config-path (pr-str config))
+    (paths/ensure-private! paths/config-path)))
 
 (defn active-connection
   "Return the active connection map, or nil for local mode."

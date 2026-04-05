@@ -499,6 +499,9 @@
                             (first parts)
                             host)))
               conn  {:host target :token token :insecure (:insecure flags)}]
+          (when (and token (:insecure flags))
+            (tui/eprintln (str (style/yellow "WARNING: ") "Sending auth token over unencrypted HTTP. "
+                               "Use HTTPS unless this is a trusted local network.")))
           ;; Validate by hitting /health
           (try
             (let [resp (http/get (str (api/base-url conn) "/health")
