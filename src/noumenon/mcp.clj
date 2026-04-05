@@ -1140,6 +1140,7 @@
                             (str/starts-with? host "https://"))
                       host
                       (str "https://" host))
+          _         (git/validate-proxy-host! base-url)
           ;; Replace :repo placeholder in path
           url-path  (str/replace path ":repo"
                                  (java.net.URLEncoder/encode (or db-name "") "UTF-8"))

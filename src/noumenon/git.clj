@@ -37,7 +37,8 @@
 (def ^:private blocked-ip-patterns
   "Regex patterns matching private/loopback IP ranges (RFC-1918, RFC-5737, loopback, link-local)."
   [#"^127\." #"^10\." #"^172\.(1[6-9]|2[0-9]|3[01])\." #"^192\.168\."
-   #"^0\." #"^169\.254\." #"^::1$" #"^fc00:" #"^fe80:" #"^fd"])
+   #"^0\." #"^169\.254\." #"^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\."
+   #"^::1$" #"^fc00:" #"^fe80:" #"^fd"])
 
 (defn- private-ip?
   "True if ip-str matches a private, loopback, or link-local range."
@@ -61,7 +62,7 @@
                 (.isSiteLocalAddress canon)
                 (private-ip? (.getHostAddress canon))))))))
 
-(defn- validate-clone-url!
+(defn- validate-url-host!
   "Validate that a Git URL does not resolve to a private/loopback address.
    Throws ex-info on blocked addresses."
   [url]
@@ -76,12 +77,23 @@
         (throw (ex-info (str "Cannot resolve hostname: " host)
                         {:url url :host host}))))))
 
+(def ^:private validate-clone-url! validate-url-host!)
+
+(defn validate-proxy-host!
+  "Validate that a proxy host URL does not resolve to a private/loopback address.
+   Allows localhost (the common local daemon case)."
+  [url]
+  (let [host (extract-hostname url)]
+    (when (and host
+               (not (#{"localhost" "127.0.0.1"} host)))
+      (validate-url-host! url))))
+
 (defn clone!
   "Clone a Git URL into target-dir. Validates URL does not resolve to private IPs. Throws on failure."
   [url target-dir]
   (validate-clone-url! url)
   (io/make-parents (io/file target-dir "dummy"))
-  (let [{:keys [exit err]} (shell/sh "git" "clone" url (str target-dir))]
+  (let [{:keys [exit err]} (shell/sh "git" "clone" "--" url (str target-dir))]
     (when-not (zero? exit)
       (throw (ex-info (str "git clone failed: " (str/trim err))
                       {:exit exit :url url :target target-dir})))))
@@ -92,7 +104,7 @@
   [url target-dir]
   (validate-clone-url! url)
   (.mkdirs (io/file target-dir))
-  (let [{:keys [exit err]} (shell/sh "git" "clone" "--bare" url (str target-dir))]
+  (let [{:keys [exit err]} (shell/sh "git" "clone" "--bare" "--" url (str target-dir))]
     (when-not (zero? exit)
       (throw (ex-info (str "git clone --bare failed: " (str/trim err))
                       {:exit exit :url url :target target-dir})))))
