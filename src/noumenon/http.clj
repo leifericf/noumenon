@@ -331,7 +331,7 @@
 (defn- run-synthesize [{:keys [conn meta-db db-name]} params config progress-fn]
   (let [{:keys [prompt-fn model-id]}
         (llm/wrap-as-prompt-fn-from-opts (resolve-provider params config))]
-    (when progress-fn (progress-fn {:message "Synthesizing architecture..."}))
+    (when progress-fn (progress-fn {:current 0 :total 0 :message "Synthesizing architecture..."}))
     (synthesize/synthesize-repo! conn prompt-fn
                                  {:meta-db meta-db :model-id model-id :repo-name db-name})))
 
