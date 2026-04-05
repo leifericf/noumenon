@@ -187,13 +187,14 @@
    "Access-Control-Allow-Headers" "Content-Type, Accept, Authorization"})
 
 (defn- allowed-origin?
-  "Only allow localhost and file:// origins."
+  "Only allow localhost origins. file:// requires NOUMENON_ALLOW_FILE_ORIGIN=true."
   [origin]
   (when origin
     (or (re-matches #"https?://localhost(:\d+)?" origin)
         (re-matches #"https?://127\.0\.0\.1(:\d+)?" origin)
-        (= "file://" origin)
-        (str/starts-with? origin "file://"))))
+        (when (System/getenv "NOUMENON_ALLOW_FILE_ORIGIN")
+          (or (= "file://" origin)
+              (str/starts-with? origin "file://"))))))
 
 (defn- with-cors
   "Add CORS headers to a response, restricting origin to localhost."
