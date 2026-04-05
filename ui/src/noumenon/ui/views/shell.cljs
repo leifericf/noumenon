@@ -279,6 +279,43 @@
                      (for [[i row] (map-indexed vector (take 3 authors))]
                        [:div {:key i} (str (first row) " (" (second row) " commits)")])]]))))
 
+;; --- Confirm dialog ---
+
+(defn- confirm-dialog [{:keys [message]}]
+  [:div {:style {:position "fixed" :inset 0 :z-index 200
+                 :display "flex" :align-items "center" :justify-content "center"
+                 :background "rgba(0,0,0,0.5)"}}
+   [:div {:style {:background (:bg-secondary styles/tokens)
+                  :border (str "1px solid " (:border styles/tokens))
+                  :border-radius "12px"
+                  :padding "24px"
+                  :max-width "400px"
+                  :width "90%"}}
+    [:p {:style {:color (:text-primary styles/tokens)
+                 :margin-bottom "20px"
+                 :font-size "14px"
+                 :line-height "1.5"}}
+     message]
+    [:div {:style {:display "flex" :gap "8px" :justify-content "flex-end"}}
+     [:button {:on {:click [:action/confirm-dialog-cancel]}
+               :style {:background (:bg-tertiary styles/tokens)
+                       :border (str "1px solid " (:border styles/tokens))
+                       :border-radius (:radius styles/tokens)
+                       :color (:text-primary styles/tokens)
+                       :cursor "pointer"
+                       :padding "8px 16px"
+                       :font-size "13px"}}
+      "Cancel"]
+     [:button {:on {:click [:action/confirm-dialog-accept]}
+               :style {:background (:danger styles/tokens)
+                       :border "none"
+                       :border-radius (:radius styles/tokens)
+                       :color "#fff"
+                       :cursor "pointer"
+                       :padding "8px 16px"
+                       :font-size "13px"}}
+      "Delete"]]]])
+
 ;; --- Main shell ---
 
 (defn app-shell [state]
@@ -398,6 +435,9 @@
                     :overflow-y "auto"
                     :z-index 55}}
       (ask/past-questions-panel state)]
+     ;; Confirm dialog
+     (when-let [dialog (:confirm-dialog state)]
+       (confirm-dialog dialog))
      ;; Toasts
      (toast/toast-container toasts)
      ;; Connection status

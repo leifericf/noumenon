@@ -2,13 +2,13 @@
   (:require [noumenon.ui.styles :as styles]))
 
 (def ^:private nav-items
-  [{:route :ask       :label "Ask"       :icon "?"}
-   {:route :databases :label "Databases" :icon "D"}
-   {:route :graph     :label "Graph"     :icon "G"}
-   {:route :schema    :label "Schema"    :icon "S"}
-   {:route :benchmark :label "Benchmark" :icon "B"}
-   {:route :introspect :label "Introspect" :icon "I"}
-   {:route :history    :label "History"    :icon "H"}])
+  [{:route :ask        :label "Ask"        :icon "\u2728"}
+   {:route :databases  :label "Databases"  :icon "\u2630"}
+   {:route :graph      :label "Graph"      :icon "\u25C9"}
+   {:route :schema     :label "Schema"     :icon "\u2261"}
+   {:route :benchmark  :label "Benchmark"  :icon "\u25B6"}
+   {:route :introspect :label "Introspect" :icon "\u2699"}
+   {:route :history    :label "History"    :icon "\u23F3"}])
 
 (defn- nav-item [{:keys [route label icon active? collapsed?]}]
   [:a {:key (name route)

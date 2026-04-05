@@ -171,8 +171,11 @@
                         :font-size "12px"}}
        [:option {:value ""} "History..."]
        (for [q (reverse history)]
-         [:option {:key q :value q}
-          (subs (str q) 0 (min 60 (count (str q))))])])]
+         (let [s (str q)
+               label (if-let [find-idx (clojure.string/index-of s ":find")]
+                       (subs s find-idx (min (+ find-idx 60) (count s)))
+                       (subs s 0 (min 80 (count s))))]
+           [:option {:key q :value q :title s} label]))])]
    [:textarea {:value (or editor "")
                :on {:input [:action/query-editor-input]}
                :placeholder "[:find ?path\n :where [?f :file/path ?path]]"

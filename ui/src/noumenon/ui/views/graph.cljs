@@ -1,6 +1,7 @@
 (ns noumenon.ui.views.graph
   (:require [noumenon.ui.styles :as styles]
-            [noumenon.ui.graph.data :as gdata]))
+            [noumenon.ui.graph.data :as gdata]
+            [noumenon.ui.components.skeleton :as skeleton]))
 
 ;; Mutable refs used by core.cljs for d3 simulation lifecycle.
 (defonce simulation-atom (atom nil))
@@ -77,9 +78,14 @@
      (when loading?
        [:div {:style {:position "absolute" :top "50%" :left "50%"
                       :transform "translate(-50%, -50%)"
-                      :font-size "13px" :color "rgba(255,255,255,0.5)"
                       :text-align "center"}}
-        "Loading graph..."])
+        [:div {:style {:width "24px" :height "24px" :border-radius "50%"
+                       :border "2px solid rgba(255,255,255,0.15)"
+                       :border-top-color (:accent styles/tokens)
+                       :animation "spin 0.8s linear infinite"
+                       :margin "0 auto 10px"}}]
+        [:span {:style {:font-size "13px" :color "rgba(255,255,255,0.5)"}}
+         "Loading graph..."]])
      (when (and (not loading?) (not (seq nodes)))
        (graph-empty-state depth))
      (when (seq nodes)

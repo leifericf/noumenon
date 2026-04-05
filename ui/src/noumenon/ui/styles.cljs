@@ -33,8 +33,16 @@
    :radius       "6px"
    :font-mono    "'SF Mono', 'Fira Code', 'Cascadia Code', monospace"})
 
+;; Read cached theme from localStorage synchronously to prevent flash
+(defn- cached-theme-tokens []
+  (when (exists? js/window)
+    (try
+      (let [raw (.getItem js/localStorage "noumenon-theme")]
+        (when (= raw "light") light-tokens))
+      (catch :default _ nil))))
+
 ;; Mutable — reset! when theme changes, components read at render time
-(defonce ^:private tokens-atom (atom dark-tokens))
+(defonce ^:private tokens-atom (atom (or (cached-theme-tokens) dark-tokens)))
 
 ;; Components use this. It's a plain deref at render time.
 (def tokens
@@ -46,7 +54,9 @@
     (-lookup [_ k nf] (get @tokens-atom k nf))))
 
 (defn set-theme! [theme]
-  (reset! tokens-atom (if (= theme :light) light-tokens dark-tokens)))
+  (reset! tokens-atom (if (= theme :light) light-tokens dark-tokens))
+  (when (exists? js/window)
+    (.setItem js/localStorage "noumenon-theme" (name theme))))
 
 (defn current-theme []
   (if (= @tokens-atom dark-tokens) :dark :light))

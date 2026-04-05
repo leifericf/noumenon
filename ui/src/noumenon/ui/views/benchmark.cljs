@@ -112,8 +112,12 @@
                     :align-items "center" :margin-bottom "20px"}}
       [:h2 {:style {:font-size "1.4rem" :font-weight 600}} "Benchmarks"]
       [:div {:style {:display "flex" :gap "8px"}}
-       (when (= 2 (count selected))
-         (button/secondary {:on {:click [:action/bench-compare]}} "Compare"))
+       (if (= 2 (count selected))
+         (button/secondary {:on {:click [:action/bench-compare]}} "Compare")
+         (when (seq selected)
+           [:span {:style {:color (:text-secondary styles/tokens) :font-size "13px"
+                           :align-self "center"}}
+            "Select 2 runs to compare"]))
        (button/primary {:on {:click [:action/bench-run]}
                         :disabled? running?}
                        (if running? "Running..." "Run Benchmark"))

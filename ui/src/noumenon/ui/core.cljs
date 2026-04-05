@@ -108,6 +108,7 @@
         node     (controls/find-nearest-node (.nodes sim) gx gy hit-dist)
         new-id   (when node (.-id node))]
     (set! (.. canvas -style -cursor) (if new-id "pointer" "default"))
+    (set! (.-title canvas) (or new-id ""))
     (when (not= new-id @hover-atom)
       (reset! hover-atom new-id)
       (draw-fn))))

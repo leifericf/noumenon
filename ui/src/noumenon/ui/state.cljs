@@ -104,10 +104,17 @@
     {:state state}))
 
 (defmethod handle-event :action/db-delete [state [_ db-name]]
-  {:state state
-   :fx    [[:confirm/then
-            (str "Delete database \"" db-name "\"? This cannot be undone.")
-            [:action/db-delete-confirmed db-name]]]})
+  {:state (assoc state :confirm-dialog
+                 {:message (str "Delete database \"" db-name "\"? This cannot be undone.")
+                  :on-confirm [:action/db-delete-confirmed db-name]})})
+
+(defmethod handle-event :action/confirm-dialog-accept [state _]
+  (let [on-confirm (get-in state [:confirm-dialog :on-confirm])]
+    {:state (dissoc state :confirm-dialog)
+     :fx    (when on-confirm [[:dispatch on-confirm]])}))
+
+(defmethod handle-event :action/confirm-dialog-cancel [state _]
+  {:state (dissoc state :confirm-dialog)})
 
 (defmethod handle-event :action/db-delete-confirmed [state [_ db-name]]
   {:state state
@@ -276,11 +283,11 @@
 (defmethod handle-event :action/ask-feedback-text-set [state [_ text]]
   {:state (assoc state :ask/feedback-text text)})
 
-(defmethod handle-event :action/ask-feedback-submit [state [_ session-id]]
+(defmethod handle-event :action/ask-feedback-submit [state [_ session-id polarity]]
   (let [comment (:ask/feedback-text state)]
     {:state (dissoc state :ask/feedback-open-id :ask/feedback-text)
      :fx    [[:http/post (str "/api/ask/sessions/" (js/encodeURIComponent session-id) "/feedback")
-              {:feedback "negative" :comment comment}
+              {:feedback (name (or polarity :negative)) :comment comment}
               {:on-ok :action/ask-feedback-saved :on-error :action/toast-error}]]}))
 
 (defmethod handle-event :action/ask-feedback [state [_ session-id feedback comment]]

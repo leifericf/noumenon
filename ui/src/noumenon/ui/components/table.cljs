@@ -21,12 +21,24 @@
                      :letter-spacing "0.5px"}}
         label])]]
    [:tbody
-    (for [row rows]
-      [:tr {:key (or (:name row) (str (hash row)))
-            :style {:border-bottom (str "1px solid " (:border styles/tokens))}}
-       (for [{:keys [key render]} columns]
-         [:td {:key key
-               :style {:padding "8px 12px"}}
-          (if render
-            (render row)
-            (str (get row key)))])])]])
+    (if (seq rows)
+      (for [row rows]
+        [:tr {:key (or (:name row) (str (hash row)))
+              :style {:border-bottom (str "1px solid " (:border styles/tokens))}}
+         (for [{:keys [key render]} columns]
+           (let [text (if render (render row) (str (get row key)))]
+             [:td {:key key
+                   :title (when (string? text) text)
+                   :style {:padding "8px 12px"
+                           :max-width "300px"
+                           :overflow "hidden"
+                           :text-overflow "ellipsis"
+                           :white-space "nowrap"}}
+              text]))])
+      [[:tr
+        [:td {:col-span (count columns)
+              :style {:padding "20px 12px"
+                      :text-align "center"
+                      :color (:text-muted styles/tokens)
+                      :font-style "italic"}}
+         "No results"]]])]])

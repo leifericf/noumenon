@@ -28,7 +28,8 @@
                      (str kind)))]
      [:td {:style {:padding "8px 12px" :font-size "13px"
                    :max-width "400px" :overflow "hidden"
-                   :text-overflow "ellipsis" :white-space "nowrap"}}
+                   :text-overflow "ellipsis" :white-space "nowrap"}
+           :title message}
       message]
      [:td {:style {:padding "8px 12px" :font-size "12px"
                    :color (:text-secondary styles/tokens)}}

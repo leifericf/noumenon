@@ -257,7 +257,7 @@
                           :color (:text-primary styles/tokens)
                           :font-size "12px"
                           :resize "none"}}]
-      [:button {:on {:click [:action/ask-feedback-submit session-id]}
+      [:button {:on {:click [:action/ask-feedback-submit session-id :negative]}
                 :style {:background (:accent styles/tokens)
                         :border "none"
                         :border-radius (:radius styles/tokens)
@@ -358,7 +358,7 @@
               [:button {:key (if duplicate? (str "dup-" q) q)
                         :on {:click [:action/ask-run-suggestion q]}
                         :tabindex (if duplicate? -1 0)
-                        :aria-hidden (when duplicate? "true")
+                        :aria-hidden (when duplicate? true)
                         :aria-label (str "Ask: " q)
                         :style {:background (:bg-secondary styles/tokens)
                                 :border (str "1px solid " (:border styles/tokens))
@@ -464,7 +464,7 @@
   "Scrollable results area with reasoning trace, history, and controls."
   [{:keys [loading? steps progress reasoning-expanded? history last-steps
            show-post-reasoning?]}]
-  [:div {:style {:max-height "55vh" :overflow-y "auto" :width "100%"}}
+  [:div {:style {:flex 1 :overflow-y "auto" :width "100%" :min-height 0}}
    (when (and loading? (or (seq steps) progress))
      (reasoning-trace steps progress reasoning-expanded?))
    (when (seq history)
