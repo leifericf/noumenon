@@ -110,7 +110,7 @@
                                                :description "Maximum number of result rows to return (default 500, max 10000)"}})
                   :required ["query_name" "repo_path"]}}
    {:name "noumenon_list_queries"
-    :description "List all available named Datalog queries with descriptions. Use this to discover what structured questions you can ask the knowledge graph via noumenon_query."
+    :description "List all available named Datalog queries with descriptions and required parameters. Use this to discover what structured questions you can ask the knowledge graph via noumenon_query."
     :inputSchema {:type "object" :properties {}}}
    {:name "noumenon_get_schema"
     :description "Get the database schema showing all attributes and their types. Requires a repo to have been imported first."
@@ -135,7 +135,7 @@
                                       "continue_from" {:type "string" :description "Session ID from a budget-exhausted run — resumes the agent from where it left off"}})
                   :required ["question" "repo_path"]}}
    {:name "noumenon_search"
-    :description "Fast semantic search over files and components — no LLM calls. Uses a TF-IDF vector index built from analyzed summaries. Returns ranked results by relevance score. Requires prior analyze + embed (or digest). Much cheaper than noumenon_ask for simple 'find relevant files' queries."
+    :description "Fast semantic search over files and components — no LLM calls. Uses a TF-IDF vector index built from analyzed summaries. Returns ranked results by relevance score. Requires prior analyze + embed — both are included automatically when you run noumenon_digest. Much cheaper than noumenon_ask for simple 'find relevant files' queries."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"query" {:type "string" :description "Search query — natural language or keywords"}
@@ -200,7 +200,7 @@
                                       "run_id_b" {:type "string" :description "Second run ID"}})
                   :required ["repo_path" "run_id_a" "run_id_b"]}}
    {:name "noumenon_digest"
-    :description "Run the full Noumenon pipeline: import, enrich, analyze (LLM), and benchmark. WARNING: analyze and benchmark steps are expensive (LLM calls). Use skip_analyze and skip_benchmark for a quick structural import. Each step is idempotent."
+    :description "Run the full Noumenon pipeline: import, enrich, analyze (LLM), synthesize, embed, and benchmark. WARNING: analyze, synthesize, and benchmark steps are expensive (LLM calls). Use skip_analyze, skip_synthesize, and skip_benchmark for a quick structural import. Each step is idempotent."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"provider" {:type "string" :description "LLM provider"}
@@ -208,6 +208,7 @@
                                       "skip_import" {:type "boolean" :description "Skip the import+enrich step (either flag skips the combined step)"}
                                       "skip_enrich" {:type "boolean" :description "Skip the import+enrich step (either flag skips the combined step)"}
                                       "skip_analyze" {:type "boolean" :description "Skip analyze step"}
+                                      "skip_synthesize" {:type "boolean" :description "Skip synthesize step"}
                                       "skip_benchmark" {:type "boolean" :description "Skip benchmark step"}
                                       "max_questions" {:type "integer" :description "Benchmark: limit to N questions"}
                                       "layers" {:type "string" :description "Benchmark layers: raw,import,enrich,full (default: raw,full)"}
