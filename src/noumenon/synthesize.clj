@@ -455,7 +455,8 @@
     (if (and (:parsed r1) (seq (:components (:parsed r1))))
       r1
       (do (log! "synthesize" "Merge retry...")
-          (invoke-once)))))
+          (let [r2 (invoke-once)]
+            (update r2 :usage #(llm/sum-usage (:usage r1) %)))))))
 
 (defn- synthesize-hierarchical
   "Hierarchical map-reduce synthesis for large repos.
