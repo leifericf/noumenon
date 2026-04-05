@@ -261,7 +261,10 @@
                   :error-invalid :invalid-eval-runs
                   :error-missing :missing-eval-runs-value}
                  {:flag "--git-commit" :key :git-commit :parse :bool
-                  :desc "Git commit after each improvement"}]
+                  :desc "Git commit after each improvement"}
+                 {:flag "--extra-repos" :key :extra-repos :parse :string
+                  :desc "Comma-separated extra repo paths/names for multi-repo evaluation"
+                  :error-missing :missing-extra-repos-value}]
                 verbose-flags))
    :initial {:subcommand "introspect"}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})

@@ -691,14 +691,15 @@
 
 (defn do-introspect
   "Run the introspect self-improvement loop. Returns {:exit n :result map-or-nil}."
-  [{:keys [model provider max-iterations max-hours max-cost git-commit target eval-runs] :as opts}]
+  [{:keys [model provider max-iterations max-hours max-cost git-commit target
+           eval-runs extra-repos] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
       (try
         (with-existing-db
           ctx
-          (fn [{:keys [db meta-conn db-name]}]
+          (fn [{:keys [db meta-conn db-name db-dir]}]
             (let [{:keys [invoke-fn]}
                   (llm/make-messages-fn-from-opts {:provider    provider
                                                    :model       model
@@ -711,25 +712,35 @@
                                                       :model       model
                                                       :temperature 0.0
                                                       :max-tokens  4096})))
+                  extra (when (seq extra-repos)
+                          (->> (str/split extra-repos #",")
+                               (mapv (fn [raw]
+                                       (let [raw     (str/trim raw)
+                                             {:keys [db-name]}
+                                             (repo/resolve-repo raw db-dir {})
+                                             conn (db/connect-and-ensure-schema db-dir db-name)]
+                                         {:db (d/db conn) :repo-name db-name})))))
                   _ (log! (str "\n[COST WARNING] introspect runs up to "
                                (or max-iterations 10)
                                " benchmark evaluations. Use --max-cost to set a budget."))
                   result (introspect/run-loop!
-                          {:db                  db
-                           :repo-name           db-name
-                           :repo-path           (:repo-path opts)
-                           :meta-conn           meta-conn
-                           :invoke-fn-factory   invoke-fn-factory
-                           :optimizer-invoke-fn invoke-fn
-                           :max-iterations      (or max-iterations 10)
-                           :max-hours           max-hours
-                           :max-cost            max-cost
-                           :git-commit?         git-commit
-                           :model-config        {:provider provider :model model}
-                           :eval-runs           (or eval-runs 1)
-                           :allowed-targets     (when target
-                                                  (set (map keyword
-                                                            (str/split target #","))))})]
+                          (cond-> {:db                  db
+                                   :repo-name           db-name
+                                   :repo-path           (:repo-path opts)
+                                   :meta-conn           meta-conn
+                                   :invoke-fn-factory   invoke-fn-factory
+                                   :optimizer-invoke-fn invoke-fn
+                                   :max-iterations      (or max-iterations 10)
+                                   :max-hours           max-hours
+                                   :max-cost            max-cost
+                                   :git-commit?         git-commit
+                                   :model-config        {:provider provider :model model}
+                                   :eval-runs           (or eval-runs 1)
+                                   :allowed-targets     (when target
+                                                          (set (map keyword
+                                                                    (str/split target #","))))}
+                            (seq extra)
+                            (assoc :extra-repos extra)))]
               (log! (str "\nIntrospect complete: " (:improvements result)
                          " improvements in " (:iterations result)
                          " iterations (final score: "

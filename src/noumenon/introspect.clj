@@ -802,10 +802,11 @@
   "Evaluate after modification and decide whether to keep or revert.
    Returns {:outcome kw :record map :eval-result map?}."
   [{:keys [meta-conn db repo-name repo-path invoke-fn-factory baseline
-           git-commit? eval-runs]} proposal]
+           git-commit? eval-runs extra-repos]} proposal]
   (log! "introspect: evaluating...")
   (let [eval-result   (evaluate-agent! (d/db meta-conn) db repo-name invoke-fn-factory
-                                       :eval-runs (or eval-runs 1))
+                                       :eval-runs (or eval-runs 1)
+                                       :extra-repos extra-repos)
         new-mean      (:mean eval-result)
         base-mean     (:mean baseline)
         delta         (- new-mean base-mean)
@@ -841,7 +842,7 @@
   "Run a single introspect iteration.
    Returns {:outcome kw :record map :eval-result map?}."
   [{:keys [db meta-db meta-conn optimizer-invoke-fn
-           baseline history allowed-targets] :as ctx}]
+           baseline history allowed-targets extra-repos] :as ctx}]
   (let [meta-prompt (build-meta-prompt
                      {:db               db
                       :meta-db          meta-db
@@ -880,7 +881,8 @@
   "Set up a run: compute hashes, evaluate baseline, persist run entity.
    Returns {:run-id :baseline :history :start-ms :started-at :max-ms}."
   [{:keys [db repo-name repo-path invoke-fn-factory meta-conn
-           max-hours max-cost model-config max-iterations eval-runs run-id]}]
+           max-hours max-cost model-config max-iterations eval-runs run-id
+           extra-repos]}]
   (let [run-id     (or run-id (generate-run-id))
         start-ms   (System/currentTimeMillis)
         started-at (java.util.Date.)
@@ -894,7 +896,8 @@
         db-basis-t (try (:t (d/db-stats db)) (catch Exception _ nil))
         _          (log! "introspect: running baseline evaluation...")
         baseline   (evaluate-agent! meta-db db repo-name invoke-fn-factory
-                                    :eval-runs eval-runs)
+                                    :eval-runs eval-runs
+                                    :extra-repos extra-repos)
         _          (log! (str "introspect: baseline mean="
                               (format "%.1f%%" (* 100.0 (:mean baseline)))))
         _          (when max-cost
@@ -926,7 +929,7 @@
    Returns {:run-id str :iterations n :improvements n :final-score double}."
   [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
            meta-conn max-iterations git-commit? allowed-targets eval-runs
-           stop-flag progress-fn]
+           stop-flag progress-fn extra-repos]
     :or   {max-iterations 10 eval-runs 1}
     :as   opts}]
   (let [{:keys [run-id baseline history start-ms started-at max-ms]}
@@ -952,7 +955,8 @@
                         :baseline baseline :history history
                         :git-commit? git-commit?
                         :allowed-targets allowed-targets
-                        :eval-runs eval-runs})
+                        :eval-runs eval-runs
+                        :extra-repos extra-repos})
                       new-baseline (if (= :improved outcome) eval-result baseline)]
                   (d/transact meta-conn
                               {:tx-data (iter-tx-data run-id i record)})

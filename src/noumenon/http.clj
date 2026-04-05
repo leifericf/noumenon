@@ -645,7 +645,18 @@
             (not run-b) (error-response 404 (str "Run not found: " (:run_id_b params)))
             :else       (ok (bench/compare-runs run-a run-b))))))))
 
-(defn- build-introspect-opts [{:keys [db meta-conn db-name repo-path]} params config
+(defn- resolve-extra-repos
+  "Resolve comma-separated repo identifiers to [{:db db :repo-name name} ...]."
+  [extra-repos-str db-dir]
+  (when (seq extra-repos-str)
+    (->> (str/split extra-repos-str #",")
+         (mapv (fn [raw]
+                 (let [raw     (str/trim raw)
+                       {:keys [db-name conn]}
+                       (resolve-repo raw db-dir)]
+                   {:db (d/db conn) :repo-name db-name}))))))
+
+(defn- build-introspect-opts [{:keys [db meta-conn db-name db-dir repo-path]} params config
                               {:keys [stop-flag run-id progress-fn]}]
   (let [{:keys [provider model]} (resolve-provider params config)
         {:keys [invoke-fn]}
@@ -655,7 +666,8 @@
         (fn []
           (:invoke-fn
            (llm/make-messages-fn-from-opts
-            {:provider provider :model model :temperature 0.0 :max-tokens 4096})))]
+            {:provider provider :model model :temperature 0.0 :max-tokens 4096})))
+        extra-repos (resolve-extra-repos (:extra_repos params) db-dir)]
     (cond-> {:db db :repo-name db-name :repo-path repo-path
              :meta-conn meta-conn
              :invoke-fn-factory invoke-fn-factory
@@ -669,8 +681,9 @@
                                (not (git/bare-repo? repo-path)))
              :model-config {:provider provider :model model}
              :progress-fn progress-fn}
-      stop-flag     (assoc :stop-flag stop-flag)
-      run-id        (assoc :run-id run-id)
+      stop-flag          (assoc :stop-flag stop-flag)
+      run-id             (assoc :run-id run-id)
+      (seq extra-repos)  (assoc :extra-repos extra-repos)
       (:target params)
       (assoc :allowed-targets
              (->> (str/split (:target params) #",")

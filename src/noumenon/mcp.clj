@@ -226,7 +226,8 @@
                                       "max_cost" {:type "number" :description "Stop when cost exceeds threshold (dollars)"}
                                       "target" {:type "string" :description "Comma-separated targets: examples, system-prompt, rules, code, train (default: all — LLM chooses)"}
                                       "eval_runs" {:type "integer" :description "Evaluation passes per iteration for median variance reduction (default: 1)"}
-                                      "git_commit" {:type "boolean" :description "Git commit after each improvement"}})
+                                      "git_commit" {:type "boolean" :description "Git commit after each improvement"}
+                                      "extra_repos" {:type "string" :description "Comma-separated extra repo paths/names for multi-repo evaluation (reduces overfitting)"}})
                   :required ["repo_path"]}}
    {:name "noumenon_introspect_start"
     :description "Start an introspect run asynchronously in the background. Returns a run-id immediately. Use noumenon_introspect_status to check progress and noumenon_introspect_stop to halt."
@@ -239,7 +240,8 @@
                                       "max_cost" {:type "number" :description "Cost threshold"}
                                       "target" {:type "string" :description "Comma-separated targets: examples, system-prompt, rules, code, train (default: all — LLM chooses)"}
                                       "eval_runs" {:type "integer" :description "Evaluation passes per iteration for median variance reduction (default: 1)"}
-                                      "git_commit" {:type "boolean" :description "Git commit after each improvement"}})
+                                      "git_commit" {:type "boolean" :description "Git commit after each improvement"}
+                                      "extra_repos" {:type "string" :description "Comma-separated extra repo paths/names for multi-repo evaluation (reduces overfitting)"}})
                   :required ["repo_path"]}}
    {:name "noumenon_introspect_status"
     :description "Check the status of a running or completed introspect run."
@@ -289,6 +291,18 @@
         (catch Exception e
           (log! "lookup-repo-uri" db-name (.getMessage e))
           nil)))))
+
+(defn- resolve-extra-repos
+  "Resolve comma-separated repo identifiers to [{:db db :repo-name name} ...]."
+  [extra-repos-str db-dir]
+  (when (seq extra-repos-str)
+    (->> (str/split extra-repos-str #",")
+         (mapv (fn [raw]
+                 (let [raw     (str/trim raw)
+                       {:keys [db-name]}
+                       (repo/resolve-repo raw db-dir {:lookup-uri-fn lookup-repo-uri})
+                       conn    (get-or-create-conn db-dir db-name)]
+                   {:db (d/db conn) :repo-name db-name}))))))
 
 (defn- with-conn
   "Resolve repo identifier from arguments, get/create connection, call f with context.
@@ -790,7 +804,7 @@
 (defn- handle-introspect [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
-    (fn [{:keys [db meta-conn db-name repo-path]}]
+    (fn [{:keys [db meta-conn db-name db-dir repo-path]}]
       (let [provider (or (args "provider") (:provider defaults))
             model    (or (args "model") (:model defaults))
             {:keys [invoke-fn]}
@@ -803,6 +817,7 @@
                (llm/make-messages-fn-from-opts
                 {:provider provider :model model
                  :temperature 0.0 :max-tokens 4096})))
+            extra-repos (resolve-extra-repos (args "extra_repos") db-dir)
             result (introspect/run-loop!
                     (cond-> {:db                  db
                              :repo-name           db-name
@@ -818,6 +833,8 @@
                                                        (not (:read-only defaults)))
                              :model-config        {:provider provider :model model}
                              :progress-fn         (:progress-fn defaults)}
+                      (seq extra-repos)
+                      (assoc :extra-repos extra-repos)
                       (args "target")
                       (assoc :allowed-targets
                              (set (map keyword (str/split (args "target") #","))))))]
@@ -835,7 +852,7 @@
                     {:user-message (str "Maximum " sessions/max-sessions
                                         " concurrent sessions. Stop one first.")})))
   (with-conn args defaults
-    (fn [{:keys [db meta-conn db-name repo-path]}]
+    (fn [{:keys [db meta-conn db-name db-dir repo-path]}]
       (let [provider  (or (args "provider") (:provider defaults))
             model     (or (args "model") (:model defaults))
             stop-flag (atom false)
@@ -847,6 +864,7 @@
               (:invoke-fn
                (llm/make-messages-fn-from-opts
                 {:provider provider :model model :temperature 0.0 :max-tokens 4096})))
+            extra-repos (resolve-extra-repos (args "extra_repos") db-dir)
             run-opts  (cond-> {:db db :repo-name db-name :repo-path repo-path
                                :meta-conn meta-conn
                                :invoke-fn-factory invoke-fn-factory
@@ -858,6 +876,8 @@
                                :git-commit? (args "git_commit")
                                :model-config {:provider provider :model model}
                                :stop-flag stop-flag}
+                        (seq extra-repos)
+                        (assoc :extra-repos extra-repos)
                         (args "target")
                         (assoc :allowed-targets
                                (->> (str/split (args "target") #",")
