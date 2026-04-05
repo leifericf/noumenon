@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.2
+
+Security hardening, bug fixes, and UX polish.
+
+### Security
+
+- **EDN read-eval disabled** — `*read-eval*` bound to false in introspect code verification; `{:readers {}}` added to all `edn/read-string` calls parsing LLM responses, checkpoints, and external data
+- **CORS restricted** — `file://` origins now require explicit `NOUMENON_ALLOW_FILE_ORIGIN` env var
+- **Admin-only endpoints** — `/api/query-raw` and `/api/ask/sessions` added to admin-only prefixes
+- **SSRF hardening** — CGN range `100.64.0.0/10` added to blocked IP patterns; `--` separator in git clone commands; proxy host URL validation
+- **Subprocess timeouts** — Python, Node, C, and Elixir import extractors now timeout after 30 seconds
+- **Hook state directory** — Moved from world-writable `/tmp` to user-private `~/.noumenon/tmp/`
+- **CI tag validation** — `GITHUB_REF_NAME` validated as semver before shell substitution in release workflow
+- **Credential handling** — Directory permissions set before writing config; warning on `--token` + `--insecure`
+- **MCP proxy** — Admin tool forwarding logged; read-only flag respected for `git_commit`; SSRF check on proxy host
+- **Electron navigation** — Restricted to exact daemon port instead of any localhost port
+
+### Fixes
+
+- **MCP digest skip flag** — Synthesize step was gated on `skip_analyze` instead of `skip_synthesize`
+- **Merge retry usage** — `invoke-merge` now accumulates LLM token usage from both attempts
+- **Agent nil dispatch** — Guard against nil tool dispatch when LLM sends only `:reflect`
+- **Benchmark stop-flag** — `run-benchmark!` accepts external stop-flag for HTTP introspect sessions
+- **Database deletion** — Removed post-Datomic filesystem deletion that could corrupt shared storage
+- **Session limit race** — `register-ask-session!` enforced atomically via single `swap!`
+- **Leaf file re-enrichment** — Files with no imports now get empty `[]` for `:file/imports` to prevent redundant re-processing
+- **Test speed** — 429 retry test binds `*max-retries*` to avoid 6-second sleep
+- **Limit param coercion** — HTTP query endpoints coerce string `:limit` to long
+- **History help text** — Replaced hardcoded prompt names with dynamic hint
+
+### UX Improvements
+
+- **CLI** — Spinner cleanup on API errors; actionable watch failure messages; dynamic prompt listing; post-setup instructions; upgrade progress spinner; explicit "Daemon: not running" message
+- **TUI** — Non-interactive auto-select warns to stderr; confirm defaults to false for safety
+- **UI** — Feedback polarity from event data; in-app delete confirmation; active nav indicator; flex layout for ask results; theme cached in localStorage; graph loading skeleton; empty table/history states; truncation with tooltips; formatted introspect deltas; error state on network failure
+- **MCP** — Digest description lists all pipeline steps; `skip_synthesize` in schema; search clarifies embed prerequisite; list_queries mentions required parameters
+- **Sidebar** — Unicode icons replace ambiguous single letters
+- **Benchmark** — "Select 2 runs to compare" hint text
+
 ## 0.5.1
 
 TUI hotfix.
