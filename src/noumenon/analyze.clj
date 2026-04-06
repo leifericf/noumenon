@@ -111,15 +111,16 @@
         imported-by-section (if (str/blank? imported-by)
                               ""
                               (str "\nFiles that depend on this file:\n" imported-by "\n"))]
-    (-> template
-        (str/replace "{{file-path}}" (escape-double-mustache (or file-path "")))
-        (str/replace "{{lang}}" (name (or lang :unknown)))
-        (str/replace "{{lang-name}}" (name (or lang :unknown)))
-        (str/replace "{{line-count}}" (str (or line-count 0)))
-        (str/replace "{{content}}" safe-content)
-        (str/replace "{{repo-name}}" (escape-double-mustache (or repo-name "")))
-        (str/replace "{{imports}}" imports-section)
-        (str/replace "{{imported-by}}" imported-by-section))))
+    (let [bindings {"file-path"    (or file-path "")
+                    "lang"         (name (or lang :unknown))
+                    "lang-name"    (name (or lang :unknown))
+                    "line-count"   (str (or line-count 0))
+                    "content"      safe-content
+                    "repo-name"    (or repo-name "")
+                    "imports"      imports-section
+                    "imported-by"  imported-by-section}]
+      (str/replace template #"\{\{([^}]+)\}\}"
+                   (fn [[match key]] (get bindings key match))))))
 
 ;; --- Defensive EDN parsing ---
 

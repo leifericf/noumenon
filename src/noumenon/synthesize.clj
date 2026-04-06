@@ -8,7 +8,7 @@
             [noumenon.analyze :as analyze]
             [noumenon.artifacts :as artifacts]
             [noumenon.llm :as llm]
-            [noumenon.util :as util :refer [escape-double-mustache log! sha256-hex]])
+            [noumenon.util :as util :refer [log! sha256-hex]])
   (:import [java.util Date]))
 
 ;; --- Validation sets (shared with analyze) ---
@@ -121,14 +121,15 @@
 (defn render-prompt
   "Substitute template variables in the synthesize prompt."
   [template repo-name data]
-  (let [formatted (format-prefetch data)]
-    (-> template
-        (str/replace "{{repo-name}}" (str/replace repo-name #"[^a-zA-Z0-9._/-]" "_"))
-        (str/replace "{{file-count}}" (str (count (:files data))))
-        (str/replace "{{directory-tree}}" (escape-double-mustache (:directory-tree formatted)))
-        (str/replace "{{file-summaries}}" (escape-double-mustache (:file-summaries formatted)))
-        (str/replace "{{import-graph}}" (escape-double-mustache (:import-graph formatted)))
-        (str/replace "{{tag-distribution}}" (escape-double-mustache (:tag-distribution formatted))))))
+  (let [formatted (format-prefetch data)
+        bindings  {"repo-name"        (str/replace repo-name #"[^a-zA-Z0-9._/-]" "_")
+                   "file-count"       (str (count (:files data)))
+                   "directory-tree"   (:directory-tree formatted)
+                   "file-summaries"   (:file-summaries formatted)
+                   "import-graph"     (:import-graph formatted)
+                   "tag-distribution" (:tag-distribution formatted)}]
+    (str/replace template #"\{\{([^}]+)\}\}"
+                 (fn [[match key]] (get bindings key match)))))
 
 ;; --- Response parsing ---
 
@@ -384,16 +385,16 @@
   (let [formatted (format-prefetch {:files partition-files
                                     :tags  (:tags full-data)
                                     :edges (:edges full-data)
-                                    :dirs  (:dirs full-data)})]
-    (-> template
-        (str/replace "{{repo-name}}" (str/replace (str repo-name) #"[^a-zA-Z0-9._/-]" "_"))
-        (str/replace "{{partition-name}}" (str partition-name))
-        (str/replace "{{file-count}}" (str (count partition-files)))
-        (str/replace "{{directory-tree}}" (escape-double-mustache (:directory-tree formatted)))
-        (str/replace "{{file-summaries}}" (escape-double-mustache
-                                           (format-file-summaries partition-files)))
-        (str/replace "{{import-graph}}" (escape-double-mustache (:import-graph formatted)))
-        (str/replace "{{tag-distribution}}" (escape-double-mustache (:tag-distribution formatted))))))
+                                    :dirs  (:dirs full-data)})
+        bindings  {"repo-name"        (str/replace (str repo-name) #"[^a-zA-Z0-9._/-]" "_")
+                   "partition-name"   (str partition-name)
+                   "file-count"       (str (count partition-files))
+                   "directory-tree"   (:directory-tree formatted)
+                   "file-summaries"   (format-file-summaries partition-files)
+                   "import-graph"     (:import-graph formatted)
+                   "tag-distribution" (:tag-distribution formatted)}]
+    (str/replace template #"\{\{([^}]+)\}\}"
+                 (fn [[match key]] (get bindings key match)))))
 
 (defn- format-partition-components
   "Format partition-level components for the merge prompt."
@@ -413,14 +414,14 @@
 (defn- render-merge-prompt
   "Render the merge-level synthesis prompt."
   [template repo-name total-files partition-results full-data]
-  (let [formatted (format-prefetch full-data)]
-    (-> template
-        (str/replace "{{repo-name}}" (str/replace (str repo-name) #"[^a-zA-Z0-9._/-]" "_"))
-        (str/replace "{{file-count}}" (str total-files))
-        (str/replace "{{directory-tree}}" (escape-double-mustache (:directory-tree formatted)))
-        (str/replace "{{import-graph}}" (escape-double-mustache (:import-graph formatted)))
-        (str/replace "{{partition-components}}"
-                     (escape-double-mustache (format-partition-components partition-results))))))
+  (let [formatted (format-prefetch full-data)
+        bindings  {"repo-name"             (str/replace (str repo-name) #"[^a-zA-Z0-9._/-]" "_")
+                   "file-count"            (str total-files)
+                   "directory-tree"        (:directory-tree formatted)
+                   "import-graph"          (:import-graph formatted)
+                   "partition-components"  (format-partition-components partition-results)}]
+    (str/replace template #"\{\{([^}]+)\}\}"
+                 (fn [[match key]] (get bindings key match)))))
 
 (defn- invoke-partition
   "Synthesize components for one directory partition. Returns {:partition-name :components :usage}."
