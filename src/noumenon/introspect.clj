@@ -870,7 +870,7 @@
   "Run a single introspect iteration.
    Returns {:outcome kw :record map :eval-result map?}."
   [{:keys [db meta-db meta-conn optimizer-invoke-fn
-           baseline history allowed-targets extra-repos] :as ctx}]
+           baseline history allowed-targets] :as ctx}]
   (let [meta-prompt (build-meta-prompt
                      {:db               db
                       :meta-db          meta-db
