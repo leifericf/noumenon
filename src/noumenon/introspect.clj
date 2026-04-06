@@ -297,20 +297,22 @@
                                             (case score :correct 1.0 :partial 0.5 0.0))
                                           baseline-results)]
                           (/ (apply + scores) (count scores)))
-                        0.0)]
-    (-> template
-        (str/replace "{{current-system-prompt}}" (or system-prompt ""))
-        (str/replace "{{current-examples}}" (pr-str (or examples [])))
-        (str/replace "{{example-count}}" (str (count (or examples []))))
-        (str/replace "{{total-queries}}" (str total-queries))
-        (str/replace "{{all-queries}}" (format-query-catalog meta-db))
-        (str/replace "{{current-rules}}" (pr-str (or rules [])))
-        (str/replace "{{baseline-mean}}" (format "%.1f%%" (* 100.0 base-mean)))
-        (str/replace "{{baseline-scores}}" (format-scores baseline-results))
-        (str/replace "{{gap-analysis}}" (gap-analysis baseline-results))
-        (str/replace "{{ask-insights}}" (ask-session-insights meta-db))
-        (str/replace "{{architecture-summary}}" (architecture-summary (or db meta-db)))
-        (str/replace "{{history}}" (format-history history)))))
+                        0.0)
+        bindings      {"current-system-prompt" (or system-prompt "")
+                       "current-examples"      (pr-str (or examples []))
+                       "example-count"         (str (count (or examples [])))
+                       "total-queries"         (str total-queries)
+                       "all-queries"           (format-query-catalog meta-db)
+                       "current-rules"         (pr-str (or rules []))
+                       "baseline-mean"         (format "%.1f%%" (* 100.0 base-mean))
+                       "baseline-scores"       (format-scores baseline-results)
+                       "gap-analysis"          (gap-analysis baseline-results)
+                       "ask-insights"          (ask-session-insights meta-db)
+                       "architecture-summary"  (architecture-summary (or db meta-db))
+                       "history"               (format-history history)}]
+    (str/replace template #"\{\{([^}]+)\}\}"
+                 (fn [[match key]]
+                   (get bindings key match)))))
 
 ;; --- Proposal parsing ---
 
