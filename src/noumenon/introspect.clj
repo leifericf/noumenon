@@ -611,7 +611,11 @@
     (log! (str "introspect: committing: " msg))
     (doseq [p committable-paths]
       (sh-checked! "git" "-C" (str repo-path) "add" p))
-    (sh-checked! "git" "-C" (str repo-path) "commit" "-m" msg)))
+    (let [{:keys [exit]} (shell/sh "git" "-C" (str repo-path) "commit" "-m" msg)]
+      (when (zero? exit)
+        (log! "introspect: committed"))
+      (when-not (zero? exit)
+        (log! "introspect: nothing to commit (Datomic-only change)")))))
 
 ;; --- Agent-mode evaluation ---
 
