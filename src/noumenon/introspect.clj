@@ -316,13 +316,35 @@
 
 ;; --- Proposal parsing ---
 
+(defn- extract-edn-map
+  "Extract the outermost EDN map from text that may contain surrounding prose.
+   Finds the first top-level `{...}` by brace-depth counting."
+  [text]
+  (let [s (str/trim text)]
+    (when-let [start (str/index-of s "{")]
+      (loop [i start, depth 0, in-string? false, escape? false]
+        (when (< i (count s))
+          (let [c (.charAt s i)]
+            (cond
+              escape?               (recur (inc i) depth in-string? false)
+              (= c \\)              (recur (inc i) depth in-string? true)
+              (and (= c \") (not escape?)) (recur (inc i) depth (not in-string?) false)
+              in-string?            (recur (inc i) depth in-string? false)
+              (= c \{)             (recur (inc i) (inc depth) false false)
+              (= c \})             (if (= depth 1)
+                                     (subs s start (inc i))
+                                     (recur (inc i) (dec depth) false false))
+              :else                 (recur (inc i) depth false false))))))))
+
 (defn parse-proposal
-  "Parse the optimizer LLM's response into a proposal map."
+  "Parse the optimizer LLM's response into a proposal map.
+   Extracts the EDN map even when surrounded by prose explanation."
   [text]
   (when text
     (try
       (let [cleaned (analyze/strip-markdown-fences text)
-            parsed  (edn/read-string {:readers {}} cleaned)]
+            edn-str (or (extract-edn-map cleaned) cleaned)
+            parsed  (edn/read-string {:readers {}} edn-str)]
         (when (map? parsed) parsed))
       (catch Exception e
         (log! (str "introspect: parse error: " (.getMessage e)))
