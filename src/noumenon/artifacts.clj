@@ -43,56 +43,9 @@
                       vec)]
       {:artifact.prompt/chunks chunks})))
 
-(defn- prompt-seed-tx
-  "Build a transaction map for a single prompt from its classpath EDN."
-  [prompt-name]
-  (when-let [raw (load-edn-resource (str "prompts/" prompt-name ".edn"))]
-    (let [template (cond
-                     (string? (:template raw)) (:template raw)
-                     :else                     (pr-str raw))]
-      (cond-> (merge {:artifact.prompt/name prompt-name}
-                     (chunk-template template))
-        (:version raw) (assoc :artifact.prompt/version (:version raw))))))
-
-;; --- Seeding ---
-
-(defn- do-seed!
-  "Upsert all classpath EDN resources into the meta database."
-  [conn source]
-  (let [index     (load-edn-resource "queries/index.edn")
-        active    (set index)
-        query-txs (->> index
-                       (keep #(query-seed-tx % active))
-                       vec)
-        tx-meta   {:db/id "datomic.tx"
-                   :tx/op :seed
-                   :tx/artifact-source source}]
-    ;; Seed queries
-    (when (seq query-txs)
-      (d/transact conn {:tx-data (conj query-txs tx-meta)}))
-    ;; Seed rules
-    (when-let [rules-str (some-> (io/resource "queries/rules.edn") slurp)]
-      (d/transact conn {:tx-data [{:artifact.rules/id  "default"
-                                   :artifact.rules/edn rules-str}
-                                  tx-meta]}))
-    ;; Seed prompts
-    (doseq [pname ["agent-system" "agent-examples" "analyze-file" "introspect"
-                   "synthesize" "synthesize-partition" "synthesize-merge"]]
-      (when-let [tx (prompt-seed-tx pname)]
-        (d/transact conn {:tx-data [tx tx-meta]})))))
-
-(defn seed-from-classpath!
-  "Upsert all classpath EDN resources into Datomic on every startup.
-   Identity attributes make unchanged entities no-ops, so this is fast and safe."
-  [conn]
-  (do-seed! conn :bootstrap))
-
-(defn reseed!
-  "Unconditionally upsert all classpath resources into Datomic.
-   Identity attributes make this an upsert — changed values update,
-   unchanged are no-ops. Datomic history preserves prior values."
-  [conn]
-  (do-seed! conn :reseed))
+;; --- Seeding (defined after save-prompt! — see below) ---
+;; Forward declarations for seed functions used by db/ensure-meta-db
+(declare seed-from-classpath! reseed!)
 
 ;; --- Reading ---
 
@@ -182,6 +135,49 @@
                                :artifact.rules/edn rules-edn-str}
                               {:db/id "datomic.tx"
                                :tx/artifact-source source}]}))
+
+;; --- Seeding (after save-prompt! so we can retract stale chunks) ---
+
+(defn- do-seed!
+  "Upsert all classpath EDN resources into the meta database."
+  [conn source]
+  (let [index     (load-edn-resource "queries/index.edn")
+        active    (set index)
+        query-txs (->> index
+                       (keep #(query-seed-tx % active))
+                       vec)
+        tx-meta   {:db/id "datomic.tx"
+                   :tx/op :seed
+                   :tx/artifact-source source}]
+    ;; Seed queries
+    (when (seq query-txs)
+      (d/transact conn {:tx-data (conj query-txs tx-meta)}))
+    ;; Seed rules
+    (when-let [rules-str (some-> (io/resource "queries/rules.edn") slurp)]
+      (d/transact conn {:tx-data [{:artifact.rules/id  "default"
+                                   :artifact.rules/edn rules-str}
+                                  tx-meta]}))
+    ;; Seed prompts — use save-prompt! to retract stale chunks
+    (doseq [pname ["agent-system" "agent-examples" "analyze-file" "introspect"
+                   "synthesize" "synthesize-partition" "synthesize-merge"]]
+      (when-let [raw (load-edn-resource (str "prompts/" pname ".edn"))]
+        (let [template (cond
+                         (string? (:template raw)) (:template raw)
+                         :else                     (pr-str raw))]
+          (save-prompt! conn pname template source))))))
+
+(defn seed-from-classpath!
+  "Upsert all classpath EDN resources into Datomic on every startup.
+   Identity attributes make unchanged entities no-ops, so this is fast and safe."
+  [conn]
+  (do-seed! conn :bootstrap))
+
+(defn reseed!
+  "Unconditionally upsert all classpath resources into Datomic.
+   Identity attributes make this an upsert — changed values update,
+   unchanged are no-ops. Datomic history preserves prior values."
+  [conn]
+  (do-seed! conn :reseed))
 
 ;; --- Mutation ---
 
