@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.5.5
+
+### New
+
+- **Multi-repo introspect evaluation** — `extra_repos` parameter on MCP, HTTP, and CLI introspect commands. Evaluates prompt changes across multiple repos to reduce overfitting. Averages scores from primary + extra repos.
+- **`introspect-skipped` query** — New named query exposes skipped iterations (parse failures, validation errors, gate failures) for diagnosing introspect issues.
+- **Introspect status progress** — `noumenon_introspect_status` now shows current iteration number and last outcome message, not just elapsed time.
+
+### Fixes
+
+- **Cascading template expansion** — All prompt renderers (`agent`, `introspect`, `benchmark`, `analyze`, `synthesize`) switched from sequential `str/replace` to single-pass regex substitution. Previously, inserting a template that contained `{{placeholder}}` strings caused subsequent replacements to cascade, bloating prompts from 5K to 924K.
+- **Stale chunked prompts** — `reseed` / bootstrap now uses `save-prompt!` which properly retracts old chunks before writing. Previously, a prompt bloated by introspect and stored as chunks survived reseeds because the raw upsert added `:template` without retracting stale `:chunks`.
+- **EDN extraction from prose** — Introspect proposal parser now extracts the outermost `{...}` EDN map from optimizer responses that wrap the proposal in explanatory prose. Previously, the entire response was parsed as EDN, failing on any surrounding text.
+- **Git commit on Datomic-only changes** — `git-commit-improvement!` no longer throws when introspect improves a Datomic-only target (examples, system-prompt, rules) that produces no filesystem changes. Previously, `git commit` exited 1 with "nothing to commit", which propagated as an exception inside `with-modification`, reverting the improvement.
+- **Introspect error persistence** — Skipped iterations now store the raw optimizer response or error message in `:introspect.iter/error` for post-hoc diagnosis.
+
 ## 0.5.4
 
 ### Fixes
