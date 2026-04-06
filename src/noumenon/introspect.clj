@@ -856,11 +856,17 @@
                       (optimizer-invoke-fn [{:role "user" :content meta-prompt}])
                       (catch Exception e
                         (log! (str "introspect: optimizer error: " (.getMessage e)))
-                        nil))
-        proposal    (parse-proposal (:text response))
+                        {:error (.getMessage e)}))
+        raw-text    (:text response)
+        proposal    (parse-proposal raw-text)
         validation  (when proposal (validate-proposal meta-db proposal))]
     (if-let [{:keys [message] :as skip} (classify-proposal proposal validation allowed-targets)]
-      (do (log! message) (dissoc skip :message))
+      (do (log! message)
+          (let [error-detail (or (:error response)
+                                 (when (nil? proposal)
+                                   (util/truncate (str raw-text) 2000)))]
+            (cond-> (dissoc skip :message)
+              error-detail (assoc-in [:record :error] error-detail))))
       (let [{:keys [target modification]} proposal
             _ (log! (str "introspect: target=" (name target)
                          " goal=" (pr-str (:goal proposal)) "\n  " (:rationale proposal)))
