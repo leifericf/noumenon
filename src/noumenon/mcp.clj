@@ -890,9 +890,14 @@
                           {:user-message (str "Maximum " sessions/max-sessions
                                               " concurrent sessions. Stop one first.")})))
         (sessions/register! run-id {:status :running :stop-flag stop-flag :started-at now})
-        (let [fut (future
+        (let [progress-fn (fn [{:keys [current total message]}]
+                            (sessions/update-session!
+                             run-id #(assoc % :progress
+                                            {:current current :total total :message message})))
+              fut (future
                     (try
-                      (let [result (introspect/run-loop! (assoc run-opts :run-id run-id))
+                      (let [result (introspect/run-loop!
+                                    (assoc run-opts :run-id run-id :progress-fn progress-fn))
                             final-status (if @stop-flag :stopped :completed)]
                         (sessions/update-session! run-id
                                                   #(merge % {:status final-status :result result
@@ -910,12 +915,15 @@
   (let [run-id (args "run_id")]
     (util/validate-string-length! "run_id" run-id max-run-id-len)
     (if-let [session (sessions/get-session run-id)]
-      (let [{:keys [status result error started-at]} session]
+      (let [{:keys [status result error started-at progress]} session]
         (tool-result
          (case status
            :running   (let [elapsed-min (quot (- (System/currentTimeMillis) (or started-at 0))
-                                              60000)]
-                        (str "Status: running\nElapsed: " elapsed-min " minutes"))
+                                              60000)
+                            prog (when progress
+                                   (str "\nIteration: " (:current progress) "/" (:total progress)
+                                        "\nLast: " (:message progress)))]
+                        (str "Status: running\nElapsed: " elapsed-min " minutes" prog))
            :completed (str "Status: completed\n" (sessions/format-result-summary result))
            :stopped   (str "Status: stopped (by request)\n"
                            (when result (sessions/format-result-summary result)))
