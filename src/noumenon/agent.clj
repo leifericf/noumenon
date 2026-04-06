@@ -107,11 +107,13 @@
 (defn build-system-prompt
   "Render the agent system prompt with live schema, rules, and examples."
   [meta-db db repo-name]
-  (-> (artifacts/load-prompt meta-db "agent-system")
-      (str/replace "{{repo-name}}" (sanitize-repo-name repo-name))
-      (str/replace "{{schema}}" (query/schema-summary db))
-      (str/replace "{{rules}}" (pr-str (artifacts/load-rules meta-db)))
-      (str/replace "{{examples}}" (format-examples meta-db))))
+  (let [bindings {"repo-name" (sanitize-repo-name repo-name)
+                  "schema"    (query/schema-summary db)
+                  "rules"     (pr-str (artifacts/load-rules meta-db))
+                  "examples"  (format-examples meta-db)}]
+    (str/replace (artifacts/load-prompt meta-db "agent-system")
+                 #"\{\{([^}]+)\}\}"
+                 (fn [[match key]] (get bindings key match)))))
 
 ;; --- Response parsing ---
 

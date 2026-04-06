@@ -169,12 +169,13 @@
 
 (defn judge-prompt
   "Build a judge prompt from the rubric template.
-   Answer text is escaped to prevent template variable injection from LLM output."
+   Single-pass replacement prevents cascading expansion from LLM output."
   [template question rubric answer]
-  (-> template
-      (str/replace "{{question}}" question)
-      (str/replace "{{rubric}}" rubric)
-      (str/replace "{{answer}}" (escape-double-mustache (str answer)))))
+  (let [bindings {"question" question
+                  "rubric"   rubric
+                  "answer"   (str answer)}]
+    (str/replace template #"\{\{([^}]+)\}\}"
+                 (fn [[match key]] (get bindings key match)))))
 
 ;; --- Deterministic scoring ---
 
