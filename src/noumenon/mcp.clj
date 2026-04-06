@@ -257,10 +257,10 @@
     :description "Query the introspect improvement history from the internal meta database."
     :inputSchema {:type "object"
                   :properties {"query_name" {:type "string"
-                                             :description "Named query: introspect-runs (list all runs), introspect-improvements (accepted changes), introspect-by-target (grouped by target), introspect-score-trend (score over time), introspect-failed-approaches (rejected changes)"
+                                             :description "Named query: introspect-runs (list all runs), introspect-improvements (accepted changes), introspect-by-target (grouped by target), introspect-score-trend (score over time), introspect-failed-approaches (rejected changes), introspect-skipped (parse failures, validation errors)"
                                              :enum ["introspect-runs" "introspect-improvements"
                                                     "introspect-by-target" "introspect-score-trend"
-                                                    "introspect-failed-approaches"]}
+                                                    "introspect-failed-approaches" "introspect-skipped"]}
                                "limit" {:type "integer"
                                         :description "Maximum result rows (default: 100)"}}
                   :required ["query_name"]}}
@@ -940,7 +940,7 @@
     (util/validate-string-length! "query_name" query-name 256)
     (when-not (str/starts-with? (str query-name) "introspect-")
       (throw (ex-info "Only introspect-* queries are available"
-                      {:user-message "Use one of: introspect-runs, introspect-improvements, introspect-by-target, introspect-score-trend, introspect-failed-approaches"})))
+                      {:user-message "Use one of: introspect-runs, introspect-improvements, introspect-by-target, introspect-score-trend, introspect-failed-approaches, introspect-skipped"})))
     (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir defaults))
           meta-db   (d/db meta-conn)
           query-def (artifacts/load-named-query meta-db query-name)

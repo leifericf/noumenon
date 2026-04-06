@@ -1,0 +1,15 @@
+{:name "introspect-skipped"
+ :description "Skipped introspect iterations — parse failures, validation errors, disallowed targets"
+ :query [:find ?rid ?idx ?outcome ?rationale ?date
+         :where
+         [?r :introspect.run/id ?rid]
+         [?r :introspect.run/iterations ?i]
+         [?i :introspect.iter/index ?idx]
+         [?i :introspect.iter/outcome ?outcome]
+         [?i :introspect.iter/timestamp ?date]
+         [(get-else $ ?i :introspect.iter/rationale "") ?rationale]
+         (or [?i :introspect.iter/outcome :skipped]
+             [?i :introspect.iter/outcome :gate-failed]
+             [?i :introspect.iter/outcome :error])]
+ :sort-by 4
+ :sort-order :desc}

@@ -68,6 +68,7 @@
  "introspect-improvements"
  "introspect-runs"
  "introspect-score-trend"
+ "introspect-skipped"
  "issue-refs"
  "llm-cost-by-file"
  "llm-cost-by-model"
