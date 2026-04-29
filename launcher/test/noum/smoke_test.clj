@@ -108,8 +108,15 @@
                (let [r (noum "help" cmd)]
                  [(assert-exit (str "help " cmd " exits 0") r 0)
                   (assert-contains (str "help " cmd " shows usage") r "Usage:")]))
-             ["import" "ask" "bench" "setup" "serve" "demo"
-              "start" "stop" "ping" "upgrade" "databases" "introspect" "synthesize" "open"]))))
+              ["import" "ask" "bench" "setup" "serve" "demo"
+               "start" "stop" "ping" "upgrade" "databases" "introspect" "synthesize" "open"]))))
+
+(defn tests-help-options []
+  (let [r (noum "help" "analyze")]
+    [(assert-exit "help analyze exits 0" r 0)
+     (assert-contains "help analyze shows options" r "Options:")
+     (assert-contains "help analyze lists reanalyze" r "--reanalyze <scope>")
+     (assert-contains "help analyze lists db-dir" r "--db-dir <path>")]))
 
 (defn tests-arg-validation []
   (concat
@@ -440,6 +447,7 @@
 (def ^:private test-groups
   [["Version"                tests-version]
    ["Help"                   tests-help]
+   ["Help Options"           tests-help-options]
    ["Arg Validation"         tests-arg-validation]
    ["Ping (no daemon)"       tests-ping-no-daemon]
    ["Stop (no daemon)"       tests-stop-no-daemon]
