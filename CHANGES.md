@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### New
+
+- **Pipeline selectors** — `analyze`, `enrich`, `update`, and `digest` now accept `--path`, `--include`, `--exclude`, and `--lang` to scope work to selected files/directories/languages. Added parity across JVM CLI, launcher (`noum`), HTTP API, and MCP tool schemas.
+- **OpenAPI selector schema** — Added `PathSelectors` to `docs/openapi.yaml` and wired it into analyze/enrich/update/digest endpoint request bodies.
+
+### Changed
+
+- **Prompt/model drift behavior** — Drift is now advisory by default. Noumenon logs recommended re-analysis counts but does not auto re-analyze unless you explicitly pass `--reanalyze prompt-changed` or `--reanalyze model-changed`.
+
 ## 0.5.5
 
 ### New

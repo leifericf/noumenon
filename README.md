@@ -56,6 +56,16 @@ noum ask /path/to/repo "Which files are the biggest risk hotspots?"
 
 Or run stages individually: `noum import`, `noum enrich`, `noum analyze`, `noum synthesize`, `noum embed`.
 
+Scope pipeline work with selectors on analyze/enrich/update/digest:
+
+```bash
+noum analyze /path/to/repo --include "src/**/*.clj" --exclude "**/*_test.clj"
+noum update /path/to/repo --path src/noumenon --lang clojure
+```
+
+Prompt/model drift is advisory by default. Noumenon recommends re-analysis, but only
+re-analyzes when you opt in with `--reanalyze prompt-changed` or `--reanalyze model-changed`.
+
 ### Visual UI
 
 ```bash

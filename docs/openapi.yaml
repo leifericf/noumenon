@@ -75,6 +75,34 @@ components:
           type: string
           description: Model alias (e.g. sonnet, haiku, opus)
 
+    PathSelectors:
+      type: object
+      properties:
+        path:
+          oneOf:
+            - type: string
+            - type: array
+              items: {type: string}
+          description: File/dir selector(s), repo-relative or local paths
+        include:
+          oneOf:
+            - type: string
+            - type: array
+              items: {type: string}
+          description: Glob include selector(s)
+        exclude:
+          oneOf:
+            - type: string
+            - type: array
+              items: {type: string}
+          description: Glob exclude selector(s)
+        lang:
+          oneOf:
+            - type: string
+            - type: array
+              items: {type: string}
+          description: Language selector(s)
+
     ProgressEvent:
       description: SSE progress event sent during long-running operations
       type: object
@@ -194,6 +222,7 @@ paths:
               allOf:
                 - $ref: "#/components/schemas/RepoPath"
                 - $ref: "#/components/schemas/ProviderModel"
+                - $ref: "#/components/schemas/PathSelectors"
                 - type: object
                   properties:
                     concurrency:
@@ -228,6 +257,7 @@ paths:
             schema:
               allOf:
                 - $ref: "#/components/schemas/RepoPath"
+                - $ref: "#/components/schemas/PathSelectors"
                 - type: object
                   properties:
                     concurrency:
@@ -257,6 +287,7 @@ paths:
             schema:
               allOf:
                 - $ref: "#/components/schemas/RepoPath"
+                - $ref: "#/components/schemas/PathSelectors"
                 - type: object
                   properties:
                     analyze:
@@ -288,6 +319,7 @@ paths:
               allOf:
                 - $ref: "#/components/schemas/RepoPath"
                 - $ref: "#/components/schemas/ProviderModel"
+                - $ref: "#/components/schemas/PathSelectors"
                 - type: object
                   properties:
                     skip_import:
