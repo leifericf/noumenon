@@ -207,6 +207,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: noum-*
+          merge-multiple: false
 
       - name: Compute SHA256 hashes
         id: hashes
@@ -217,7 +219,7 @@ jobs:
 
       - name: Update Homebrew formula
         env:
-          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN || secrets.TAP_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
@@ -265,6 +267,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/noumenon.rb
+          if git diff --cached --quiet; then
+            echo "No Homebrew changes to publish"
+            exit 0
+          fi
           git commit -m "Update to v${VERSION}"
           git push
 
@@ -283,7 +289,7 @@ jobs:
 
       - name: Update Scoop manifest
         env:
-          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN || secrets.TAP_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           git clone https://x-access-token:${GH_TOKEN}@github.com/leifericf/scoop-noumenon.git bucket
@@ -314,6 +320,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add bucket/noumenon.json
+          if git diff --cached --quiet; then
+            echo "No Scoop changes to publish"
+            exit 0
+          fi
           git commit -m "Update to v${VERSION}"
           git push
 
