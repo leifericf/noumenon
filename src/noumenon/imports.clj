@@ -9,6 +9,7 @@
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
             [noumenon.files :as files]
+            [noumenon.selector :as selector]
             [noumenon.util :refer [log!]])
   (:import [java.io PushbackReader StringReader]
            [java.util.concurrent TimeUnit]))
@@ -817,14 +818,21 @@ end")
   "Extract cross-file import graph deterministically and transact into Datomic.
    Returns a summary map. `opts` may include :concurrency (default 8)."
   ([conn repo-path] (enrich-repo! conn repo-path {}))
-  ([conn repo-path {:keys [concurrency progress-fn] :or {concurrency 8}}]
+  ([conn repo-path {:keys [concurrency progress-fn path include exclude lang]
+                    :or   {concurrency 8}}]
    (let [db        (d/db conn)
-         all-files (files-with-lang db)
-         all-paths (into #{} (map :file/path) all-files)
-         needing   (vec (files-needing-enrichment db all-files))
-         skipped-n (- (count all-files) (count needing))
-         _         (when (pos? skipped-n)
-                     (log! (str "  " skipped-n " files already enriched, skipping")))
+          all-files (files-with-lang db)
+          all-paths (into #{} (map :file/path) all-files)
+          filters   (selector/normalize repo-path {:path path :include include
+                                                   :exclude exclude :lang lang})
+          {:keys [files summary]} (selector/apply-filters all-files filters)
+          filtered  files
+          needing   (vec (files-needing-enrichment db filtered))
+          skipped-n (- (count filtered) (count needing))
+          _         (when (pos? (:excluded summary 0))
+                      (log! (str "Selection filters excluded " (:excluded summary) " file(s).")))
+          _         (when (pos? skipped-n)
+                      (log! (str "  " skipped-n " files already enriched, skipping")))
          tools     (probe-tools)
          skipped-tools (log-tool-availability! tools (frequencies (map :file/lang needing)))
          {:keys [std-files c-files]} (partition-files-by-lang needing tools)

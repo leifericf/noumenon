@@ -125,12 +125,16 @@
 
 (defn- build-analyze-opts
   "Build the options map for analyze-repo! from CLI opts."
-  [{:keys [concurrency min-delay max-files]
+  [{:keys [concurrency min-delay max-files path include exclude lang]
     :or   {concurrency 3 min-delay 0}} model-id meta-db]
   (cond-> {:meta-db      meta-db
-           :model-id     model-id
-           :concurrency  concurrency
-           :min-delay-ms min-delay}
+            :model-id     model-id
+            :concurrency  concurrency
+            :min-delay-ms min-delay
+            :path         path
+            :include      include
+            :exclude      exclude
+            :lang         lang}
     max-files (assoc :max-files max-files)))
 
 (defn do-analyze
@@ -167,7 +171,7 @@
 
 (defn do-enrich
   "Run the enrich subcommand. Returns {:exit n :result map-or-nil}."
-  [{:keys [concurrency] :as opts}]
+  [{:keys [concurrency path include exclude lang] :as opts}]
   (with-valid-repo
     opts
     (fn [ctx]
@@ -175,7 +179,9 @@
         ctx
         (fn [{:keys [conn repo-path]}]
           (let [result (imports/enrich-repo! conn repo-path
-                                             {:concurrency (or concurrency 8)})]
+                                             {:concurrency (or concurrency 8)
+                                              :path path :include include
+                                              :exclude exclude :lang lang})]
             (log! (str "Next: run '" cli/program-name " analyze " repo-path
                        "' for semantic metadata, then '" cli/program-name
                        " query file-imports " repo-path "' to explore."))
@@ -225,17 +231,25 @@
                       :vocab   (count (:vocab idx))}}))))))
 
 (defn- build-sync-opts
-  [{:keys [analyze model provider concurrency]}]
+  [{:keys [analyze model provider concurrency path include exclude lang]}]
   (if analyze
     (let [{:keys [prompt-fn model-id]}
           (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})]
       {:concurrency         (or concurrency 8)
-       :analyze-concurrency (or concurrency 3)
-       :analyze?            true
-       :model-id            model-id
-       :invoke-llm          prompt-fn})
+        :analyze-concurrency (or concurrency 3)
+        :analyze?            true
+        :model-id            model-id
+        :invoke-llm          prompt-fn
+        :path                path
+        :include             include
+        :exclude             exclude
+        :lang                lang})
     {:concurrency         (or concurrency 8)
-     :analyze-concurrency (or concurrency 3)}))
+     :analyze-concurrency (or concurrency 3)
+     :path                path
+     :include             include
+     :exclude             exclude
+     :lang                lang}))
 
 (defn do-update
   "Run the update subcommand. Returns {:exit n :result map-or-nil}."
@@ -642,18 +656,20 @@
               {:keys [prompt-fn model-id]}
               (when needs-llm
                 (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model}))
+              selector  (select-keys opts [:path :include :exclude :lang])
               results   (atom {})
               t0        (System/currentTimeMillis)]
           (when-not (and skip-import skip-enrich)
             (run-digest-step! results :update "import + enrich"
                               #(sync/update-repo! conn repo-path repo-uri
-                                                  {:concurrency (or concurrency 8)})))
+                                                   (assoc selector :concurrency (or concurrency 8)))))
           (when-not skip-analyze
             (run-digest-step! results :analyze "analyze"
                               #(analyze/analyze-repo! conn repo-path prompt-fn
-                                                      {:meta-db     meta-db
-                                                       :model-id    model-id
-                                                       :concurrency (or concurrency 3)}))
+                                                       (assoc selector
+                                                              :meta-db meta-db
+                                                              :model-id model-id
+                                                              :concurrency (or concurrency 3))))
             (run-digest-step! results :calls "resolve calls"
                               #(calls/resolve-calls! conn)))
           (when-not skip-synthesize
@@ -813,7 +829,11 @@
    :missing-param-value          "Missing value for --param. Use --param key=value."
    :invalid-param-value          #(str "Invalid --param value: " (:value %) ". Expected key=value format.")
    :invalid-max-files            #(str "Invalid --max-files value: " (:value %))
-   :missing-max-files-value      "Missing value for --max-files."
+    :missing-max-files-value      "Missing value for --max-files."
+    :missing-path-value           "Missing value for --path."
+    :missing-include-value        "Missing value for --include."
+    :missing-exclude-value        "Missing value for --exclude."
+    :missing-lang-value           "Missing value for --lang."
    :invalid-interval             #(str "Invalid --interval value: " (:value %) ". Must be a positive integer.")
    :missing-interval-value       "Missing value for --interval."
    :missing-layers-value         "Missing value for --layers. Example: --layers raw,full"
@@ -828,9 +848,10 @@
 
 (def ^:private errors-with-subcommand-usage
   #{:no-repo-path :resume-consumed-repo-path :missing-db-dir-value :unknown-flag
-    :ask-missing-question :ask-missing-args :query-missing-args
-    :missing-param-value :invalid-param-value
-    :invalid-concurrency :missing-concurrency-value
+     :ask-missing-question :ask-missing-args :query-missing-args
+     :missing-param-value :invalid-param-value
+     :missing-path-value :missing-include-value :missing-exclude-value :missing-lang-value
+     :invalid-concurrency :missing-concurrency-value
     :invalid-min-delay :missing-min-delay-value
     :invalid-max-iterations :missing-max-iterations-value
     :invalid-interval :missing-interval-value

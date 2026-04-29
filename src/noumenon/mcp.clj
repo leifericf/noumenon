@@ -120,11 +120,15 @@
                   :required ["repo_path"]}}
    {:name "noumenon_update"
     :description "Update the knowledge graph with latest changes. Runs import + enrich for changed files. For git-p4 clones, automatically syncs from Perforce first. Fast and cheap (no LLM calls by default). Pass analyze=true to also re-analyze changed files with LLM. Works as a first-time setup too — if no database exists, runs the full pipeline."
-    :inputSchema {:type "object"
-                  :properties (merge repo-path-prop
-                                     {"analyze" {:type "boolean"
-                                                 :description "Also run LLM analysis on changed files (default: false)"}})
-                  :required ["repo_path"]}}
+     :inputSchema {:type "object"
+                   :properties (merge repo-path-prop
+                                      {"analyze" {:type "boolean"
+                                                  :description "Also run LLM analysis on changed files (default: false)"}
+                                       "path" {:type "string" :description "File/dir selector (comma-separated)"}
+                                       "include" {:type "string" :description "Glob include selector (comma-separated)"}
+                                       "exclude" {:type "string" :description "Glob exclude selector (comma-separated)"}
+                                       "lang" {:type "string" :description "Language selector (comma-separated)"}})
+                   :required ["repo_path"]}}
    {:name "noumenon_ask"
     :description "Use for codebase exploration BEFORE reading files — ask any natural-language question about a repository. Uses an AI agent to run iterative Datalog queries against the knowledge graph. Requires prior import — if the repository has not been imported yet, call noumenon_update first. Uses LLM API calls. For structured queries, prefer noumenon_query."
     :inputSchema {:type "object"
@@ -146,24 +150,32 @@
     :description "Run LLM analysis on repository files to enrich the knowledge graph with semantic metadata. By default only analyzes files not yet analyzed. Pass reanalyze to re-analyze files: all, prompt-changed, model-changed, or stale. Requires a prior import."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
-                                     {"provider" {:type "string"
-                                                  :description "LLM provider: glm, claude-api, or claude-cli (aliases: claude = claude-cli)"}
-                                      "model" {:type "string"
-                                               :description "Model alias (e.g. sonnet, haiku, opus)"}
-                                      "concurrency" {:type "integer"
-                                                     :description "Number of concurrent LLM calls (default: 3, max: 20)"}
-                                      "max_files" {:type "integer"
-                                                   :description "Stop after analyzing N files (useful for sampling)"}
-                                      "reanalyze" {:type "string"
-                                                   :description "Re-analyze scope: all, prompt-changed, model-changed, stale (default: only unanalyzed files)"}})
-                  :required ["repo_path"]}}
+                                      {"provider" {:type "string"
+                                                   :description "LLM provider: glm, claude-api, or claude-cli (aliases: claude = claude-cli)"}
+                                       "model" {:type "string"
+                                                :description "Model alias (e.g. sonnet, haiku, opus)"}
+                                       "concurrency" {:type "integer"
+                                                      :description "Number of concurrent LLM calls (default: 3, max: 20)"}
+                                       "max_files" {:type "integer"
+                                                    :description "Stop after analyzing N files (useful for sampling)"}
+                                       "reanalyze" {:type "string"
+                                                    :description "Re-analyze scope: all, prompt-changed, model-changed, stale (default: only unanalyzed files)"}
+                                       "path" {:type "string" :description "File/dir selector (comma-separated)"}
+                                       "include" {:type "string" :description "Glob include selector (comma-separated)"}
+                                       "exclude" {:type "string" :description "Glob exclude selector (comma-separated)"}
+                                       "lang" {:type "string" :description "Language selector (comma-separated)"}})
+                   :required ["repo_path"]}}
    {:name "noumenon_enrich"
     :description "Extract cross-file import graph deterministically. No LLM calls — uses language-specific parsers. Requires a prior import."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
-                                     {"concurrency" {:type "integer"
-                                                     :description "Extraction concurrency (default: 8, max: 20)"}})
-                  :required ["repo_path"]}}
+                                      {"concurrency" {:type "integer"
+                                                      :description "Extraction concurrency (default: 8, max: 20)"}
+                                       "path" {:type "string" :description "File/dir selector (comma-separated)"}
+                                       "include" {:type "string" :description "Glob include selector (comma-separated)"}
+                                       "exclude" {:type "string" :description "Glob exclude selector (comma-separated)"}
+                                       "lang" {:type "string" :description "Language selector (comma-separated)"}})
+                   :required ["repo_path"]}}
    {:name "noumenon_synthesize"
     :description "Identify architectural components from analyzed codebase data. Queries the knowledge graph for file summaries, import graph, and directory structure, then uses an LLM to identify components, classify files (layer, category, patterns, purpose), and map dependencies. Language-agnostic. Requires a prior analyze."
     :inputSchema {:type "object"
@@ -210,10 +222,14 @@
                                       "skip_enrich" {:type "boolean" :description "Skip the import+enrich step (either flag skips the combined step)"}
                                       "skip_analyze" {:type "boolean" :description "Skip analyze step"}
                                       "skip_synthesize" {:type "boolean" :description "Skip synthesize step"}
-                                      "skip_benchmark" {:type "boolean" :description "Skip benchmark step"}
-                                      "max_questions" {:type "integer" :description "Benchmark: limit to N questions"}
-                                      "layers" {:type "string" :description "Benchmark layers: raw,import,enrich,full (default: raw,full)"}
-                                      "report" {:type "boolean" :description "Generate Markdown benchmark report"}})
+                                       "skip_benchmark" {:type "boolean" :description "Skip benchmark step"}
+                                       "path" {:type "string" :description "File/dir selector (comma-separated)"}
+                                       "include" {:type "string" :description "Glob include selector (comma-separated)"}
+                                       "exclude" {:type "string" :description "Glob exclude selector (comma-separated)"}
+                                       "lang" {:type "string" :description "Language selector (comma-separated)"}
+                                       "max_questions" {:type "integer" :description "Benchmark: limit to N questions"}
+                                       "layers" {:type "string" :description "Benchmark layers: raw,import,enrich,full (default: raw,full)"}
+                                       "report" {:type "boolean" :description "Generate Markdown benchmark report"}})
                   :required ["repo_path"]}}
    {:name "noumenon_introspect"
     :description "Run an autonomous self-improvement loop: propose prompt changes, evaluate via benchmark, keep improvements. WARNING: Expensive — runs multiple benchmark evaluations. Use max_iterations to limit scope."
@@ -445,6 +461,14 @@
       (str "Update complete." changes)
       "Already up to date.")))
 
+(defn- selector-opts
+  [args]
+  (let [opts {:path    (args "path")
+              :include (args "include")
+              :exclude (args "exclude")
+              :lang    (args "lang")}]
+    (reduce-kv (fn [m k v] (cond-> m v (assoc k v))) {} opts)))
+
 (defn- handle-update [args defaults]
   (util/validate-string-length! "repo_path" (args "repo_path") max-repo-path-len)
   (validate-llm-inputs! args)
@@ -454,15 +478,17 @@
         conn      (get-or-create-conn db-dir db-name)
         meta-conn (db/ensure-meta-db db-dir)
         analyze?  (args "analyze")
+        selector  (selector-opts args)
         opts      (if analyze?
                     (let [{:keys [prompt-fn model-id]}
                           (llm/wrap-as-prompt-fn-from-opts
                            {:provider (or (args "provider") (:provider defaults))
                             :model    (or (args "model") (:model defaults))})]
-                      {:concurrency 8 :analyze? true
-                       :meta-db (d/db meta-conn)
-                       :model-id model-id :invoke-llm prompt-fn})
-                    {:concurrency 8})
+                      (assoc selector
+                             :concurrency 8 :analyze? true
+                             :meta-db (d/db meta-conn)
+                             :model-id model-id :invoke-llm prompt-fn))
+                    (assoc selector :concurrency 8))
         result    (sync/update-repo! conn repo-path repo-path opts)]
     (tool-result (format-update-changes result))))
 
@@ -536,12 +562,14 @@
                                {:prompt-hash prompt-hash :model-id model-id})
           (let [concurrency (min (or (args "concurrency") 3) 20)
                 max-files   (args "max_files")
+                selector    (selector-opts args)
                 result      (analyze/analyze-repo! conn repo-path prompt-fn
-                                                   (cond-> {:meta-db     meta-db
-                                                            :model-id    model-id
-                                                            :concurrency concurrency
-                                                            :progress-fn (:progress-fn defaults)}
-                                                     max-files (assoc :max-files max-files)))]
+                                                    (cond-> (assoc selector
+                                                                   :meta-db meta-db
+                                                                   :model-id model-id
+                                                                   :concurrency concurrency
+                                                                   :progress-fn (:progress-fn defaults))
+                                                      max-files (assoc :max-files max-files)))]
             (tool-result (str "Analysis complete. "
                               (:files-analyzed result 0) " files analyzed"
                               (when (pos? (:files-parse-errored result 0))
@@ -557,8 +585,9 @@
   (with-conn args defaults
     (fn [{:keys [conn repo-path]}]
       (let [concurrency (min (or (args "concurrency") 8) 20)
+            selector    (selector-opts args)
             result      (imports/enrich-repo! conn repo-path
-                                              {:concurrency concurrency})]
+                                              (assoc selector :concurrency concurrency))]
         (tool-result (str "Enrich complete. "
                           (:files-processed result 0) " files processed, "
                           (:imports-resolved result 0) " imports resolved."))))))
@@ -750,16 +779,20 @@
             repo-uri (if (str/starts-with? (str repo-path) "db://")
                        repo-path
                        (.getCanonicalPath (java.io.File. (str repo-path))))
+            selector (selector-opts args)
             results  (atom {})]
         ;; Import + Enrich
         (when-not (or (args "skip_import") (args "skip_enrich"))
-          (let [r (sync/update-repo! conn repo-path repo-uri {:concurrency 8})]
+          (let [r (sync/update-repo! conn repo-path repo-uri
+                                     (assoc selector :concurrency 8))]
             (swap! results assoc :update r)))
         ;; Analyze
         (when-not (args "skip_analyze")
           (let [r (analyze/analyze-repo! conn repo-path prompt-fn
-                                         {:meta-db meta-db :model-id model-id :concurrency 3
-                                          :progress-fn (:progress-fn defaults)})]
+                                         (assoc selector
+                                                :meta-db meta-db :model-id model-id
+                                                :concurrency 3
+                                                :progress-fn (:progress-fn defaults)))]
             (swap! results assoc :analyze r)))
         ;; Synthesize
         (when-not (args "skip_synthesize")

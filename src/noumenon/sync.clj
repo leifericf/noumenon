@@ -272,19 +272,21 @@
               _         (when (pos? issues-n)
                           (log! (str "Extracted issue refs for " issues-n " commits")))
               files-r   (files/import-files! conn repo-path repo-uri)
-              post-r    (when (or fresh?
-                                  (seq (:added changes))
-                                  (seq (:modified changes))
-                                  (seq (:deleted changes)))
-                          (imports/enrich-repo! conn repo-path
-                                                {:concurrency (or (:concurrency opts) 8)}))
-              analyze-r (when-let [invoke-llm (:invoke-llm opts)]
-                          (analyze/analyze-repo!
-                           conn repo-path invoke-llm
-                           {:meta-db      (:meta-db opts)
-                            :model-id     (:model-id opts)
-                            :concurrency  (or (:analyze-concurrency opts) 3)
-                            :min-delay-ms 0}))
+               selector  (select-keys opts [:path :include :exclude :lang])
+               post-r    (when (or fresh?
+                                   (seq (:added changes))
+                                   (seq (:modified changes))
+                                   (seq (:deleted changes)))
+                           (imports/enrich-repo! conn repo-path
+                                                (assoc selector :concurrency (or (:concurrency opts) 8))))
+               analyze-r (when-let [invoke-llm (:invoke-llm opts)]
+                           (analyze/analyze-repo!
+                            conn repo-path invoke-llm
+                            (assoc selector
+                                   :meta-db (:meta-db opts)
+                                   :model-id (:model-id opts)
+                                   :concurrency (or (:analyze-concurrency opts) 3)
+                                   :min-delay-ms 0)))
               calls-r   (when (or post-r analyze-r)
                           (calls/resolve-calls! conn))]
           (update-head-sha! conn repo-path repo-uri)

@@ -83,6 +83,20 @@
    :desc "Stop after analyzing N files (useful for sampling)"
    :error-invalid :invalid-max-files :error-missing :missing-max-files-value})
 
+(def ^:private selector-flags
+  [{:flag "--path" :key :path :parse :string
+    :desc "File/dir selector (repeat or comma-separate)"
+    :error-missing :missing-path-value}
+   {:flag "--include" :key :include :parse :string
+    :desc "Glob include selector (repeat or comma-separate)"
+    :error-missing :missing-include-value}
+   {:flag "--exclude" :key :exclude :parse :string
+    :desc "Glob exclude selector (repeat or comma-separate)"
+    :error-missing :missing-exclude-value}
+   {:flag "--lang" :key :lang :parse :string
+    :desc "Language selector (repeat or comma-separate)"
+    :error-missing :missing-lang-value}])
+
 ;; --- Composed flag sets ---
 
 (def ^:private common-flags
@@ -118,8 +132,8 @@
 
 (def ^:private analyze-flags
   (vec (concat [model-flag (assoc provider-flag :valid all-valid-providers)
-                max-files-flag reanalyze-flag db-dir-flag]
-               verbose-flags concurrency-flags)))
+                 max-files-flag reanalyze-flag db-dir-flag]
+               verbose-flags concurrency-flags selector-flags)))
 
 ;; --- Declarative command specs ---
 
@@ -129,16 +143,19 @@
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
 (def ^:private enrich-command-spec
-  {:flags [db-dir-flag concurrency-flag]
+  {:flags (vec (concat [db-dir-flag concurrency-flag] selector-flags))
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
 (def ^:private update-command-spec
-  {:flags [{:flag "--analyze" :key :analyze :parse :bool
-            :desc "Also run LLM analysis on changed files"}
-           model-flag
-           (assoc provider-flag :valid all-valid-providers)
-           db-dir-flag concurrency-flag]
+  {:flags (vec (concat
+                [{:flag "--analyze" :key :analyze :parse :bool
+                  :desc "Also run LLM analysis on changed files"}
+                 model-flag
+                 (assoc provider-flag :valid all-valid-providers)
+                 db-dir-flag
+                 concurrency-flag]
+                selector-flags))
    :initial {}
    :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}})
 
@@ -279,7 +296,7 @@
    "analyze"      {:spec analyze-command-spec
                    :summary "Enrich imported files with LLM-driven semantic analysis"
                    :usage "analyze [options] <repo-path>"
-                   :epilog "Sensitive files (.env, *.pem, credentials, SSH keys, etc.) are\nautomatically excluded — their contents are never sent to the LLM.\n\nRe-analysis scopes (--reanalyze):\n  all              Re-analyze every file\n  prompt-changed   Files analyzed with a different prompt template\n  model-changed    Files analyzed with a different model\n  stale            Files modified by commits since their last analysis"}
+                   :epilog "Sensitive files (.env, *.pem, credentials, SSH keys, etc.) are\nautomatically excluded — their contents are never sent to the LLM.\n\nRe-analysis scopes (--reanalyze):\n  all              Re-analyze every file\n  prompt-changed   Files analyzed with a different prompt template\n  model-changed    Files analyzed with a different model\n  stale            Files modified by commits since their last analysis\n\nPrompt/model drift is advisory by default. Noumenon logs recommendations;\nuse --reanalyze prompt-changed or --reanalyze model-changed to refresh."}
    "enrich"       {:spec enrich-command-spec
                    :summary "Extract cross-file import graph deterministically"
                    :usage "enrich [options] <repo-path>"
@@ -339,7 +356,8 @@
                                       :desc "Benchmark layers: raw,import,enrich,full (default: raw,full)"
                                       :error-missing :missing-layers-value}
                                      {:flag "--report" :key :report :parse :bool
-                                      :desc "Generate Markdown benchmark report"}]))
+                                       :desc "Generate Markdown benchmark report"}]
+                                     selector-flags))
                        :initial {:subcommand "digest"}
                        :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}}
                 :summary "Run full pipeline: import, enrich, analyze, synthesize, benchmark"

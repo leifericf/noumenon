@@ -8,6 +8,7 @@
             [noumenon.git :as git]
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
+            [noumenon.selector :as selector]
             [noumenon.util :as util :refer [escape-double-mustache log! sha256-hex]])
   (:import [java.util Date]))
 
@@ -636,20 +637,26 @@
    `opts` may include :model-id, :concurrency, :min-delay-ms.
    Returns summary map with :total-usage."
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
-  ([conn repo-path invoke-llm {:keys [meta-db model-id concurrency min-delay-ms max-files progress-fn]
-                               :or   {concurrency 3 min-delay-ms 0}}]
+  ([conn repo-path invoke-llm {:keys [meta-db model-id concurrency min-delay-ms max-files progress-fn
+                                      path include exclude lang]
+                                :or   {concurrency 3 min-delay-ms 0}}]
    (let [head-paths    (into #{} (map :path) (files/parse-ls-tree (files/git-ls-tree repo-path)))
          prompt-map    (load-prompt-template meta-db)
          prompt-h      (prompt-hash (:template prompt-map))
          dbv           (d/db conn)
          all-files     (->> (files-needing-analysis dbv)
                              (filterv (comp head-paths :file/path)))
-         files         (if max-files (vec (take max-files all-files)) all-files)
+         filters       (selector/normalize repo-path {:path path :include include
+                                                      :exclude exclude :lang lang})
+         {:keys [files summary]} (selector/apply-filters all-files filters)
+         files         (if max-files (vec (take max-files files)) files)
          total         (count files)
          analysis-opts {:prompt-template (:template prompt-map)
                         :prompt-hash-val prompt-h
                         :invoke-llm invoke-llm}]
      (log-drift-recommendations! dbv prompt-h model-id)
+     (when (pos? (:excluded summary 0))
+       (log! (str "Selection filters excluded " (:excluded summary) " file(s).")))
      (if (zero? total)
        (do (log! "All files already analyzed, nothing to do.")
            empty-analysis-result)

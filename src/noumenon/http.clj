@@ -281,11 +281,13 @@
   (let [{:keys [prompt-fn model-id]}
         (llm/wrap-as-prompt-fn-from-opts (resolve-provider params config))
         concurrency (min (or (:concurrency params) 3) 20)
+        selector    (select-keys params [:path :include :exclude :lang])
         result      (analyze/analyze-repo! conn repo-path prompt-fn
-                                           (cond-> {:meta-db     meta-db
-                                                    :model-id    model-id
-                                                    :concurrency concurrency
-                                                    :progress-fn progress-fn}
+                                           (cond-> (assoc selector
+                                                          :meta-db meta-db
+                                                          :model-id model-id
+                                                          :concurrency concurrency
+                                                          :progress-fn progress-fn)
                                              (:max_files params)
                                              (assoc :max-files (:max_files params))))]
     (select-keys result [:files-analyzed :files-skipped
@@ -302,8 +304,10 @@
 
 (defn- run-enrich [{:keys [conn repo-path]} params progress-fn]
   (let [concurrency (min (or (:concurrency params) 8) 20)
-        result      (imports/enrich-repo! conn repo-path {:concurrency concurrency
-                                                          :progress-fn progress-fn})]
+        selector    (select-keys params [:path :include :exclude :lang])
+        result      (imports/enrich-repo! conn repo-path (assoc selector
+                                                                :concurrency concurrency
+                                                                :progress-fn progress-fn))]
     (select-keys result [:files-processed :imports-resolved])))
 
 (defn- handle-enrich [request config]
@@ -319,12 +323,14 @@
     (with-repo params (:db-dir config)
       (fn [{:keys [conn meta-db repo-path]}]
         (let [opts (if (:analyze params)
-                     (let [{:keys [prompt-fn model-id]}
-                           (llm/wrap-as-prompt-fn-from-opts
-                            (resolve-provider params config))]
-                       {:concurrency 8 :analyze? true
-                        :meta-db meta-db :model-id model-id :invoke-llm prompt-fn})
-                     {:concurrency 8})
+              (let [{:keys [prompt-fn model-id]}
+                    (llm/wrap-as-prompt-fn-from-opts
+                     (resolve-provider params config))]
+                        (assoc (select-keys params [:path :include :exclude :lang])
+                               :concurrency 8 :analyze? true
+                               :meta-db meta-db :model-id model-id :invoke-llm prompt-fn))
+                      (assoc (select-keys params [:path :include :exclude :lang])
+                             :concurrency 8))
               result (sync/update-repo! conn repo-path repo-path opts)]
           (ok result))))))
 
@@ -353,15 +359,18 @@
         step-fn     (fn [step-name]
                       (when progress-fn
                         (fn [evt] (progress-fn (assoc evt :step step-name)))))
+        selector  (select-keys params [:path :include :exclude :lang])
         update-r  (when-not (or (:skip_import params) (:skip_enrich params))
                     (step-progress "update"
-                                   #(sync/update-repo! conn repo-path repo-path {:concurrency 8})))
+                                   #(sync/update-repo! conn repo-path repo-path
+                                                       (assoc selector :concurrency 8))))
         analyze-r (when-not (:skip_analyze params)
                     (step-progress "analyze"
-                                   #(let [r (analyze/analyze-repo! conn repo-path prompt-fn
-                                                                   {:meta-db meta-db :model-id model-id
-                                                                    :concurrency 3 :progress-fn (step-fn "analyze")})]
-                                      (select-keys r [:files-analyzed :total-usage]))))
+                                    #(let [r (analyze/analyze-repo! conn repo-path prompt-fn
+                                                                    (assoc selector
+                                                                           :meta-db meta-db :model-id model-id
+                                                                           :concurrency 3 :progress-fn (step-fn "analyze"))) ]
+                                       (select-keys r [:files-analyzed :total-usage]))))
         synth-r   (when-not (:skip_synthesize params)
                     (step-progress "synthesize"
                                    #(synthesize/synthesize-repo!
