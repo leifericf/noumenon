@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.6
+
 ### New
 
 - **Pipeline selectors** — `analyze`, `enrich`, `update`, and `digest` now accept `--path`, `--include`, `--exclude`, and `--lang` to scope work to selected files/directories/languages. Added parity across JVM CLI, launcher (`noum`), HTTP API, and MCP tool schemas.
@@ -10,6 +12,11 @@
 ### Changed
 
 - **Prompt/model drift behavior** — Drift is now advisory by default. Noumenon logs recommended re-analysis counts but does not auto re-analyze unless you explicitly pass `--reanalyze prompt-changed` or `--reanalyze model-changed`.
+
+### Fixes
+
+- **MCP repo path mapping** — Remote MCP proxy now derives database names from local path semantics (e.g. `mino`) instead of org-repo remote URL synthesis (e.g. `leifericf-mino`), preventing status/query failures on path-to-db translation.
+- **Launcher command help** — `noum help <command>` now renders command options (including `analyze`) so users can discover flags without leaving the CLI.
 
 ## 0.5.5
 
