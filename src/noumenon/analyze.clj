@@ -411,6 +411,22 @@
       (log! (str "Skipping " (count sensitive) " sensitive file(s) from re-analysis")))
     (sort-by :file/path safe)))
 
+(defn- log-drift-recommendations!
+  "Log optional re-analysis recommendations when prompt/model drift is detected."
+  [db prompt-hash-val model-id]
+  (let [prompt-n (count (files-for-reanalysis db :prompt-changed {:prompt-hash prompt-hash-val}))
+        model-n  (if model-id
+                   (count (files-for-reanalysis db :model-changed {:model-id model-id}))
+                   0)]
+    (when (pos? prompt-n)
+      (log! (str "Recommendation: " prompt-n
+                 " analyzed file(s) used an older prompt. "
+                 "Run analyze with --reanalyze prompt-changed to refresh.")))
+    (when (pos? model-n)
+      (log! (str "Recommendation: " model-n
+                 " analyzed file(s) used a different model. "
+                 "Run analyze with --reanalyze model-changed to refresh.")))))
+
 ;; --- Orchestration ---
 
 (defn repo-name
@@ -623,14 +639,17 @@
   ([conn repo-path invoke-llm {:keys [meta-db model-id concurrency min-delay-ms max-files progress-fn]
                                :or   {concurrency 3 min-delay-ms 0}}]
    (let [head-paths    (into #{} (map :path) (files/parse-ls-tree (files/git-ls-tree repo-path)))
-         all-files     (->> (files-needing-analysis (d/db conn))
-                            (filterv (comp head-paths :file/path)))
+         prompt-map    (load-prompt-template meta-db)
+         prompt-h      (prompt-hash (:template prompt-map))
+         dbv           (d/db conn)
+         all-files     (->> (files-needing-analysis dbv)
+                             (filterv (comp head-paths :file/path)))
          files         (if max-files (vec (take max-files all-files)) all-files)
          total         (count files)
-         prompt-map    (load-prompt-template meta-db)
          analysis-opts {:prompt-template (:template prompt-map)
-                        :prompt-hash-val (prompt-hash (:template prompt-map))
+                        :prompt-hash-val prompt-h
                         :invoke-llm invoke-llm}]
+     (log-drift-recommendations! dbv prompt-h model-id)
      (if (zero? total)
        (do (log! "All files already analyzed, nothing to do.")
            empty-analysis-result)
