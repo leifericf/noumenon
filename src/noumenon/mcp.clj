@@ -1133,24 +1133,13 @@
 
 (defn- repo-path->db-name
   "Translate a local repo_path to a database name for remote queries.
-   Tries: git remote origin URL -> org-repo, else basename."
+   For directories, mirrors local CLI behavior via util/derive-db-name.
+   For non-directories, assumes input may already be a db-name."
   [repo-path]
   (when (and repo-path (not (str/blank? repo-path)))
     (let [f (io/file repo-path)]
       (if (.isDirectory f)
-        ;; Try to get origin URL and derive name
-        (let [{:keys [exit out]} (shell/sh
-                                  "git" "-C" repo-path
-                                  "remote" "get-url" "origin")]
-          (if (zero? exit)
-            ;; Use the same logic as repo-manager/url->db-name
-            (let [url (str/trim out)
-                  cleaned (-> url (str/replace #"\.git$" "") (str/replace #"/$" ""))
-                  parts   (str/split cleaned #"[/:]")
-                  segments (take-last 2 parts)]
-              (str/replace (str/join "-" segments) #"[^a-zA-Z0-9\-_.]" ""))
-            ;; No remote, fall back to basename
-            (.getName f)))
+        (util/derive-db-name (.getCanonicalPath f))
         ;; Not a directory — might already be a db-name
         repo-path))))
 
