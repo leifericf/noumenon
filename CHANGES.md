@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.7.0
+
+### Changed
+
+- **Repo split** — The Electron desktop app moved to [`leifericf/noumenon-app`](https://github.com/leifericf/noumenon-app); the website moved to [`leifericf/noumenon-site`](https://github.com/leifericf/noumenon-site). This repo keeps the daemon, `noum` CLI, and OpenAPI spec. History was preserved on both new repos via `git filter-repo`.
+- **OpenAPI spec relocated** — Canonical source moved from `docs/openapi.yaml` to `resources/openapi.yaml` so it ships inside the daemon JAR and can be served via `io/resource`. The website mirrors it daily via a cron-pull workflow.
+- **`noum ui` auto-updater** — Now downloads the packaged Electron app from `leifericf/noumenon-app` releases (was `leifericf/noumenon`).
+- **`noum ui` dev mode** — Resolves a noumenon-app source checkout in this order: `$NOUMENON_APP_ROOT` → `$NOUMENON_ROOT/../noumenon-app` sibling → fall back to installed app. The previous `ui/` child directory is no longer valid.
+- **Core CI/Release workflows** — Removed the `ui` job and the `build-electron`/`deploy-pages` release jobs. CLI distribution (`update-homebrew`, `update-scoop`) and Docker publish remain in this repo.
+
 ## 0.6.2
 
 ### Changed
