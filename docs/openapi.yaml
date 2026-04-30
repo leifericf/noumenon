@@ -70,7 +70,7 @@ components:
       properties:
         provider:
           type: string
-          enum: [glm, claude-api, claude-cli]
+          enum: [glm, claude-api]
         model:
           type: string
           description: Model alias (e.g. sonnet, haiku, opus)

@@ -98,7 +98,7 @@ Legacy compatibility mappings:
    - redact sensitive values in exceptions/debug output
 
 5. **HTTP-only provider behavior**
-   - remove `claude-cli` support
+   - support API providers only (`glm`, `claude-api`)
    - keep provider invocation on HTTP APIs only
 
 6. **Docs/help updates**
