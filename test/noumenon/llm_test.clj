@@ -200,7 +200,8 @@
                                                      :error nil}))]
     (let [r (llm/discover-provider-models "glm")]
       (is (= :api (:source r)))
-      (is (= ["m-api-1" "m-api-2"] (:models r))))))
+      (is (= ["m-api-1" "m-api-2"] (:models r)))
+      (is (nil? (:default-model r))))))
 
 (deftest discover-provider-models-falls-back-on-api-failure
   (with-redefs [llm/getenv (fn [k]
@@ -369,4 +370,15 @@
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
            #"default-model is not listed"
+           (llm/resolve-opts {:provider "glm"}))))))
+
+(deftest resolve-opts-requires-explicit-model-selection
+  (testing "fails when provider has neither --model nor :default-model"
+    (with-redefs [llm/getenv (fn [k]
+                               (case k
+                                 "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:api-key \"k\" :models [\"m1\"]}}"
+                                 nil))]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"No model selected"
            (llm/resolve-opts {:provider "glm"}))))))

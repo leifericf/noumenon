@@ -344,7 +344,7 @@
          fallback                 (vec (:models configured []))]
      (if-not url
        {:provider      (name provider-kw)
-        :default-model (or (:default-model configured) (first fallback) default-model-alias)
+        :default-model (:default-model configured)
         :models        fallback
         :source        :config}
        (try
@@ -355,18 +355,18 @@
                                                            :timeout timeout-ms})]
            (if (or error (not= 200 status))
              {:provider      (name provider-kw)
-              :default-model (or (:default-model configured) (first fallback) default-model-alias)
+              :default-model (:default-model configured)
               :models        fallback
               :source        :config
               :warning       (str "Model discovery unavailable (HTTP " status "), using configured fallback")}
              (let [models (parse-models-response body)]
                {:provider      (name provider-kw)
-                :default-model (or (:default-model configured) (first models) (first fallback) default-model-alias)
+                :default-model (:default-model configured)
                 :models        (if (seq models) models fallback)
                 :source        (if (seq models) :api :config)})))
          (catch Exception _
            {:provider      (name provider-kw)
-            :default-model (or (:default-model configured) (first fallback) default-model-alias)
+            :default-model (:default-model configured)
             :models        fallback
             :source        :config
             :warning       "Model discovery failed, using configured fallback"}))))))
@@ -395,11 +395,12 @@
   [provider-kw model]
   (let [configured    (configured-model-set provider-kw)
         default-model (provider-default-model provider-kw)
-        selected   (or model
-                       default-model
-                       (first (provider-models provider-kw))
-                       default-model-alias)
+        selected      (or model default-model)
         resolved   (normalize-model-name selected)]
+    (when-not selected
+      (throw (ex-info (str "No model selected for provider " (name provider-kw)
+                           ". Set :default-model in NOUMENON_LLM_PROVIDERS_EDN or pass --model.")
+                      {:provider provider-kw})))
     (when (and default-model (seq configured)
                (not (configured (normalize-model-name default-model))))
       (throw (ex-info (str "Configured :default-model is not listed in :models for provider " (name provider-kw))
