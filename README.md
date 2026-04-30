@@ -30,6 +30,27 @@ The `noum` binary is self-contained — it downloads a JRE and the backend on fi
 | `claude-api` | [`ANTHROPIC_API_KEY`](https://console.anthropic.com/settings/keys) |
 | `claude-cli` | [Claude Code](https://claude.ai/claude-code) installed |
 
+Provider API configuration also supports a provider-agnostic EDN map:
+
+```clojure
+NOUMENON_LLM_PROVIDERS_EDN='{:glm {:base-url "https://api.z.ai/api/anthropic" :api-key "..."}
+                              :claude-api {:base-url "https://api.anthropic.com" :api-key "..."}
+                              :tencent {:base-url "https://your-litellm-gateway" :api-key "..."}}'
+```
+
+Provider config resolution precedence for API providers is:
+
+1. `NOUMENON_LLM_PROVIDERS_EDN` provider entry
+2. Legacy provider env vars (`NOUMENON_ZAI_TOKEN`, `ANTHROPIC_API_KEY`)
+3. Built-in default base URL (API key is never defaulted)
+
+Runtime mode controls secret fallback behavior:
+
+- `NOUMENON_RUNTIME_MODE=local` (default): allows process env and trusted local credentials fallback
+- `NOUMENON_RUNTIME_MODE=service`: process env only, disables local credentials fallback, requires `https` base URLs
+
+Migration note: existing legacy env vars continue to work. You can migrate incrementally by adding entries to `NOUMENON_LLM_PROVIDERS_EDN`.
+
 ## Quick Start
 
 ### Interactive mode

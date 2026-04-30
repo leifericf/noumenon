@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.6.0
+
+### New
+
+- **Provider-agnostic LLM config** — Added `NOUMENON_LLM_PROVIDERS_EDN` support for API providers, allowing per-provider `:base-url` and `:api-key` configuration (for example: `:glm`, `:claude-api`, gateway-backed providers like `:tencent`) through one canonical EDN map.
+
+### Changed
+
+- **Runtime mode policy for secrets** — Added `NOUMENON_RUNTIME_MODE=local|service` (default `local`). In `service` mode, file-based credential fallback is disabled and only process env secrets are used.
+- **Provider resolution precedence** — API providers now resolve config in this order: canonical EDN map entry, legacy env var fallback, then built-in default base URL (API keys are never defaulted).
+- **Centralized provider resolution** — API-provider invocation now routes through a normalized resolver in `src/noumenon/llm.clj` returning `{:base-url :api-key}` to reduce provider-specific branching.
+
+### Fixes
+
+- **Service URL hardening** — API provider base URLs are now validated as absolute URLs, and `service` mode requires `https`.
+- **Safe error handling for credentials** — Missing-key failures are explicit while avoiding secret value leakage in error messages.
+- **Optional base URL allowlist** — Added `NOUMENON_LLM_BASE_URL_ALLOWLIST_EDN` support to restrict provider base URL hosts/patterns.
+
 ## 0.5.6
 
 ### New

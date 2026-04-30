@@ -1,10 +1,12 @@
 (ns noumenon.llm
   (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [noumenon.util :refer [log! truncate]]
             [org.httpkit.client :as http])
-  (:import [java.util.concurrent TimeUnit]))
+  (:import [java.net URI]
+           [java.util.concurrent TimeUnit]))
 
 ;; --- Provider/model defaults ---
 
@@ -269,9 +271,28 @@
 
 (def ^:private api-provider-config
   {:glm       {:env-var  "NOUMENON_ZAI_TOKEN"
-               :base-url "https://api.z.ai/api/anthropic"}
+                :base-url "https://api.z.ai/api/anthropic"}
    :claude-api {:env-var  "ANTHROPIC_API_KEY"
-                :base-url "https://api.anthropic.com"}})
+                 :base-url "https://api.anthropic.com"}})
+
+(def ^:private runtime-modes #{"local" "service"})
+
+(defn- getenv
+  [k]
+  (System/getenv k))
+
+(defn- runtime-mode
+  []
+  (let [mode (or (getenv "NOUMENON_RUNTIME_MODE") "local")]
+    (when-not (runtime-modes mode)
+      (throw (ex-info (str "Invalid NOUMENON_RUNTIME_MODE: " mode
+                           ". Expected one of: " (str/join ", " (sort runtime-modes)))
+                      {:runtime-mode mode :known (sort runtime-modes)})))
+    mode))
+
+(defn- service-mode?
+  []
+  (= "service" (runtime-mode)))
 
 (defn- parse-env-value
   "Strip surrounding quotes and trailing inline comments from a .env value."
@@ -291,10 +312,11 @@
              (parse-env-value v))
           (str/split-lines (slurp env-file)))))
 
-(def ^:private trusted-env-paths
+(defn- trusted-env-paths
   "Trusted locations for credentials (KEY=VALUE format):
    ~/.noumenon/credentials (primary), explicit project dir .env,
    and CWD .env only when deps.edn is present (dev indicator)."
+  []
   (let [creds    (java.io.File. (System/getProperty "user.home") ".noumenon/credentials")
         proj-dir (System/getProperty "noumenon.project.dir")
         cwd      (System/getProperty "user.dir")]
@@ -308,8 +330,85 @@
   "Read an environment variable, falling back to credentials file.
    Checks ~/.noumenon/credentials, then project .env. Returns the trimmed value, or nil."
   [env-var]
-  (or (System/getenv env-var)
-      (some #(read-env-from-file % env-var) trusted-env-paths)))
+  (or (getenv env-var)
+      (when-not (service-mode?)
+        (some #(read-env-from-file % env-var) (trusted-env-paths)))))
+
+(defn- parse-edn-env
+  [env-var]
+  (when-let [raw (getenv env-var)]
+    (try
+      (edn/read-string raw)
+      (catch Exception e
+        (throw (ex-info (str env-var " contains invalid EDN")
+                        {:env-var env-var}
+                        e))))))
+
+(defn- provider-map-config
+  [provider-kw]
+  (get (parse-edn-env "NOUMENON_LLM_PROVIDERS_EDN") provider-kw))
+
+(defn- normalize-base-url
+  [base-url]
+  (when base-url
+    (str/replace (str/trim base-url) #"/+$" "")))
+
+(defn- valid-absolute-url?
+  [s]
+  (try
+    (let [uri (URI. s)]
+      (and (.isAbsolute uri) (seq (.getHost uri))))
+    (catch Exception _
+      false)))
+
+(defn- parse-allowlist
+  []
+  (let [allowlist (parse-edn-env "NOUMENON_LLM_BASE_URL_ALLOWLIST_EDN")]
+    (when (and allowlist (not (sequential? allowlist)))
+      (throw (ex-info "NOUMENON_LLM_BASE_URL_ALLOWLIST_EDN must be a sequential EDN value"
+                      {:env-var "NOUMENON_LLM_BASE_URL_ALLOWLIST_EDN"})))
+    (set (map str allowlist))))
+
+(defn- allowlisted-host?
+  [host allowlist]
+  (or (empty? allowlist)
+      (contains? allowlist host)
+      (some #(and (str/starts-with? % "*.")
+                  (str/ends-with? host (subs % 1)))
+            allowlist)))
+
+(defn- validate-base-url!
+  [provider-kw base-url]
+  (when-not (valid-absolute-url? base-url)
+    (throw (ex-info (str "Invalid base URL for provider " (name provider-kw) ": must be absolute")
+                    {:provider provider-kw})))
+  (let [uri      (URI. base-url)
+        scheme   (.getScheme uri)
+        host     (.getHost uri)
+        allowset (parse-allowlist)]
+    (when (and (service-mode?) (not= "https" (str/lower-case scheme)))
+      (throw (ex-info (str "Service mode requires https base URL for provider " (name provider-kw))
+                      {:provider provider-kw})))
+    (when-not (allowlisted-host? host allowset)
+      (throw (ex-info (str "Base URL host is not allowlisted for provider " (name provider-kw))
+                      {:provider provider-kw :host host}))))
+  base-url)
+
+(defn resolve-provider-config
+  "Resolve provider configuration to {:base-url :api-key} with precedence:
+   providers EDN map -> legacy env vars -> default base URL."
+  [provider]
+  (let [provider-kw (provider->kw provider)
+        {:keys [env-var base-url]} (api-provider-config provider-kw)
+        provider-edn  (provider-map-config provider-kw)
+        resolved-url  (normalize-base-url (or (:base-url provider-edn) base-url))
+        resolved-key  (or (:api-key provider-edn) (read-env-var env-var))]
+    (when-not resolved-key
+      (throw (ex-info (str "Missing API key for provider " (name provider-kw)
+                           ". Set :api-key in NOUMENON_LLM_PROVIDERS_EDN or " env-var)
+                      {:provider provider-kw})))
+    {:base-url (validate-base-url! provider-kw resolved-url)
+     :api-key  resolved-key}))
 
 (defn make-messages-fn
   "Create an invoke function for the given provider.
@@ -321,11 +420,8 @@
    Provider :claude-cli — flattens messages to single prompt string."
   [provider {:keys [model temperature max-tokens]}]
   (let [kw (provider->kw provider)]
-    (if-let [{:keys [env-var base-url]} (api-provider-config kw)]
-      (let [token (read-env-var env-var)]
-        (when-not token
-          (throw (ex-info (str env-var " is not set. Add it to ~/.noumenon/credentials or set it in your environment.")
-                          {:provider kw})))
+    (if (api-provider-config kw)
+      (let [{:keys [base-url api-key]} (resolve-provider-config kw)]
         (fn invoke
           ([messages] (invoke messages nil))
           ([messages opts]
@@ -333,8 +429,8 @@
                                          :temperature temperature
                                          :max-tokens  max-tokens
                                          :base-url    base-url
-                                         :auth-token  token}
-                                  (:system opts) (assoc :system (:system opts)))))))
+                                         :auth-token  api-key}
+                                   (:system opts) (assoc :system (:system opts)))))))
       (fn invoke
         ([messages] (invoke messages nil))
         ([messages opts]

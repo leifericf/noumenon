@@ -208,35 +208,94 @@
 
 ;; --- Provider factory ---
 
-(defn- token-available?
-  "Check if a token is available via env var OR trusted .env file fallback,
-   matching the logic in llm/make-messages-fn."
-  [env-var]
-  (or (System/getenv env-var)
-      (some (fn [^java.io.File f]
-              (when (.exists f)
-                (some #(re-matches (re-pattern (str "(?:export\\s+)?" env-var "=(.+)"))
-                                   (clojure.string/trim %))
-                      (clojure.string/split-lines (slurp f)))))
-            [(java.io.File. (System/getProperty "user.home") ".env")
-             (java.io.File. (System/getProperty "user.dir") ".env")])))
+(defn- with-temp-creds-file [content f]
+  (let [home   (System/getProperty "user.home")
+        dir    (doto (java.io.File/createTempFile "noum-home" "") (.delete) (.mkdirs))
+        n-dir  (doto (java.io.File. dir ".noumenon") .mkdirs)
+        creds  (java.io.File. n-dir "credentials")]
+    (spit creds content)
+    (try
+      (System/setProperty "user.home" (.getAbsolutePath dir))
+      (f)
+      (finally
+        (System/setProperty "user.home" home)
+        (.delete creds)
+        (.delete n-dir)
+        (.delete dir)))))
 
-(deftest make-messages-fn-glm-requires-token
-  (testing "GLM provider throws when NOUMENON_ZAI_TOKEN is not set"
-    ;; This test only runs when no token is available (env or .env file)
-    (when-not (token-available? "NOUMENON_ZAI_TOKEN")
+(deftest resolve-provider-config-prefers-edn-over-legacy-env
+  (testing "NOUMENON_LLM_PROVIDERS_EDN entry overrides legacy env key"
+    (with-redefs [llm/getenv (fn [k]
+                                 (case k
+                                   "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:base-url \"https://gateway.example\" :api-key \"edn-key\"}}"
+                                   "NOUMENON_ZAI_TOKEN" "legacy-key"
+                                   nil))]
+      (is (= {:base-url "https://gateway.example" :api-key "edn-key"}
+             (llm/resolve-provider-config :glm))))))
+
+(deftest resolve-provider-config-falls-back-to-legacy-env
+  (testing "legacy env key remains compatible when provider EDN is unset"
+    (with-redefs [llm/getenv (fn [k]
+                                 (case k
+                                   "ANTHROPIC_API_KEY" "legacy-key"
+                                   nil))]
+      (is (= {:base-url "https://api.anthropic.com" :api-key "legacy-key"}
+             (llm/resolve-provider-config :claude-api))))))
+
+(deftest resolve-provider-config-local-mode-allows-file-fallback
+  (testing "local mode allows credentials file fallback"
+    (with-temp-creds-file "NOUMENON_ZAI_TOKEN=file-key\n"
+      (fn []
+        (with-redefs [llm/getenv (constantly nil)]
+          (is (= {:base-url "https://api.z.ai/api/anthropic" :api-key "file-key"}
+                 (llm/resolve-provider-config :glm))))))))
+
+(deftest resolve-provider-config-service-mode-disables-file-fallback
+  (testing "service mode only uses process env, not credentials file"
+    (with-temp-creds-file "NOUMENON_ZAI_TOKEN=file-key\n"
+      (fn []
+        (with-redefs [llm/getenv (fn [k]
+                                     (case k
+                                       "NOUMENON_RUNTIME_MODE" "service"
+                                       nil))]
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo
+               #"Missing API key"
+               (llm/resolve-provider-config :glm))))))))
+
+(deftest resolve-provider-config-validates-url
+  (testing "invalid base URL fails clearly"
+    (with-redefs [llm/getenv (fn [k]
+                                 (case k
+                                   "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:base-url \"not-a-url\" :api-key \"k\"}}"
+                                   nil))]
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
-           #"NOUMENON_ZAI_TOKEN"
-           (llm/make-messages-fn :glm {:model "m" :temperature 0.1 :max-tokens 128}))))))
-
-(deftest make-messages-fn-claude-api-requires-key
-  (testing "claude-api provider throws when ANTHROPIC_API_KEY is not set"
-    (when-not (token-available? "ANTHROPIC_API_KEY")
+           #"Invalid base URL"
+           (llm/resolve-provider-config :glm)))))
+  (testing "service mode requires https"
+    (with-redefs [llm/getenv (fn [k]
+                                 (case k
+                                   "NOUMENON_RUNTIME_MODE" "service"
+                                   "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:base-url \"http://gateway.example\" :api-key \"k\"}}"
+                                   nil))]
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
-           #"ANTHROPIC_API_KEY"
-           (llm/make-messages-fn :claude-api {:model "m" :temperature 0.1 :max-tokens 128}))))))
+           #"requires https"
+           (llm/resolve-provider-config :glm))))))
+
+(deftest resolve-provider-config-missing-key-error-does-not-leak-secret
+  (testing "missing-key error message does not include secret value"
+    (with-redefs [llm/getenv (fn [k]
+                               (case k
+                                 "NOUMENON_RUNTIME_MODE" "service"
+                                 nil))]
+      (try
+        (llm/resolve-provider-config :glm)
+        (is false "expected exception")
+        (catch clojure.lang.ExceptionInfo e
+          (is (re-find #"Missing API key" (.getMessage e)))
+          (is (not (re-find #"token=|api-key=|legacy-key|file-key|edn-key" (.getMessage e)))))))))
 
 (deftest make-messages-fn-claude-cli-returns-fn
   (testing "claude-cli provider returns a function"
