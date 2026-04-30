@@ -125,39 +125,6 @@
       (is (= 300 (:duration-ms result)))
       (is (< (abs (- 0.3 (:cost-usd result))) 1e-10)))))
 
-;; --- .env parsing ---
-
-(deftest parse-env-value-strips-quotes-and-comments
-  (let [parse @#'llm/parse-env-value]
-    (testing "strips surrounding double quotes"
-      (is (= "my-token" (parse "\"my-token\""))))
-    (testing "strips surrounding single quotes"
-      (is (= "my-token" (parse "'my-token'"))))
-    (testing "strips trailing inline comment"
-      (is (= "my-token" (parse "my-token # this is a comment"))))
-    (testing "strips quotes and trailing comment together"
-      (is (= "my-token" (parse "\"my-token\" # comment"))))
-    (testing "plain value passes through"
-      (is (= "sk-abc123" (parse "sk-abc123"))))))
-
-(deftest read-env-from-file-works
-  (let [read-fn @#'llm/read-env-from-file
-        tmp     (java.io.File/createTempFile "env-test" ".env")]
-    (try
-      (spit tmp "FOO=bar\nexport BAZ=\"quoted-val\" # comment\n")
-      (is (= "bar" (read-fn tmp "FOO")))
-      (is (= "quoted-val" (read-fn tmp "BAZ")))
-      (is (nil? (read-fn tmp "MISSING")))
-      (finally (.delete tmp)))))
-
-(deftest read-env-var-does-not-read-cwd-env
-  (testing ".env in cwd is not read (security: untrusted repo directories)"
-    (let [cwd-env (java.io.File. ".env-test-sec002")]
-      (try
-        (spit cwd-env "SEC002_TEST_VAR=should-not-be-read\n")
-        (is (nil? (#'llm/read-env-var "SEC002_TEST_VAR")))
-        (finally (.delete cwd-env))))))
-
 ;; --- Provider resolution ---
 
 (deftest provider->kw-known-providers
@@ -226,6 +193,13 @@
          #"Unrecognized provider"
          (llm/provider->kw "badprovider")))))
 
+(deftest provider->kw-claude-cli-migration-error
+  (testing "removed claude-cli provider returns migration guidance"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"claude-cli has been removed"
+         (llm/provider->kw "claude-cli")))))
+
 ;; --- Model aliases ---
 
 (deftest model-alias->id-known-aliases
@@ -251,21 +225,6 @@
 
 ;; --- Provider factory ---
 
-(defn- with-temp-creds-file [content f]
-  (let [home   (System/getProperty "user.home")
-        dir    (doto (java.io.File/createTempFile "noum-home" "") (.delete) (.mkdirs))
-        n-dir  (doto (java.io.File. dir ".noumenon") .mkdirs)
-        creds  (java.io.File. n-dir "credentials")]
-    (spit creds content)
-    (try
-      (System/setProperty "user.home" (.getAbsolutePath dir))
-      (f)
-      (finally
-        (System/setProperty "user.home" home)
-        (.delete creds)
-        (.delete n-dir)
-        (.delete dir)))))
-
 (deftest resolve-provider-config-prefers-edn-over-legacy-env
   (testing "NOUMENON_LLM_PROVIDERS_EDN entry overrides legacy env key"
     (with-redefs [llm/getenv (fn [k]
@@ -284,27 +243,6 @@
                                  nil))]
       (is (= {:base-url "https://api.anthropic.com" :api-key "legacy-key"}
              (llm/resolve-provider-config :claude-api))))))
-
-(deftest resolve-provider-config-local-mode-allows-file-fallback
-  (testing "local mode allows credentials file fallback"
-    (with-temp-creds-file "NOUMENON_ZAI_TOKEN=file-key\n"
-      (fn []
-        (with-redefs [llm/getenv (constantly nil)]
-          (is (= {:base-url "https://api.z.ai/api/anthropic" :api-key "file-key"}
-                 (llm/resolve-provider-config :glm))))))))
-
-(deftest resolve-provider-config-service-mode-disables-file-fallback
-  (testing "service mode only uses process env, not credentials file"
-    (with-temp-creds-file "NOUMENON_ZAI_TOKEN=file-key\n"
-      (fn []
-        (with-redefs [llm/getenv (fn [k]
-                                   (case k
-                                     "NOUMENON_RUNTIME_MODE" "service"
-                                     nil))]
-          (is (thrown-with-msg?
-               clojure.lang.ExceptionInfo
-               #"Missing API key"
-               (llm/resolve-provider-config :glm))))))))
 
 (deftest resolve-provider-config-validates-url
   (testing "invalid base URL fails clearly"

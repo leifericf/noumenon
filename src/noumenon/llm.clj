@@ -9,8 +9,6 @@
 ;; --- Provider/model defaults ---
 
 (def default-provider "glm")
-(def default-model-alias "sonnet")
-
 (def provider-aliases
   {"claude" "claude-api"})
 
@@ -77,8 +75,10 @@
   (let [provider-name (if (keyword? provider) (name provider) provider)
         normalized    (normalize-provider-name provider-name)]
     (when-not normalized
-      (throw (ex-info (str "Unrecognized provider: " provider-name
-                           ". Known providers: " (str/join ", " (supported-provider-names)))
+      (throw (ex-info (str (if (= "claude-cli" provider-name)
+                             "Provider claude-cli has been removed. Use claude-api (or claude) and configure an API key."
+                             (str "Unrecognized provider: " provider-name
+                                  ". Known providers: " (str/join ", " (supported-provider-names)))))
                       {:provider provider-name :known (supported-provider-names)})))
     (keyword normalized)))
 
@@ -236,45 +236,9 @@
   []
   (= "service" (runtime-mode)))
 
-(defn- parse-env-value
-  "Strip surrounding quotes and trailing inline comments from a .env value."
-  [v]
-  (-> v
-      str/trim
-      (str/replace #"\s+#.*$" "")
-      (str/replace #"^[\"']|[\"']$" "")))
-
-(defn- read-env-from-file
-  "Read a single env var from a .env file. Returns trimmed value or nil."
-  [^java.io.File env-file env-var]
-  (when (.exists env-file)
-    (some #(when-let [[_ v] (re-matches
-                             (re-pattern (str "(?:export\\s+)?" env-var "=(.+)"))
-                             (str/trim %))]
-             (parse-env-value v))
-          (str/split-lines (slurp env-file)))))
-
-(defn- trusted-env-paths
-  "Trusted locations for credentials (KEY=VALUE format):
-   ~/.noumenon/credentials (primary), explicit project dir .env,
-   and CWD .env only when deps.edn is present (dev indicator)."
-  []
-  (let [creds    (java.io.File. (System/getProperty "user.home") ".noumenon/credentials")
-        proj-dir (System/getProperty "noumenon.project.dir")
-        cwd      (System/getProperty "user.dir")]
-    (cond-> [creds]
-      proj-dir
-      (conj (java.io.File. proj-dir ".env"))
-      (and (not proj-dir) cwd (.exists (java.io.File. cwd "deps.edn")))
-      (conj (java.io.File. cwd ".env")))))
-
 (defn- read-env-var
-  "Read an environment variable, falling back to credentials file.
-   Checks ~/.noumenon/credentials, then project .env. Returns the trimmed value, or nil."
   [env-var]
-  (or (getenv env-var)
-      (when-not (service-mode?)
-        (some #(read-env-from-file % env-var) (trusted-env-paths)))))
+  (getenv env-var))
 
 (defn- parse-edn-env
   [env-var]
@@ -300,9 +264,7 @@
                                     (let [provider-kw  (keyword provider-name)
                                           configured   (provider-map-config provider-kw)
                                           configured-models (:models configured)
-                                          default-model (or (:default-model configured)
-                                                            (first configured-models)
-                                                            default-model-alias)]
+                                          default-model (:default-model configured)]
                                       [provider-name {:default?      (= provider-name default-p)
                                                       :default-model default-model
                                                       :models        (or configured-models [])}])))
@@ -458,7 +420,7 @@
 
 (defn resolve-provider-config
   "Resolve provider configuration to {:base-url :api-key} with precedence:
-   providers EDN map -> legacy env vars -> default base URL."
+   providers EDN map -> process env vars -> default base URL."
   [provider]
   (let [provider-kw (provider->kw provider)
         {:keys [env-var base-url]} (api-provider-config provider-kw)
