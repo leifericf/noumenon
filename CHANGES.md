@@ -2,11 +2,22 @@
 
 ## Unreleased
 
+### New
+
+- **Provider/model catalog commands** — Added `noum llm-providers` and `noum llm-models` for discovering configured providers, provider defaults, and available models.
+- **MCP provider/model catalog tools** — Added `noumenon_llm_providers` and `noumenon_llm_models` with help/schema metadata so agents can inspect defaults and model availability without reading config files.
+
+### Changed
+
+- **Provider default selection** — Noumenon now resolves one global default provider via `NOUMENON_DEFAULT_PROVIDER`, then `:default-provider` in `NOUMENON_LLM_PROVIDERS_EDN`, then built-in fallback.
+- **Provider model policy** — Each provider can declare `:models` plus a single `:default-model`; model selection now resolves per-provider defaults when `--model` is omitted.
+- **Dynamic model discovery** — `llm-models`/`noumenon_llm_models` prefer provider API discovery (`:models-path`, with known defaults) and fall back to configured `:models` when discovery is unavailable.
+
 ## 0.6.0
 
 ### New
 
-- **Provider-agnostic LLM config** — Added `NOUMENON_LLM_PROVIDERS_EDN` support for API providers, allowing per-provider `:base-url` and `:api-key` configuration (for example: `:glm`, `:claude-api`, gateway-backed providers like `:tencent`) through one canonical EDN map.
+- **Provider-agnostic LLM config** — Added `NOUMENON_LLM_PROVIDERS_EDN` support for API providers, allowing per-provider `:base-url` and `:api-key` configuration (for example: `:glm`, `:claude-api`, gateway-backed providers) through one canonical EDN map.
 
 ### Changed
 
