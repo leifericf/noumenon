@@ -110,7 +110,7 @@ re-analyzes when you opt in with `--reanalyze prompt-changed` or `--reanalyze mo
 noum open
 ```
 
-Electron desktop app with force-directed graph visualization, three-level drill-down, and a floating Ask overlay. [Node.js](https://nodejs.org) required.
+Electron desktop app with force-directed graph visualization, three-level drill-down, and a floating Ask overlay. The launcher auto-downloads the packaged app from [`leifericf/noumenon-app`](https://github.com/leifericf/noumenon-app) on first use. [Node.js](https://nodejs.org) required for dev builds.
 
 ## How It Works
 

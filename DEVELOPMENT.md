@@ -37,12 +37,13 @@ flowchart TB
 | `src/noumenon/` | JVM backend (Datomic, LLM, MCP, HTTP) |
 | `launcher/` | Babashka CLI launcher (`noum`) |
 | `launcher/src/noum/tui/` | Custom TUI library (JLine3) |
-| `ui/` | Electron + ClojureScript visual UI |
 | `resources/schema/` | Datomic schema (EDN) |
 | `resources/queries/` | Named Datalog queries and rules |
 | `resources/prompts/` | Prompt templates |
-| `docs/` | GitHub Pages site + OpenAPI spec |
+| `resources/openapi.yaml` | Hand-written OpenAPI 3.1 spec |
 | `test/` | Test suite |
+
+The Electron desktop app lives in [`leifericf/noumenon-app`](https://github.com/leifericf/noumenon-app); the website at [`leifericf/noumenon-site`](https://github.com/leifericf/noumenon-site).
 
 ## Data Model
 
