@@ -35,7 +35,25 @@ Provider API configuration also supports a provider-agnostic EDN map:
 ```clojure
 NOUMENON_LLM_PROVIDERS_EDN='{:glm {:base-url "https://api.z.ai/api/anthropic" :api-key "..."}
                               :claude-api {:base-url "https://api.anthropic.com" :api-key "..."}
-                              :tencent {:base-url "https://your-litellm-gateway" :api-key "..."}}'
+                              :default-provider :gateway
+                              :gateway {:base-url "https://your-litellm-gateway"
+                                        :api-key "..."
+                                        :models-path "/v1/models"
+                                        :models ["gpt-4.1-mini" "gpt-4.1"]
+                                        :default-model "gpt-4.1-mini"}}'
+```
+
+` :models` is optional; when present, selected model must be one of the listed values.
+`:default-model` is optional; when present, it is used when `--model` is omitted.
+`:default-provider` is optional; when present, it is used when `--provider` is omitted.
+You can also set `NOUMENON_DEFAULT_PROVIDER` (takes precedence over `:default-provider`).
+`:models-path` is optional; used for dynamic model discovery (defaults are built in for known providers).
+
+Inspect current provider/model defaults with:
+
+```bash
+noum llm-providers
+noum llm-models --provider gateway
 ```
 
 Provider config resolution precedence for API providers is:

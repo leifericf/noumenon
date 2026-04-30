@@ -188,6 +188,13 @@
    {:name "noumenon_list_databases"
     :description "List all noumenon databases with entity counts, pipeline stages, and cost."
     :inputSchema {:type "object" :properties {}}}
+   {:name "noumenon_llm_providers"
+    :description "List configured LLM providers, their available models, and defaults. Uses NOUMENON_LLM_PROVIDERS_EDN and NOUMENON_DEFAULT_PROVIDER."
+    :inputSchema {:type "object" :properties {}}}
+   {:name "noumenon_llm_models"
+    :description "List available models for a provider. Tries provider API first and falls back to configured :models."
+    :inputSchema {:type "object"
+                  :properties {"provider" {:type "string" :description "Provider name (optional; defaults to configured default provider)"}}}}
    {:name "noumenon_benchmark_run"
     :description "Run a benchmark comparing LLM answers across knowledge graph layers. WARNING: Expensive — uses many LLM calls. Use max_questions to limit scope."
     :inputSchema {:type "object"
@@ -645,6 +652,13 @@
                         stats))))
       (tool-result "No databases found."))))
 
+(defn- handle-llm-providers [_args _defaults]
+  (tool-result (pr-str (llm/provider-catalog))))
+
+(defn- handle-llm-models [args _defaults]
+  (let [provider (or (args "provider") (llm/default-provider-name))]
+    (tool-result (pr-str (llm/discover-provider-models provider)))))
+
 (defn- handle-benchmark-run [args defaults]
   (validate-llm-inputs! args)
   (with-conn args defaults
@@ -1043,6 +1057,8 @@
    "noumenon_enrich"            handle-enrich
    "noumenon_synthesize"        handle-synthesize
    "noumenon_list_databases"    handle-list-databases
+   "noumenon_llm_providers"     handle-llm-providers
+   "noumenon_llm_models"        handle-llm-models
    "noumenon_benchmark_run"     handle-benchmark-run
    "noumenon_benchmark_results" handle-benchmark-results
    "noumenon_benchmark_compare" handle-benchmark-compare

@@ -172,6 +172,50 @@
   (testing "keyword inputs resolve correctly"
     (is (= :glm (llm/provider->kw :glm)))))
 
+(deftest default-provider-name-from-edn-and-env
+  (testing "NOUMENON_DEFAULT_PROVIDER overrides map default"
+    (with-redefs [llm/getenv (fn [k]
+                               (case k
+                                 "NOUMENON_LLM_PROVIDERS_EDN" "{:default-provider :glm :gateway {:api-key \"k\"}}"
+                                 "NOUMENON_DEFAULT_PROVIDER" "gateway"
+                                 nil))]
+      (is (= "gateway" (llm/default-provider-name))))))
+
+(deftest provider-catalog-reports-defaults-and-models
+  (with-redefs [llm/getenv (fn [k]
+                             (case k
+                               "NOUMENON_LLM_PROVIDERS_EDN" "{:default-provider :gateway :gateway {:api-key \"k\" :models [\"m1\" \"m2\"] :default-model \"m2\"}}"
+                               nil))]
+    (let [catalog (llm/provider-catalog)]
+      (is (= "gateway" (:default-provider catalog)))
+      (is (= ["m1" "m2"] (get-in catalog [:providers "gateway" :models])))
+      (is (= "m2" (get-in catalog [:providers "gateway" :default-model]))))))
+
+(deftest discover-provider-models-prefers-api
+  (with-redefs [llm/getenv (fn [k]
+                             (case k
+                               "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:api-key \"k\" :models [\"fallback\"]}}"
+                               nil))
+                org.httpkit.client/request (fn [_]
+                                             (delay {:status 200
+                                                     :body (json/write-str {:data [{:id "m-api-1"} {:id "m-api-2"}]})
+                                                     :error nil}))]
+    (let [r (llm/discover-provider-models "glm")]
+      (is (= :api (:source r)))
+      (is (= ["m-api-1" "m-api-2"] (:models r))))))
+
+(deftest discover-provider-models-falls-back-on-api-failure
+  (with-redefs [llm/getenv (fn [k]
+                             (case k
+                               "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:api-key \"k\" :models [\"fallback\"] :default-model \"fallback\"}}"
+                               nil))
+                org.httpkit.client/request (fn [_]
+                                             (delay {:status 500 :body "x" :error nil}))]
+    (let [r (llm/discover-provider-models "glm")]
+      (is (= :config (:source r)))
+      (is (= ["fallback"] (:models r)))
+      (is (= "fallback" (:default-model r))))))
+
 (deftest provider->kw-rejects-unknown
   (testing "unrecognized provider throws"
     (is (thrown-with-msg?
@@ -296,6 +340,38 @@
         (catch clojure.lang.ExceptionInfo e
           (is (re-find #"Missing API key" (.getMessage e)))
           (is (not (re-find #"token=|api-key=|legacy-key|file-key|edn-key" (.getMessage e)))))))))
+
+(deftest resolve-opts-uses-provider-default-model
+  (testing "provider :default-model is used when --model is not provided"
+    (with-redefs [llm/getenv (fn [k]
+                               (case k
+                                 "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:api-key \"k\" :default-model \"my-gateway-model\"}}"
+                                 nil))]
+      (is (= "my-gateway-model" (:model-id (llm/resolve-opts {:provider "glm"})))))))
+
+(deftest resolve-opts-validates-model-against-provider-models
+  (testing "selected model must be in provider :models when configured"
+    (with-redefs [llm/getenv (fn [k]
+                               (case k
+                                 "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:api-key \"k\" :models [\"m1\" \"m2\"] :default-model \"m1\"}}"
+                                 nil))]
+      (is (= "m1" (:model-id (llm/resolve-opts {:provider "glm"}))))
+      (is (= "m2" (:model-id (llm/resolve-opts {:provider "glm" :model "m2"}))))
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"not configured for provider"
+           (llm/resolve-opts {:provider "glm" :model "m3"}))))))
+
+(deftest resolve-opts-validates-default-model-membership
+  (testing ":default-model must be listed in :models when :models exists"
+    (with-redefs [llm/getenv (fn [k]
+                               (case k
+                                 "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:api-key \"k\" :models [\"m1\"] :default-model \"m2\"}}"
+                                 nil))]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"default-model is not listed"
+           (llm/resolve-opts {:provider "glm"}))))))
 
 (deftest make-messages-fn-claude-cli-returns-fn
   (testing "claude-cli provider returns a function"

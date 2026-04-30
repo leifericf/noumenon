@@ -439,6 +439,17 @@
                        head))
             {:exit 0 :result stats}))))))
 
+(defn do-llm-providers
+  "Show configured LLM providers, models, and defaults."
+  [_opts]
+  {:exit 0 :result (llm/provider-catalog)})
+
+(defn do-llm-models
+  "Show provider models using API discovery when available."
+  [opts]
+  (let [provider (or (:provider opts) (llm/default-provider-name))]
+    {:exit 0 :result (llm/discover-provider-models provider)}))
+
 ;; --- List Databases ---
 
 (defn- format-date [inst]
@@ -916,6 +927,8 @@
     "ask"              (do-ask parsed)
     "show-schema"      (do-show-schema parsed)
     "status"           (do-status parsed)
+    "llm-providers"    (do-llm-providers parsed)
+    "llm-models"       (do-llm-models parsed)
     "list-databases"   (do-list-databases parsed)
     "benchmark"        (do-benchmark parsed)
     "digest"           (do-digest parsed)

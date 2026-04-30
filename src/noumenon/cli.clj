@@ -43,8 +43,12 @@
       {:ok value}
       {:error (:error-invalid spec) :value raw})))
 
+(defn- valid-providers
+  []
+  (set (conj (llm/supported-provider-names) "claude")))
+
 (def ^:private all-valid-providers
-  #{"glm" "claude" "claude-api" "claude-cli"})
+  (fn [raw] ((valid-providers) raw)))
 
 ;; --- Reusable flag atoms ---
 
@@ -324,6 +328,20 @@
    "status"         {:spec simple-command-spec
                      :summary "Show import counts for a repository"
                      :usage "status [options] <repo-path>"}
+   "llm-providers"  {:spec {:flags []
+                            :initial {:subcommand "llm-providers"}
+                            :positionals {:required 0 :error nil :keys []}}
+                     :summary "Show configured LLM providers, models, and defaults"
+                     :usage "llm-providers"
+                     :epilog "Reads NOUMENON_LLM_PROVIDERS_EDN and NOUMENON_DEFAULT_PROVIDER.
+Shows each provider's available models and default model."}
+   "llm-models"     {:spec {:flags [(assoc provider-flag :valid all-valid-providers)]
+                            :initial {:subcommand "llm-models"}
+                            :positionals {:required 0 :error nil :keys []}}
+                     :summary "Show models for a provider (API first, config fallback)"
+                     :usage "llm-models [--provider <name>]"
+                     :epilog "Fetches provider models dynamically when supported, and falls back to
+configured :models when discovery is unavailable."}
    "show-schema"    {:spec simple-command-spec
                      :summary "Show the database schema with all attributes and types"
                      :usage "show-schema [options] <repo-path>"}
@@ -431,7 +449,7 @@
                 :epilog "Starts an HTTP API server on 127.0.0.1 for the noum launcher\nand future Electron UI. Writes connection info to ~/.noumenon/daemon.edn.\nUse --port to specify a fixed port, or omit for auto-assignment.\nUse --token for remote access authentication."}})
 
 (def ^:private command-order
-  ["digest" "import" "analyze" "enrich" "synthesize" "embed" "update" "watch" "query" "show-schema" "status" "list-databases" "ask" "serve" "daemon" "benchmark" "introspect" "reseed" "artifact-history"])
+  ["digest" "import" "analyze" "enrich" "synthesize" "embed" "update" "watch" "query" "show-schema" "status" "llm-providers" "llm-models" "list-databases" "ask" "serve" "daemon" "benchmark" "introspect" "reseed" "artifact-history"])
 
 ;; --- Help text generation ---
 

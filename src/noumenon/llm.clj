@@ -19,13 +19,57 @@
 (def canonical-providers
   #{"glm" "claude-api" "claude-cli"})
 
+(defn- getenv
+  [k]
+  (System/getenv k))
+
+(defn- parse-provider-map
+  []
+  (if-let [raw (getenv "NOUMENON_LLM_PROVIDERS_EDN")]
+    (let [parsed (try
+                   (edn/read-string raw)
+                   (catch Exception e
+                     (throw (ex-info "NOUMENON_LLM_PROVIDERS_EDN contains invalid EDN"
+                                     {:env-var "NOUMENON_LLM_PROVIDERS_EDN"}
+                                     e))))]
+      (when-not (map? parsed)
+        (throw (ex-info "NOUMENON_LLM_PROVIDERS_EDN must be an EDN map"
+                        {:env-var "NOUMENON_LLM_PROVIDERS_EDN"})))
+      parsed)
+    {}))
+
+(defn- configured-provider-names
+  []
+  (->> (parse-provider-map)
+       keys
+       (filter keyword?)
+       (remove #{:default-provider})
+       (map name)
+       set))
+
+(defn supported-provider-names
+  []
+  (sort (into canonical-providers (configured-provider-names))))
+
+(defn default-provider-name
+  []
+  (let [providers-edn (parse-provider-map)
+        env-default   (getenv "NOUMENON_DEFAULT_PROVIDER")
+        map-default   (some-> (:default-provider providers-edn) name)
+        selected      (or env-default map-default default-provider)]
+    (if ((set (supported-provider-names)) selected)
+      selected
+      (throw (ex-info (str "Default provider is not supported: " selected)
+                      {:provider selected :known (supported-provider-names)})))))
+
 (defn normalize-provider-name
   "Normalize provider name string to canonical form.
    Returns nil when the input is not a supported provider."
   [provider]
   (when provider
-    (let [normalized (get provider-aliases provider provider)]
-      (when (canonical-providers normalized)
+    (let [normalized (get provider-aliases provider provider)
+          providers  (set (supported-provider-names))]
+      (when (providers normalized)
         normalized))))
 
 (defn provider->kw
@@ -36,8 +80,8 @@
         normalized    (normalize-provider-name provider-name)]
     (when-not normalized
       (throw (ex-info (str "Unrecognized provider: " provider-name
-                           ". Known providers: " (str/join ", " (sort canonical-providers)))
-                      {:provider provider-name :known (sort canonical-providers)})))
+                           ". Known providers: " (str/join ", " (supported-provider-names)))
+                      {:provider provider-name :known (supported-provider-names)})))
     (keyword normalized)))
 
 ;; --- Pricing ---
@@ -271,15 +315,13 @@
 
 (def ^:private api-provider-config
   {:glm       {:env-var  "NOUMENON_ZAI_TOKEN"
-               :base-url "https://api.z.ai/api/anthropic"}
+               :base-url "https://api.z.ai/api/anthropic"
+               :models-path "/v1/models"}
    :claude-api {:env-var  "ANTHROPIC_API_KEY"
-                :base-url "https://api.anthropic.com"}})
+                :base-url "https://api.anthropic.com"
+                :models-path "/v1/models"}})
 
 (def ^:private runtime-modes #{"local" "service"})
-
-(defn- getenv
-  [k]
-  (System/getenv k))
 
 (defn- runtime-mode
   []
@@ -346,7 +388,127 @@
 
 (defn- provider-map-config
   [provider-kw]
-  (get (parse-edn-env "NOUMENON_LLM_PROVIDERS_EDN") provider-kw))
+  (get (parse-provider-map) provider-kw))
+
+(defn provider-catalog
+  []
+  (let [providers (parse-provider-map)
+        names     (supported-provider-names)
+        default-p (default-provider-name)]
+    {:default-provider default-p
+     :providers        (into {}
+                             (map (fn [provider-name]
+                                    (let [provider-kw  (keyword provider-name)
+                                          configured   (provider-map-config provider-kw)
+                                          configured-models (:models configured)
+                                          default-model (or (:default-model configured)
+                                                            (first configured-models)
+                                                            default-model-alias)]
+                                      [provider-name {:default?      (= provider-name default-p)
+                                                      :default-model default-model
+                                                      :models        (or configured-models [])}])))
+                             names)}))
+
+(defn- model-id-from-entry
+  [entry]
+  (or (:id entry) (:name entry) (:model entry)))
+
+(defn- parse-models-response
+  [body]
+  (let [parsed (json/read-str body :key-fn keyword)
+        data   (cond
+                 (vector? parsed) parsed
+                 (vector? (:data parsed)) (:data parsed)
+                 :else [])]
+    (->> data
+         (map model-id-from-entry)
+         (filter string?)
+         vec)))
+
+(defn- models-url
+  [provider-kw base-url]
+  (let [configured (provider-map-config provider-kw)
+        path       (or (:models-path configured)
+                       (:models-path (api-provider-config provider-kw)))]
+    (when path
+      (str (str/replace (str/trim base-url) #"/+$" "") path))))
+
+(defn discover-provider-models
+  ([provider] (discover-provider-models provider {}))
+  ([provider {:keys [timeout-ms] :or {timeout-ms 15000}}]
+   (let [provider-kw              (provider->kw provider)
+         configured               (provider-map-config provider-kw)
+         {:keys [env-var base-url]} (api-provider-config provider-kw)
+         resolved-url             (or (:base-url configured) base-url)
+         api-key                  (or (:api-key configured) (read-env-var env-var))
+         url                      (models-url provider-kw resolved-url)
+         fallback                 (vec (:models configured []))]
+     (if-not url
+       {:provider      (name provider-kw)
+        :default-model (or (:default-model configured) (first fallback) default-model-alias)
+        :models        fallback
+        :source        :config}
+       (try
+         (let [{:keys [status body error]} @(http/request {:url url
+                                                           :method :get
+                                                           :headers {"x-api-key" api-key
+                                                                     "anthropic-version" "2023-06-01"}
+                                                           :timeout timeout-ms})]
+           (if (or error (not= 200 status))
+             {:provider      (name provider-kw)
+              :default-model (or (:default-model configured) (first fallback) default-model-alias)
+              :models        fallback
+              :source        :config
+              :warning       (str "Model discovery unavailable (HTTP " status "), using configured fallback")}
+             (let [models (parse-models-response body)]
+               {:provider      (name provider-kw)
+                :default-model (or (:default-model configured) (first models) (first fallback) default-model-alias)
+                :models        (if (seq models) models fallback)
+                :source        (if (seq models) :api :config)})))
+         (catch Exception _
+           {:provider      (name provider-kw)
+            :default-model (or (:default-model configured) (first fallback) default-model-alias)
+            :models        fallback
+            :source        :config
+            :warning       "Model discovery failed, using configured fallback"}))))))
+
+(defn- provider-default-model
+  [provider-kw]
+  (:default-model (provider-map-config provider-kw)))
+
+(defn- provider-models
+  [provider-kw]
+  (:models (provider-map-config provider-kw)))
+
+(defn- normalize-model-name
+  [model-name]
+  (if (known-model-ids model-name)
+    (model-alias->id model-name)
+    model-name))
+
+(defn- configured-model-set
+  [provider-kw]
+  (some->> (provider-models provider-kw)
+           (map normalize-model-name)
+           set))
+
+(defn- resolve-model-id
+  [provider-kw model]
+  (let [configured    (configured-model-set provider-kw)
+        default-model (provider-default-model provider-kw)
+        selected   (or model
+                       default-model
+                       (first (provider-models provider-kw))
+                       default-model-alias)
+        resolved   (normalize-model-name selected)]
+    (when (and default-model (seq configured)
+               (not (configured (normalize-model-name default-model))))
+      (throw (ex-info (str "Configured :default-model is not listed in :models for provider " (name provider-kw))
+                      {:provider provider-kw :default-model default-model :allowed (sort configured)})))
+    (when (and (seq configured) (not (configured resolved)))
+      (throw (ex-info (str "Model " resolved " is not configured for provider " (name provider-kw))
+                      {:provider provider-kw :model resolved :allowed (sort configured)})))
+    resolved))
 
 (defn- normalize-base-url
   [base-url]
@@ -447,10 +609,11 @@
 
 (defn resolve-opts
   "Resolve provider/model from option defaults. Returns map with :provider-kw
-   and :model-id — the canonical, validated identifiers."
+    and :model-id — the canonical, validated identifiers."
   [{:keys [provider model]}]
-  {:provider-kw (provider->kw (or provider default-provider))
-   :model-id    (model-alias->id (or model default-model-alias))})
+  (let [provider-kw (provider->kw (or provider (default-provider-name)))]
+    {:provider-kw provider-kw
+     :model-id    (resolve-model-id provider-kw model)}))
 
 (defn make-messages-fn-from-opts
   "Build a messages-based invoke-fn from provider/model options.
