@@ -156,7 +156,7 @@ noum <command> [options]    # single-shot mode
 noum help <command>         # command-specific help
 ```
 
-Run `noum help` for the full command list. The CLI and MCP server expose the same capabilities. See [`docs/openapi.yaml`](docs/openapi.yaml) for the HTTP API spec.
+Run `noum help` for the full command list. The CLI and MCP server expose the same capabilities. See [`resources/openapi.yaml`](resources/openapi.yaml) for the HTTP API spec.
 
 ## Development
 
