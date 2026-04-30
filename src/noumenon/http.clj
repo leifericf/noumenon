@@ -278,7 +278,7 @@
           (ok (run-import ctx nil)))))))
 
 (defn- run-analyze [{:keys [conn meta-db repo-path]} params config progress-fn]
-  (let [{:keys [prompt-fn model-id]}
+  (let [{:keys [prompt-fn model-id provider-kw]}
         (llm/wrap-as-prompt-fn-from-opts (resolve-provider params config))
         concurrency (min (or (:concurrency params) 3) 20)
         selector    (select-keys params [:path :include :exclude :lang])
@@ -286,6 +286,7 @@
                                            (cond-> (assoc selector
                                                           :meta-db meta-db
                                                           :model-id model-id
+                                                          :provider (name provider-kw)
                                                           :concurrency concurrency
                                                           :progress-fn progress-fn)
                                              (:max_files params)
@@ -323,23 +324,25 @@
     (with-repo params (:db-dir config)
       (fn [{:keys [conn meta-db repo-path]}]
         (let [opts (if (:analyze params)
-                     (let [{:keys [prompt-fn model-id]}
+                     (let [{:keys [prompt-fn model-id provider-kw]}
                            (llm/wrap-as-prompt-fn-from-opts
                             (resolve-provider params config))]
                        (assoc (select-keys params [:path :include :exclude :lang])
                               :concurrency 8 :analyze? true
-                              :meta-db meta-db :model-id model-id :invoke-llm prompt-fn))
+                              :meta-db meta-db :model-id model-id
+                              :provider (name provider-kw) :invoke-llm prompt-fn))
                      (assoc (select-keys params [:path :include :exclude :lang])
                             :concurrency 8))
               result (sync/update-repo! conn repo-path repo-path opts)]
           (ok result))))))
 
 (defn- run-synthesize [{:keys [conn meta-db db-name]} params config progress-fn]
-  (let [{:keys [prompt-fn model-id]}
+  (let [{:keys [prompt-fn model-id provider-kw]}
         (llm/wrap-as-prompt-fn-from-opts (resolve-provider params config))]
     (when progress-fn (progress-fn {:current 0 :total 0 :message "Synthesizing architecture..."}))
     (synthesize/synthesize-repo! conn prompt-fn
-                                 {:meta-db meta-db :model-id model-id :repo-name db-name})))
+                                 {:meta-db meta-db :provider (name provider-kw)
+                                  :model-id model-id :repo-name db-name})))
 
 (defn- handle-synthesize [request config]
   (let [params (parse-json-body request)]
@@ -350,7 +353,7 @@
           (ok (run-synthesize ctx params config nil)))))))
 
 (defn- run-digest [{:keys [conn meta-db db-dir db-name repo-path]} params config progress-fn]
-  (let [{:keys [prompt-fn model-id]}
+  (let [{:keys [prompt-fn model-id provider-kw]}
         (llm/wrap-as-prompt-fn-from-opts (resolve-provider params config))
         step-progress (fn [step-name inner-fn]
                         (when progress-fn
@@ -369,13 +372,14 @@
                                    #(let [r (analyze/analyze-repo! conn repo-path prompt-fn
                                                                    (assoc selector
                                                                           :meta-db meta-db :model-id model-id
+                                                                          :provider (name provider-kw)
                                                                           :concurrency 3 :progress-fn (step-fn "analyze")))]
                                       (select-keys r [:files-analyzed :total-usage]))))
         synth-r   (when-not (:skip_synthesize params)
                     (step-progress "synthesize"
                                    #(synthesize/synthesize-repo!
                                      conn prompt-fn
-                                     {:meta-db meta-db :model-id model-id
+                                     {:meta-db meta-db :provider (name provider-kw) :model-id model-id
                                       :repo-name (last (str/split repo-path #"/"))})))
         bench-r   (when-not (:skip_benchmark params)
                     (step-progress "benchmark"

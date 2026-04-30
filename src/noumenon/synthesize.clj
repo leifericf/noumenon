@@ -528,14 +528,20 @@
 
 (defn- build-provenance-tx
   "Build the provenance transaction entity for a synthesis run."
-  [template model-id resolved-model usage]
+  [provider template model-id resolved-model usage]
   (let [prompt-hash (subs (sha256-hex template) 0 16)
+        model-source (cond
+                       resolved-model :resolved-model
+                       model-id       :requested-model
+                       :else          :unknown)
         cost        (llm/estimate-cost (or resolved-model model-id "")
                                        (:input-tokens usage 0)
                                        (:output-tokens usage 0))]
     (cond-> {:db/id "datomic.tx"
              :tx/op :synthesize
              :tx/source :llm
+             :tx/provider (or provider "unknown")
+             :tx/model-source model-source
              :tx/model (or resolved-model model-id "unknown")
              :prov/prompt-hash prompt-hash
              :prov/analyzed-at (Date.)}
@@ -545,7 +551,7 @@
 
 (defn- transact-and-finalize!
   "Retract old synthesis, transact new components, derive deps. Returns result map."
-  [conn parsed model-id resolved-model usage start-ms mode-info]
+  [conn parsed provider model-id resolved-model usage start-ms mode-info]
   (if-not (and parsed (seq (:components parsed)))
     (do (log! "synthesize/error" "Failed to parse synthesis response")
         (merge {:components 0 :files-classified 0
@@ -557,7 +563,7 @@
           _          (when (seq retract-tx)
                        (d/transact conn {:tx-data retract-tx}))
           create-tx  (vec (concat (components->tx-data (:components parsed))
-                                  [(build-provenance-tx template-str model-id
+                                  [(build-provenance-tx provider template-str model-id
                                                         resolved-model usage)]))]
       (d/transact conn {:tx-data create-tx})
       (let [{:keys [edges-derived]} (derive-component-deps! conn)
@@ -580,7 +586,7 @@
    `invoke-llm` is (prompt -> {:text string :usage map :resolved-model string}).
    opts: {:meta-db :model-id :repo-name :on-progress}
    Returns {:components n :files-classified n :elapsed-ms n :usage map :mode kw}."
-  [conn invoke-llm {:keys [meta-db model-id repo-name on-progress]}]
+  [conn invoke-llm {:keys [meta-db model-id provider repo-name on-progress]}]
   (let [start-ms (System/currentTimeMillis)
         db       (d/db conn)
         data     (prefetch-codebase-data db)]
@@ -597,12 +603,12 @@
                                            {:status 400 :message "Run: noum reseed"})))
                 {:keys [parsed usage resolved-model]}
                 (invoke-and-parse invoke-llm template repo-name data)]
-            (transact-and-finalize! conn parsed model-id resolved-model usage start-ms
+            (transact-and-finalize! conn parsed provider model-id resolved-model usage start-ms
                                     {:mode :single-call}))
           ;; Large repo: hierarchical map-reduce
           (let [{:keys [parsed usage resolved-model mode partitions]}
                 (synthesize-hierarchical invoke-llm data
                                          {:meta-db meta-db :repo-name repo-name
                                           :on-progress on-progress})]
-            (transact-and-finalize! conn parsed model-id resolved-model usage start-ms
+            (transact-and-finalize! conn parsed provider model-id resolved-model usage start-ms
                                     {:mode mode :partitions partitions})))))))

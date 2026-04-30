@@ -280,7 +280,7 @@
 
 (defn- build-analyze-prov-tx
   "Build the provenance transaction entity for an analysis run. Pure."
-  [{:keys [model-version prompt-hash-val analyzer usage]}]
+  [{:keys [provider model-source model-version prompt-hash-val analyzer usage]}]
   (let [cost (let [raw (:cost-usd usage 0.0)]
                (if (pos? raw)
                  raw
@@ -290,6 +290,8 @@
     (cond-> {:db/id              "datomic.tx"
              :tx/op              :analyze
              :tx/source          :llm
+             :tx/provider        (or provider "unknown")
+             :tx/model-source    (or model-source :unknown)
              :tx/model           (or model-version "unknown")
              :tx/analyzer        (or analyzer "noumenon.analyze/0.1.0")
              :prov/model-version (or model-version "unknown")
@@ -478,15 +480,22 @@
 (defn analyze-file!
   "Analyze a single file. Returns {:status :ok/:parse-error/:error, :usage map-or-nil}.
    Retries once on parse errors (unparseable LLM response)."
-  [conn repo-path file-map {:keys [prompt-template prompt-hash-val invoke-llm]}]
+  [conn repo-path file-map {:keys [provider model-id prompt-template prompt-hash-val invoke-llm]}]
   (let [{:keys [file/path file/lang]} file-map]
     (try
       (let [{:keys [prompt truncated?]} (build-file-prompt (d/db conn) repo-path
                                                            path lang prompt-template)
-            result (invoke-with-retry invoke-llm prompt truncated? path)]
+            result (invoke-with-retry invoke-llm prompt truncated? path)
+            model-source (cond
+                           (:resolved-model result) :resolved-model
+                           model-id                :requested-model
+                           :else                   :unknown)
+            model-version (or (:resolved-model result) model-id "unknown")]
         (if-let [analysis (:analysis result)]
           (let [tx-data (analysis->tx-data path analysis
-                                           {:model-version   (or (:resolved-model result) "unknown")
+                                           {:model-source    model-source
+                                            :model-version   model-version
+                                            :provider        provider
                                             :prompt-hash-val prompt-hash-val
                                             :analyzer        "noumenon.analyze/0.1.0"
                                             :usage           (:usage result)})]
@@ -637,7 +646,7 @@
    `opts` may include :model-id, :concurrency, :min-delay-ms.
    Returns summary map with :total-usage."
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
-  ([conn repo-path invoke-llm {:keys [meta-db model-id concurrency min-delay-ms max-files progress-fn
+  ([conn repo-path invoke-llm {:keys [meta-db model-id provider concurrency min-delay-ms max-files progress-fn
                                       path include exclude lang]
                                :or   {concurrency 3 min-delay-ms 0}}]
    (let [head-paths    (into #{} (map :path) (files/parse-ls-tree (files/git-ls-tree repo-path)))
@@ -652,6 +661,7 @@
          files         (if max-files (vec (take max-files files)) files)
          total         (count files)
          analysis-opts {:prompt-template (:template prompt-map)
+                        :provider provider
                         :prompt-hash-val prompt-h
                         :invoke-llm invoke-llm}]
      (log-drift-recommendations! dbv prompt-h model-id)

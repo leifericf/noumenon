@@ -192,6 +192,16 @@
   :db/cardinality :db.cardinality/one
   :db/doc         "LLM model identifier for LLM-sourced transactions"}
 
+ {:db/ident       :tx/model-source
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Source of tx/model — :resolved-model, :requested-model, or :unknown"}
+
+ {:db/ident       :tx/provider
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "LLM provider identifier for LLM-sourced transactions"}
+
  {:db/ident       :tx/input-tokens
   :db/valueType   :db.type/long
   :db/cardinality :db.cardinality/one

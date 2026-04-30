@@ -239,6 +239,8 @@
                   :confidence 0.8}
         tx-data  (analyze/analysis->tx-data "src/foo.clj" analysis
                                             {:model-version "test-model"
+                                             :provider "glm"
+                                             :model-source :requested-model
                                              :prompt-hash-val "abc123"
                                              :analyzer "test/0.1"})]
     (is (vector? tx-data))
@@ -253,6 +255,9 @@
     (let [prov (second tx-data)]
       (is (= :analyze (:tx/op prov)))
       (is (= :llm (:tx/source prov)))
+      (is (= "glm" (:tx/provider prov)))
+      (is (= :requested-model (:tx/model-source prov)))
+      (is (= "test-model" (:tx/model prov)))
       (is (= "test-model" (:prov/model-version prov)))
       (is (= "abc123" (:prov/prompt-hash prov)))
       (is (inst? (:prov/analyzed-at prov))))))

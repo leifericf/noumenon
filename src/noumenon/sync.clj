@@ -285,6 +285,7 @@
                            (assoc selector
                                   :meta-db (:meta-db opts)
                                   :model-id (:model-id opts)
+                                  :provider (:provider opts)
                                   :concurrency (or (:analyze-concurrency opts) 3)
                                   :min-delay-ms 0)))
               calls-r   (when (or post-r analyze-r)
