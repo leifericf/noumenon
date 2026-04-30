@@ -64,7 +64,7 @@
 
 (def ^:private provider-flag
   {:flag "--provider" :key :provider :parse :string
-   :desc "Provider: glm (default), claude-api, claude-cli (alias: claude)"
+   :desc "Provider: glm (default), claude-api (alias: claude)"
    :error-invalid :invalid-provider :error-missing :missing-provider-value})
 
 (def ^:private verbose-flags

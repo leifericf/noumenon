@@ -126,9 +126,10 @@
 (defn- build-analyze-opts
   "Build the options map for analyze-repo! from CLI opts."
   [{:keys [concurrency min-delay max-files path include exclude lang]
-    :or   {concurrency 3 min-delay 0}} model-id meta-db]
+    :or   {concurrency 3 min-delay 0}} model-id provider meta-db]
   (cond-> {:meta-db      meta-db
            :model-id     model-id
+           :provider     provider
            :concurrency  concurrency
            :min-delay-ms min-delay
            :path         path
@@ -151,13 +152,13 @@
         (with-existing-db
           ctx
           (fn [{:keys [conn meta-db]}]
-            (let [{:keys [prompt-fn model-id]}
+            (let [{:keys [prompt-fn model-id provider-kw]}
                   (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})
                   prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template meta-db)))]
               (prepare-reanalysis! conn (d/db conn) reanalyze
                                    {:prompt-hash prompt-hash :model-id model-id})
               (let [result (analyze/analyze-repo! conn repo-path prompt-fn
-                                                  (build-analyze-opts opts model-id meta-db))]
+                                                  (build-analyze-opts opts model-id (name provider-kw) meta-db))]
                 (log! (str "Next: run '" cli/program-name " query <query-name> " repo-path
                            "' or '" cli/program-name " ask -q \"...\" " repo-path
                            "' to explore the knowledge graph."))
@@ -198,12 +199,13 @@
           ctx
           (fn [{:keys [conn meta-db repo-path db-name]}]
             (artifacts/reseed! (db/ensure-meta-db (:db-dir ctx)))
-            (let [{:keys [prompt-fn model-id]}
+            (let [{:keys [prompt-fn model-id provider-kw]}
                   (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model
                                                     :max-tokens 16384})
                   result (synthesize/synthesize-repo!
                           conn prompt-fn
                           {:meta-db   meta-db
+                           :provider  (name provider-kw)
                            :model-id  model-id
                            :repo-name db-name})]
               (log! (str "Next: run '" cli/program-name " query components " repo-path
@@ -664,7 +666,7 @@
               meta-db   (d/db meta-conn)
               repo-uri  (.getCanonicalPath (java.io.File. (str repo-path)))
               needs-llm (not (and skip-analyze skip-synthesize skip-benchmark))
-              {:keys [prompt-fn model-id]}
+              {:keys [prompt-fn model-id provider-kw]}
               (when needs-llm
                 (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model}))
               selector  (select-keys opts [:path :include :exclude :lang])
@@ -680,6 +682,7 @@
                                                       (assoc selector
                                                              :meta-db meta-db
                                                              :model-id model-id
+                                                             :provider (some-> provider-kw name)
                                                              :concurrency (or concurrency 3))))
             (run-digest-step! results :calls "resolve calls"
                               #(calls/resolve-calls! conn)))
@@ -690,6 +693,7 @@
                                 #(synthesize/synthesize-repo!
                                   conn (:prompt-fn synth-llm)
                                   {:meta-db   meta-db
+                                   :provider  (some-> (:provider-kw synth-llm) name)
                                    :model-id  (:model-id synth-llm)
                                    :repo-name db-name}))))
           (run-digest-step! results :embed "embed"
@@ -826,7 +830,7 @@
    :missing-judge-model-value    "Missing value for --judge-model."
    :missing-provider-value       "Missing value for --provider."
    :invalid-provider             #(str "Invalid --provider value: " (:value %)
-                                       ". Must be 'glm', 'claude', 'claude-api', or 'claude-cli'.")
+                                       ". Must be 'glm', 'claude', or 'claude-api'.")
    :invalid-max-cost             #(str "Invalid --max-cost value: " (:value %))
    :missing-max-cost-value       "Missing value for --max-cost."
    :invalid-concurrency          #(str "Invalid --concurrency value: " (:value %) ". Must be 1-20.")

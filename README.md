@@ -28,7 +28,6 @@ The `noum` binary is self-contained — it downloads a JRE and the backend on fi
 |---|---|
 | `glm` (default) | `NOUMENON_ZAI_TOKEN` |
 | `claude-api` | [`ANTHROPIC_API_KEY`](https://console.anthropic.com/settings/keys) |
-| `claude-cli` | [Claude Code](https://claude.ai/claude-code) installed |
 
 Provider API configuration also supports a provider-agnostic EDN map:
 

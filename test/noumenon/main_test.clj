@@ -222,7 +222,7 @@
     (is (str/includes? stderr "No database found"))))
 
 (deftest benchmark-provider-aliases-are-accepted
-  (doseq [provider ["claude" "claude-cli" "claude-api" "glm"]]
+  (doseq [provider ["claude" "claude-api" "glm"]]
     (let [tmp-dir (str (System/getProperty "java.io.tmpdir")
                        "/noumenon-prov-alias-" provider "-" (random-uuid))
           {:keys [exit stderr]} (run-capturing ["benchmark" "--provider" provider

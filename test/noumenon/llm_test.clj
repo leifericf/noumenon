@@ -1,6 +1,5 @@
 (ns noumenon.llm-test
   (:require [clojure.data.json :as json]
-            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [noumenon.llm :as llm]
             [org.httpkit.client]))
@@ -165,8 +164,7 @@
   (testing "known provider strings resolve to keywords"
     (is (= :glm (llm/provider->kw "glm")))
     (is (= :claude-api (llm/provider->kw "claude-api")))
-    (is (= :claude-cli (llm/provider->kw "claude-cli")))
-    (is (= :claude-cli (llm/provider->kw "claude")))))
+    (is (= :claude-api (llm/provider->kw "claude")))))
 
 (deftest provider->kw-keywords-work
   (testing "keyword inputs resolve correctly"
@@ -372,39 +370,3 @@
            clojure.lang.ExceptionInfo
            #"default-model is not listed"
            (llm/resolve-opts {:provider "glm"}))))))
-
-(deftest make-messages-fn-claude-cli-returns-fn
-  (testing "claude-cli provider returns a function"
-    (let [f (llm/make-messages-fn :claude-cli {:model "haiku" :temperature 0.1 :max-tokens 128})]
-      (is (fn? f)))))
-
-;; --- flatten-messages ---
-
-(deftest flatten-messages-single-user-message
-  (is (= "User:\nhello"
-         (llm/flatten-messages [{:role "user" :content "hello"}]))))
-
-(deftest flatten-messages-multi-turn
-  (is (= "User:\nhi\n\nAssistant:\nok\n\nUser:\nthanks"
-         (llm/flatten-messages [{:role "user" :content "hi"}
-                                {:role "assistant" :content "ok"}
-                                {:role "user" :content "thanks"}]))))
-
-(deftest flatten-messages-system-role
-  (testing "system role uses role name verbatim"
-    (is (= "system:\nbe helpful\n\nUser:\nhi"
-           (llm/flatten-messages [{:role "system" :content "be helpful"}
-                                  {:role "user" :content "hi"}])))))
-
-(deftest flatten-messages-truncates-oversized-history
-  (testing "drops oldest middle messages when total exceeds max-prompt-chars"
-    (let [big-content (apply str (repeat 600000 "x"))
-          messages [{:role "user" :content "system prompt"}
-                    {:role "assistant" :content big-content}
-                    {:role "user" :content "middle"}
-                    {:role "assistant" :content "ok"}
-                    {:role "user" :content "latest"}]
-          result (llm/flatten-messages messages)]
-      (is (<= (count result) 1000000))
-      (is (str/includes? result "system prompt"))
-      (is (str/includes? result "latest")))))

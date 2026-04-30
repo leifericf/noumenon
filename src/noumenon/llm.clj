@@ -1,12 +1,10 @@
 (ns noumenon.llm
   (:require [clojure.data.json :as json]
             [clojure.edn :as edn]
-            [clojure.java.io :as io]
             [clojure.string :as str]
             [noumenon.util :refer [log! truncate]]
             [org.httpkit.client :as http])
-  (:import [java.net URI]
-           [java.util.concurrent TimeUnit]))
+  (:import [java.net URI]))
 
 ;; --- Provider/model defaults ---
 
@@ -14,10 +12,10 @@
 (def default-model-alias "sonnet")
 
 (def provider-aliases
-  {"claude" "claude-cli"})
+  {"claude" "claude-api"})
 
 (def canonical-providers
-  #{"glm" "claude-api" "claude-cli"})
+  #{"glm" "claude-api"})
 
 (defn- getenv
   [k]
@@ -190,104 +188,6 @@
 
           :else
           (parse-api-response body start-ms))))))
-
-(def ^:private cli-timeout-ms
-  "Timeout in milliseconds for Claude CLI subprocess (5 minutes)."
-  300000)
-
-;; --- Claude CLI invocation ---
-
-(defn- parse-cli-output
-  "Parse Claude CLI JSON output into {:text :usage :resolved-model}.
-   Falls back to raw text + zero usage if JSON parse fails."
-  [out-str dur-ms]
-  (let [parsed (try (json/read-str out-str :key-fn keyword)
-                    (catch Exception _ nil))]
-    (if (and (map? parsed) (contains? parsed :result))
-      (let [u (:usage parsed)]
-        {:text           (:result parsed)
-         :usage          {:input-tokens  (:input_tokens u 0)
-                          :output-tokens (:output_tokens u 0)
-                          :cost-usd      (:total_cost_usd parsed 0.0)
-                          :duration-ms   dur-ms}
-         :resolved-model (:model parsed)})
-      (do (log! "WARNING: Claude CLI returned non-JSON output, using raw text with zero usage")
-          {:text  out-str
-           :usage (assoc zero-usage :duration-ms dur-ms)}))))
-
-(defn invoke-claude-cli
-  "Invoke Claude Code CLI with the given prompt. Returns {:text string :usage map}.
-   Accepts optional opts map with :model (string) and :env (map of env vars).
-   Falls back to raw text + zero usage if JSON parse fails."
-  ([prompt] (invoke-claude-cli prompt {}))
-  ([prompt opts]
-   (let [start-ms (System/currentTimeMillis)
-         cmd      (cond-> ["claude" "--print" "--output-format" "json"]
-                    (:model opts) (into ["--model" (:model opts)])
-                    true          (into ["-p" prompt]))
-         pb       (ProcessBuilder. ^java.util.List (vec cmd))
-         _        (when (:isolation opts)
-                    (.directory pb (io/file (System/getProperty "java.io.tmpdir"))))
-         _        (when-let [extra (:env opts)]
-                    (let [env (.environment pb)]
-                      (doseq [[k v] extra]
-                        (.put env (str k) (str v)))))
-         proc     (.start pb)
-         out-f    (future (slurp (.getInputStream proc)))
-         err-f    (future (slurp (.getErrorStream proc)))
-         done?    (.waitFor proc cli-timeout-ms TimeUnit/MILLISECONDS)
-         _        (when-not done?
-                    (.destroyForcibly proc)
-                    (future-cancel out-f)
-                    (future-cancel err-f)
-                    (throw (ex-info "Claude CLI timed out" {:timeout-ms cli-timeout-ms})))
-         exit     (.exitValue proc)
-         out-str  @out-f
-         err-str  @err-f
-         dur-ms   (- (System/currentTimeMillis) start-ms)]
-     (when (not= 0 exit)
-       (throw (ex-info (str "Claude CLI failed: " (str/trim (or err-str "")))
-                       {:exit exit})))
-     (parse-cli-output out-str dur-ms))))
-
-;; --- CLI message flattening ---
-
-(def ^:private max-prompt-chars
-  "Maximum characters for a flattened CLI prompt (1 MB).
-   Prevents exceeding OS argument-length limits (~2 MB on macOS/Linux)."
-  1000000)
-
-(defn flatten-messages
-  "Flatten a messages vector into a single prompt string for CLI invocation.
-   Prefixes each message with its role, separated by blank lines.
-   When system-prefix is provided, it is prepended as a System: block.
-   Truncates oldest messages if the result would exceed max-prompt-chars."
-  ([messages] (flatten-messages messages nil))
-  ([messages system-prefix]
-   (let [format-msg (fn [{:keys [role content]}]
-                      (str (case role "user" "User" "assistant" "Assistant" (str role)) ":\n" content))
-         formatted  (cond-> (mapv format-msg messages)
-                      system-prefix (->> (into [(str "System:\n" system-prefix)])))
-         full       (str/join "\n\n" formatted)]
-     (if (<= (count full) max-prompt-chars)
-       full
-       ;; Drop oldest messages (keeping first + last few) until under limit
-       (loop [msgs (vec messages)]
-         (if (<= (count msgs) 2)
-           (truncate (str/join "\n\n" (cond-> (mapv format-msg msgs)
-                                        system-prefix (->> (into [(str "System:\n" system-prefix)]))))
-                     max-prompt-chars)
-           (let [trimmed (into [(first msgs)] (subvec msgs 2))
-                 result  (str/join "\n\n" (cond-> (mapv format-msg trimmed)
-                                            system-prefix (->> (into [(str "System:\n" system-prefix)]))))]
-             (if (<= (count result) max-prompt-chars)
-               result
-               (recur trimmed)))))))))
-
-(defn invoke-cli
-  "Invoke Claude via CLI. Flattens messages to a single prompt string."
-  [messages opts]
-  (invoke-claude-cli (flatten-messages messages (:system-prefix opts)) opts))
 
 ;; --- Model aliases ---
 
@@ -577,27 +477,19 @@
    [{:role \"user\"/\"assistant\" :content string} ...].
    Optional opts map supports :system (string) for prompt caching.
    Provider :glm — direct API via Z.ai proxy, reads NOUMENON_ZAI_TOKEN.
-   Provider :claude-api — direct API to Anthropic, reads ANTHROPIC_API_KEY.
-   Provider :claude-cli — flattens messages to single prompt string."
+   Provider :claude-api — direct API to Anthropic, reads ANTHROPIC_API_KEY."
   [provider {:keys [model temperature max-tokens]}]
-  (let [kw (provider->kw provider)]
-    (if (api-provider-config kw)
-      (let [{:keys [base-url api-key]} (resolve-provider-config kw)]
-        (fn invoke
-          ([messages] (invoke messages nil))
-          ([messages opts]
-           (invoke-api messages (cond-> {:model       model
-                                         :temperature temperature
-                                         :max-tokens  max-tokens
-                                         :base-url    base-url
-                                         :auth-token  api-key}
-                                  (:system opts) (assoc :system (:system opts)))))))
-      (fn invoke
-        ([messages] (invoke messages nil))
-        ([messages opts]
-         (invoke-cli messages (cond-> (when model {:model model})
-                                (:system opts)
-                                (assoc :system-prefix (:system opts)))))))))
+  (let [kw (provider->kw provider)
+        {:keys [base-url api-key]} (resolve-provider-config kw)]
+    (fn invoke
+      ([messages] (invoke messages nil))
+      ([messages opts]
+       (invoke-api messages (cond-> {:model       model
+                                     :temperature temperature
+                                     :max-tokens  max-tokens
+                                     :base-url    base-url
+                                     :auth-token  api-key}
+                              (:system opts) (assoc :system (:system opts))))))))
 
 (defn wrap-as-prompt-fn
   "Wrap a messages-based invoke fn into a string-prompt fn.
@@ -636,12 +528,6 @@
         (dissoc :invoke-fn))))
 
 (defn make-isolated-prompt-fn
-  "Build an isolated prompt-fn that prevents MCP discovery. For CLI providers,
-   runs from /tmp to avoid .mcp.json. For API providers, returns the normal fn."
+  "Build an isolated prompt-fn for benchmark raw-mode calls."
   [opts]
-  (let [{:keys [provider-kw model-id]} (resolve-opts opts)]
-    (if (= :claude-cli provider-kw)
-      (fn [prompt]
-        (invoke-claude-cli prompt (cond-> {:isolation true}
-                                    model-id (assoc :model model-id))))
-      (:prompt-fn (wrap-as-prompt-fn-from-opts opts)))))
+  (:prompt-fn (wrap-as-prompt-fn-from-opts opts)))

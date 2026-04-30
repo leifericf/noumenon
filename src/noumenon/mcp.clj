@@ -134,7 +134,7 @@
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"question" {:type "string" :description "Question to ask about the repository"}
-                                      "provider" {:type "string" :description "LLM provider: glm, claude-api, or claude-cli (aliases: claude = claude-cli)"}
+                                      "provider" {:type "string" :description "LLM provider: glm or claude-api (alias: claude)"}
                                       "model" {:type "string" :description "Model alias (e.g. sonnet, haiku, opus)"}
                                       "max_iterations" {:type "integer" :description "Max query iterations (default: 10, max: 50)"}
                                       "continue_from" {:type "string" :description "Session ID from a budget-exhausted run — resumes the agent from where it left off"}})
@@ -151,7 +151,7 @@
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"provider" {:type "string"
-                                                  :description "LLM provider: glm, claude-api, or claude-cli (aliases: claude = claude-cli)"}
+                                                  :description "LLM provider: glm or claude-api (alias: claude)"}
                                       "model" {:type "string"
                                                :description "Model alias (e.g. sonnet, haiku, opus)"}
                                       "concurrency" {:type "integer"
@@ -181,7 +181,7 @@
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"provider" {:type "string"
-                                                  :description "LLM provider: glm, claude-api, or claude-cli"}
+                                                  :description "LLM provider: glm or claude-api"}
                                       "model" {:type "string"
                                                :description "Model alias (e.g. sonnet, haiku, opus)"}})
                   :required ["repo_path"]}}
@@ -199,7 +199,7 @@
     :description "Run a benchmark comparing LLM answers across knowledge graph layers. WARNING: Expensive — uses many LLM calls. Use max_questions to limit scope."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
-                                     {"provider" {:type "string" :description "LLM provider: glm, claude-api, or claude-cli"}
+                                     {"provider" {:type "string" :description "LLM provider: glm or claude-api"}
                                       "model" {:type "string" :description "Model alias (e.g. sonnet, haiku, opus)"}
                                       "max_questions" {:type "integer" :description "Limit to N questions (default: all). Use 2 for a quick canary test."}
                                       "layers" {:type "string" :description "Comma-separated layers: raw,import,enrich,full (default: raw,full)"}
@@ -242,7 +242,7 @@
     :description "Run an autonomous self-improvement loop: propose prompt changes, evaluate via benchmark, keep improvements. WARNING: Expensive — runs multiple benchmark evaluations. Use max_iterations to limit scope."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
-                                     {"provider" {:type "string" :description "LLM provider: glm, claude-api, or claude-cli"}
+                                     {"provider" {:type "string" :description "LLM provider: glm or claude-api"}
                                       "model" {:type "string" :description "Model alias (e.g. sonnet, haiku, opus)"}
                                       "max_iterations" {:type "integer" :description "Max improvement iterations (default: 10)"}
                                       "max_hours" {:type "number" :description "Stop after N hours of wall-clock time"}
@@ -561,7 +561,7 @@
                       {:scope reanalyze})))
     (with-conn args defaults
       (fn [{:keys [conn meta-db repo-path]}]
-        (let [{:keys [prompt-fn model-id]}
+        (let [{:keys [prompt-fn model-id provider-kw]}
               (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                                 :model    (or (args "model") (:model defaults))})
               prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template meta-db)))]
@@ -574,6 +574,7 @@
                                                    (cond-> (assoc selector
                                                                   :meta-db meta-db
                                                                   :model-id model-id
+                                                                  :provider (name provider-kw)
                                                                   :concurrency concurrency
                                                                   :progress-fn (:progress-fn defaults))
                                                      max-files (assoc :max-files max-files)))]
@@ -605,12 +606,13 @@
     (fn [{:keys [conn meta-conn db-name]}]
       (artifacts/reseed! meta-conn)
       (let [meta-db   (d/db meta-conn)
-            {:keys [prompt-fn model-id]}
+            {:keys [prompt-fn model-id provider-kw]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                               :model    (or (args "model") (:model defaults))})
             result (synthesize/synthesize-repo!
                     conn prompt-fn
-                    {:meta-db meta-db :model-id model-id :repo-name db-name})]
+                    {:meta-db meta-db :provider (name provider-kw)
+                     :model-id model-id :repo-name db-name})]
         (tool-result (str "Synthesis complete. "
                           (:components result 0) " components identified, "
                           (:files-classified result 0) " files classified"
@@ -787,7 +789,7 @@
     (fn [{:keys [conn meta-conn db-dir db-name repo-path]}]
       (artifacts/reseed! meta-conn)
       (let [meta-db (d/db meta-conn)
-            {:keys [prompt-fn model-id]}
+            {:keys [prompt-fn model-id provider-kw]}
             (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
                                               :model    (or (args "model") (:model defaults))})
             repo-uri (if (str/starts-with? (str repo-path) "db://")
@@ -805,6 +807,7 @@
           (let [r (analyze/analyze-repo! conn repo-path prompt-fn
                                          (assoc selector
                                                 :meta-db meta-db :model-id model-id
+                                                :provider (name provider-kw)
                                                 :concurrency 3
                                                 :progress-fn (:progress-fn defaults)))]
             (swap! results assoc :analyze r)))
@@ -817,7 +820,10 @@
                               :max-tokens 16384})
                   r (synthesize/synthesize-repo!
                      conn (:prompt-fn synth-llm)
-                     {:meta-db meta-db :model-id (:model-id synth-llm) :repo-name db-name})]
+                     {:meta-db meta-db
+                      :provider (name (:provider-kw synth-llm))
+                      :model-id (:model-id synth-llm)
+                      :repo-name db-name})]
               (swap! results assoc :synthesize r))
             (catch Exception e
               (log! "digest/synthesize" (str "skipped: " (.getMessage e))))))
