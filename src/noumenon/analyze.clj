@@ -639,13 +639,13 @@
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
   ([conn repo-path invoke-llm {:keys [meta-db model-id concurrency min-delay-ms max-files progress-fn
                                       path include exclude lang]
-                                :or   {concurrency 3 min-delay-ms 0}}]
+                               :or   {concurrency 3 min-delay-ms 0}}]
    (let [head-paths    (into #{} (map :path) (files/parse-ls-tree (files/git-ls-tree repo-path)))
          prompt-map    (load-prompt-template meta-db)
          prompt-h      (prompt-hash (:template prompt-map))
          dbv           (d/db conn)
          all-files     (->> (files-needing-analysis dbv)
-                             (filterv (comp head-paths :file/path)))
+                            (filterv (comp head-paths :file/path)))
          filters       (selector/normalize repo-path {:path path :include include
                                                       :exclude exclude :lang lang})
          {:keys [files summary]} (selector/apply-filters all-files filters)

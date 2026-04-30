@@ -821,18 +821,18 @@ end")
   ([conn repo-path {:keys [concurrency progress-fn path include exclude lang]
                     :or   {concurrency 8}}]
    (let [db        (d/db conn)
-          all-files (files-with-lang db)
-          all-paths (into #{} (map :file/path) all-files)
-          filters   (selector/normalize repo-path {:path path :include include
-                                                   :exclude exclude :lang lang})
-          {:keys [files summary]} (selector/apply-filters all-files filters)
-          filtered  files
-          needing   (vec (files-needing-enrichment db filtered))
-          skipped-n (- (count filtered) (count needing))
-          _         (when (pos? (:excluded summary 0))
-                      (log! (str "Selection filters excluded " (:excluded summary) " file(s).")))
-          _         (when (pos? skipped-n)
-                      (log! (str "  " skipped-n " files already enriched, skipping")))
+         all-files (files-with-lang db)
+         all-paths (into #{} (map :file/path) all-files)
+         filters   (selector/normalize repo-path {:path path :include include
+                                                  :exclude exclude :lang lang})
+         {:keys [files summary]} (selector/apply-filters all-files filters)
+         filtered  files
+         needing   (vec (files-needing-enrichment db filtered))
+         skipped-n (- (count filtered) (count needing))
+         _         (when (pos? (:excluded summary 0))
+                     (log! (str "Selection filters excluded " (:excluded summary) " file(s).")))
+         _         (when (pos? skipped-n)
+                     (log! (str "  " skipped-n " files already enriched, skipping")))
          tools     (probe-tools)
          skipped-tools (log-tool-availability! tools (frequencies (map :file/lang needing)))
          {:keys [std-files c-files]} (partition-files-by-lang needing tools)

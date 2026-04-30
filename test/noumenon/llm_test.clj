@@ -226,19 +226,19 @@
 (deftest resolve-provider-config-prefers-edn-over-legacy-env
   (testing "NOUMENON_LLM_PROVIDERS_EDN entry overrides legacy env key"
     (with-redefs [llm/getenv (fn [k]
-                                 (case k
-                                   "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:base-url \"https://gateway.example\" :api-key \"edn-key\"}}"
-                                   "NOUMENON_ZAI_TOKEN" "legacy-key"
-                                   nil))]
+                               (case k
+                                 "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:base-url \"https://gateway.example\" :api-key \"edn-key\"}}"
+                                 "NOUMENON_ZAI_TOKEN" "legacy-key"
+                                 nil))]
       (is (= {:base-url "https://gateway.example" :api-key "edn-key"}
              (llm/resolve-provider-config :glm))))))
 
 (deftest resolve-provider-config-falls-back-to-legacy-env
   (testing "legacy env key remains compatible when provider EDN is unset"
     (with-redefs [llm/getenv (fn [k]
-                                 (case k
-                                   "ANTHROPIC_API_KEY" "legacy-key"
-                                   nil))]
+                               (case k
+                                 "ANTHROPIC_API_KEY" "legacy-key"
+                                 nil))]
       (is (= {:base-url "https://api.anthropic.com" :api-key "legacy-key"}
              (llm/resolve-provider-config :claude-api))))))
 
@@ -255,9 +255,9 @@
     (with-temp-creds-file "NOUMENON_ZAI_TOKEN=file-key\n"
       (fn []
         (with-redefs [llm/getenv (fn [k]
-                                     (case k
-                                       "NOUMENON_RUNTIME_MODE" "service"
-                                       nil))]
+                                   (case k
+                                     "NOUMENON_RUNTIME_MODE" "service"
+                                     nil))]
           (is (thrown-with-msg?
                clojure.lang.ExceptionInfo
                #"Missing API key"
@@ -266,19 +266,19 @@
 (deftest resolve-provider-config-validates-url
   (testing "invalid base URL fails clearly"
     (with-redefs [llm/getenv (fn [k]
-                                 (case k
-                                   "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:base-url \"not-a-url\" :api-key \"k\"}}"
-                                   nil))]
+                               (case k
+                                 "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:base-url \"not-a-url\" :api-key \"k\"}}"
+                                 nil))]
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
            #"Invalid base URL"
            (llm/resolve-provider-config :glm)))))
   (testing "service mode requires https"
     (with-redefs [llm/getenv (fn [k]
-                                 (case k
-                                   "NOUMENON_RUNTIME_MODE" "service"
-                                   "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:base-url \"http://gateway.example\" :api-key \"k\"}}"
-                                   nil))]
+                               (case k
+                                 "NOUMENON_RUNTIME_MODE" "service"
+                                 "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:base-url \"http://gateway.example\" :api-key \"k\"}}"
+                                 nil))]
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
            #"requires https"

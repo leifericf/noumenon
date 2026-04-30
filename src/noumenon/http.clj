@@ -323,14 +323,14 @@
     (with-repo params (:db-dir config)
       (fn [{:keys [conn meta-db repo-path]}]
         (let [opts (if (:analyze params)
-              (let [{:keys [prompt-fn model-id]}
-                    (llm/wrap-as-prompt-fn-from-opts
-                     (resolve-provider params config))]
-                        (assoc (select-keys params [:path :include :exclude :lang])
-                               :concurrency 8 :analyze? true
-                               :meta-db meta-db :model-id model-id :invoke-llm prompt-fn))
-                      (assoc (select-keys params [:path :include :exclude :lang])
-                             :concurrency 8))
+                     (let [{:keys [prompt-fn model-id]}
+                           (llm/wrap-as-prompt-fn-from-opts
+                            (resolve-provider params config))]
+                       (assoc (select-keys params [:path :include :exclude :lang])
+                              :concurrency 8 :analyze? true
+                              :meta-db meta-db :model-id model-id :invoke-llm prompt-fn))
+                     (assoc (select-keys params [:path :include :exclude :lang])
+                            :concurrency 8))
               result (sync/update-repo! conn repo-path repo-path opts)]
           (ok result))))))
 
@@ -366,11 +366,11 @@
                                                        (assoc selector :concurrency 8))))
         analyze-r (when-not (:skip_analyze params)
                     (step-progress "analyze"
-                                    #(let [r (analyze/analyze-repo! conn repo-path prompt-fn
-                                                                    (assoc selector
-                                                                           :meta-db meta-db :model-id model-id
-                                                                           :concurrency 3 :progress-fn (step-fn "analyze"))) ]
-                                       (select-keys r [:files-analyzed :total-usage]))))
+                                   #(let [r (analyze/analyze-repo! conn repo-path prompt-fn
+                                                                   (assoc selector
+                                                                          :meta-db meta-db :model-id model-id
+                                                                          :concurrency 3 :progress-fn (step-fn "analyze")))]
+                                      (select-keys r [:files-analyzed :total-usage]))))
         synth-r   (when-not (:skip_synthesize params)
                     (step-progress "synthesize"
                                    #(synthesize/synthesize-repo!

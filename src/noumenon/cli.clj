@@ -132,7 +132,7 @@
 
 (def ^:private analyze-flags
   (vec (concat [model-flag (assoc provider-flag :valid all-valid-providers)
-                 max-files-flag reanalyze-flag db-dir-flag]
+                max-files-flag reanalyze-flag db-dir-flag]
                verbose-flags concurrency-flags selector-flags)))
 
 ;; --- Declarative command specs ---
@@ -356,8 +356,8 @@
                                       :desc "Benchmark layers: raw,import,enrich,full (default: raw,full)"
                                       :error-missing :missing-layers-value}
                                      {:flag "--report" :key :report :parse :bool
-                                       :desc "Generate Markdown benchmark report"}]
-                                     selector-flags))
+                                      :desc "Generate Markdown benchmark report"}]
+                                    selector-flags))
                        :initial {:subcommand "digest"}
                        :positionals {:required 1 :error :no-repo-path :keys [:repo-path]}}
                 :summary "Run full pipeline: import, enrich, analyze, synthesize, benchmark"

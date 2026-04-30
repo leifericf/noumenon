@@ -271,9 +271,9 @@
 
 (def ^:private api-provider-config
   {:glm       {:env-var  "NOUMENON_ZAI_TOKEN"
-                :base-url "https://api.z.ai/api/anthropic"}
+               :base-url "https://api.z.ai/api/anthropic"}
    :claude-api {:env-var  "ANTHROPIC_API_KEY"
-                 :base-url "https://api.anthropic.com"}})
+                :base-url "https://api.anthropic.com"}})
 
 (def ^:private runtime-modes #{"local" "service"})
 
@@ -430,7 +430,7 @@
                                          :max-tokens  max-tokens
                                          :base-url    base-url
                                          :auth-token  api-key}
-                                   (:system opts) (assoc :system (:system opts)))))))
+                                  (:system opts) (assoc :system (:system opts)))))))
       (fn invoke
         ([messages] (invoke messages nil))
         ([messages opts]
