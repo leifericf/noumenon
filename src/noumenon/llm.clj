@@ -392,8 +392,7 @@
 
 (defn provider-catalog
   []
-  (let [providers (parse-provider-map)
-        names     (supported-provider-names)
+  (let [names     (supported-provider-names)
         default-p (default-provider-name)]
     {:default-provider default-p
      :providers        (into {}
