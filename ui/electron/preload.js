@@ -1,7 +1,0 @@
-const { contextBridge, ipcRenderer } = require('electron');
-
-contextBridge.exposeInMainWorld('__noumenon__', {
-  platform: process.platform,
-  saveBackends: (data) => ipcRenderer.send('save-backends', data),
-  getPort: () => ipcRenderer.sendSync('get-port')
-});

@@ -1,7 +1,0 @@
-node_modules/
-resources/public/js/
-resources/public/js-portfolio/
-.shadow-cljs/
-.nrepl-port
-dist/
-test-out/
