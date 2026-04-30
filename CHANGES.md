@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.6.2
+
+### Changed
+
+- **HTTP-only provider support** — Removed Claude CLI provider support entirely. Supported providers are now API-based (`glm`, `claude-api`, with `claude` aliasing to `claude-api`).
+- **Strict model selection** — LLM operations now require an explicit model source: pass `--model` or configure provider `:default-model`; no implicit fallback model is selected.
+- **Provider credential policy** — Removed legacy file-based credential fallback; provider credentials now resolve from `NOUMENON_LLM_PROVIDERS_EDN` and process environment variables.
+- **Analysis/synthesis provenance** — LLM transactions now record provider and model provenance via `:tx/provider` and `:tx/model-source` metadata.
+
+### Fixes
+
+- **Provider migration errors** — Using removed `claude-cli` now fails with explicit migration guidance to `claude-api`/`claude`.
+- **API schema/docs alignment** — OpenAPI and provider-config docs now reflect API-only provider support.
+
 ## 0.6.1
 
 ### New
