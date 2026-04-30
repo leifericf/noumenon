@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.1
+
 ### New
 
 - **Provider/model catalog commands** — Added `noum llm-providers` and `noum llm-models` for discovering configured providers, provider defaults, and available models.
