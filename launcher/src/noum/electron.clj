@@ -9,7 +9,7 @@
             [noum.tui.core :as tui]
             [noum.tui.spinner :as spinner]))
 
-(def ^:private github-repo "leifericf/noumenon")
+(def ^:private github-repo "leifericf/noumenon-app")
 
 (defn installed? []
   (fs/exists? paths/electron-app))

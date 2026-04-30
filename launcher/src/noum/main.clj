@@ -403,22 +403,34 @@
         (tui/eprintln "Daemon: not reachable"))))
   0)
 
+(defn- app-dev-root
+  "Locate a noumenon-app source checkout for dev-mode launch.
+   Resolution order: $NOUMENON_APP_ROOT, then ../noumenon-app sibling
+   of $NOUMENON_ROOT, else nil (caller falls back to installed app)."
+  []
+  (let [explicit (System/getenv "NOUMENON_APP_ROOT")
+        sibling  (some-> (System/getenv "NOUMENON_ROOT")
+                         (io/file ".." "noumenon-app")
+                         .getCanonicalFile
+                         str)]
+    (some #(when (and % (fs/exists? %)) %) [explicit sibling])))
+
 (defn- do-open [{:keys [flags]}]
-  (let [conn (api/ensure-backend! flags)
-        port (:port conn)
-        dev? (System/getenv "NOUMENON_ROOT")]
+  (let [conn     (api/ensure-backend! flags)
+        port     (:port conn)
+        dev-root (app-dev-root)]
     (tui/eprintln (str "Opening Noumenon UI (daemon on port " port ")..."))
     (let [exit-code
           (try
-            (if dev?
-              ;; Dev mode: source checkout with npx
+            (if dev-root
+              ;; Dev mode: noumenon-app source checkout with npx
               (:exit @(proc/process
-                       {:cmd ["npx" "electron" "ui/"]
-                        :dir dev?
+                       {:cmd ["npx" "electron" "."]
+                        :dir dev-root
                         :env (assoc (into {} (System/getenv))
                                     "NOUMENON_PORT" (str port))
                         :inherit true}))
-              ;; Installed: download packaged app and launch
+              ;; Installed: download packaged app from leifericf/noumenon-app and launch
               (let [app-path (electron/ensure!)]
                 (:exit @(proc/process
                          {:cmd (electron/launch-cmd app-path port)
@@ -429,11 +441,10 @@
               127))]
       (when-not (zero? (or exit-code 0))
         (tui/eprintln (str (style/red "Error: ") "Electron UI exited with code " exit-code "."))
-        (when dev?
-          (tui/eprintln "  Ensure Node.js is installed (https://nodejs.org) and Electron is available:")
-          (tui/eprintln "    node --version && npx electron --version")
-          (tui/eprintln "  Then run:")
-          (tui/eprintln "    cd ui && npm install")))
+        (when dev-root
+          (tui/eprintln (str "  Dev-mode launched from " dev-root "."))
+          (tui/eprintln "  Ensure Node.js is installed (https://nodejs.org) and dependencies are installed:")
+          (tui/eprintln (str "    cd " dev-root " && npm install"))))
       (or exit-code 0))))
 
 ;; --- Query (raw + as-of) ---
