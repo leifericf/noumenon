@@ -13,7 +13,8 @@
    "schema/settings.edn"
    "schema/ask.edn"
    "schema/synthesis.edn"
-   "schema/auth.edn"])
+   "schema/auth.edn"
+   "schema/branch.edn"])
 
 (defn load-schema
   "Read a schema EDN file from the classpath. Throws if file not found."

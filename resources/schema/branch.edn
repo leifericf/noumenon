@@ -1,0 +1,57 @@
+[;; --- Branches ---
+ ;;
+ ;; A branch entity records the named line of history a repo is currently
+ ;; tracking. Per-repo DBs hold one branch per snapshot they've synced;
+ ;; delta DBs additionally carry parent-host / parent-db-name / basis-sha
+ ;; pointing back to the trunk DB whose graph they extend.
+
+ {:db/ident       :branch/repo
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Repository this branch belongs to"}
+
+ {:db/ident       :branch/name
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Branch name (Git branch, Perforce stream)"}
+
+ ;; Composite identity: repo + name uniquely identify a branch.
+ ;; Mirrors the :code/file+name pattern in architecture.edn.
+ {:db/ident       :branch/repo+name
+  :db/valueType   :db.type/tuple
+  :db/tupleAttrs  [:branch/repo :branch/name]
+  :db/cardinality :db.cardinality/one
+  :db/unique      :db.unique/identity
+  :db/doc         "Composite identity for branches — repo ref + name"}
+
+ {:db/ident       :branch/kind
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Branch role — :trunk, :feature, :release, :unknown"}
+
+ {:db/ident       :branch/vcs
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Version control system — :git, :perforce"}
+
+ {:db/ident       :branch/basis-sha
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "For delta DBs: the trunk-DB commit SHA this delta extends. Nil on trunk DBs."}
+
+ {:db/ident       :branch/parent-host
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "For delta DBs: host of the parent (trunk) Noumenon instance — e.g. \"noum.example.com:443\". Nil on trunk DBs."}
+
+ {:db/ident       :branch/parent-db-name
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "For delta DBs: name of the parent (trunk) Noumenon database on the parent host. Nil on trunk DBs."}
+
+ ;; --- Repo → current branch ---
+
+ {:db/ident       :repo/branch
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "The branch this repo is currently tracking. Updated when sync detects a branch switch."}]
