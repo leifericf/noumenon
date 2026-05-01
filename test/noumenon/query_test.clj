@@ -230,3 +230,47 @@
       ;; isn't federation-safe so inject-exclusions is bypassed entirely).
       (is (contains? paths "src/a.clj"))
       (is (contains? paths "src/b.clj")))))
+
+(deftest delta-paths-from-delta-db
+  (let [conn (make-conn)]
+    (d/transact conn {:tx-data [{:file/path "src/a.clj" :file/size 100}
+                                {:file/path "src/b.clj" :file/deleted? true}]})
+    (is (= #{"src/a.clj" "src/b.clj"}
+           (set (query/delta-paths (d/db conn)))))))
+
+(deftest run-federated-query-merges-trunk-minus-delta-paths
+  (let [trunk (th/make-test-conn "fed-trunk-test")
+        delta (th/make-test-conn "fed-delta-test")
+        mdb   (meta-db)]
+    ;; Trunk has a.clj, b.clj, c.clj as orphans
+    (d/transact trunk {:tx-data [{:file/path "src/a.clj" :file/size 100 :file/lang :clojure}
+                                 {:file/path "src/b.clj" :file/size 200 :file/lang :clojure}
+                                 {:file/path "src/c.clj" :file/size 300 :file/lang :clojure}]})
+    ;; Delta modifies a.clj (different size) and tombstones c.clj
+    (d/transact delta {:tx-data [{:file/path "src/a.clj" :file/size 999 :file/lang :clojure}
+                                 {:file/path "src/c.clj" :file/deleted? true}]})
+    (let [result (query/run-federated-query mdb (d/db trunk) (d/db delta)
+                                            "orphan-files" {})
+          paths  (set (map first (:ok result)))]
+      (is (true? (:federation-safe? result)))
+      ;; Trunk row count: only b.clj (a and c excluded by delta paths)
+      (is (= 1 (:trunk-count result)) "trunk has b only")
+      ;; Delta returns a.clj as orphan (it's still in delta with file/lang).
+      ;; Tombstoned c.clj has no :file/lang so it's NOT an orphan in delta.
+      (is (= 1 (:delta-count result)) "delta has a only (c tombstone has no lang)")
+      (is (= #{"src/b.clj" "src/a.clj"} paths)
+          "merged result has b from trunk and a from delta — c is gone"))))
+
+(deftest run-federated-query-falls-back-when-unsafe
+  (let [trunk (th/make-test-conn "fed-trunk-unsafe")
+        delta (th/make-test-conn "fed-delta-unsafe")
+        mdb   (meta-db)]
+    (d/transact trunk {:tx-data [{:file/path "src/a.clj" :file/size 100 :sem/complexity :simple}
+                                 {:file/path "src/b.clj" :file/size 200 :sem/complexity :complex}]})
+    (d/transact delta {:tx-data [{:file/path "src/a.clj" :file/size 100 :sem/complexity :very-complex}]})
+    (let [result (query/run-federated-query mdb (d/db trunk) (d/db delta)
+                                            "files-by-complexity" {})]
+      (is (false? (:federation-safe? result)))
+      ;; Trunk-only since the query isn't safe
+      (is (= 0 (:delta-count result)))
+      (is (= 2 (:trunk-count result))))))

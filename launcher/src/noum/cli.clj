@@ -99,10 +99,13 @@
                  :api-path "/api/ask" :api-method :post :min-args 2
                  :positional-map :ask}
    "query"      {:summary "Run a named or raw Datalog query"
-                 :usage   "noum query <name> <repo> [--param key=value] [--as-of <date>]\n  noum query --raw '<datalog>' <repo> [--limit N]"
+                 :usage   "noum query <name> <repo> [--param key=value] [--as-of <date>]\n  noum query --raw '<datalog>' <repo> [--limit N]\n  noum query <name> <repo> --federate --basis-sha <sha>  (federated: trunk + local delta)"
                  :options ["--param <key=value>                      Query parameter (repeat command as needed)"
                            "--as-of <date>                           Time-travel query"
                            "--raw '<datalog>'                        Raw Datalog query text"
+                           "--federate                               Federate against a local delta DB"
+                           "--basis-sha <sha>                        Trunk basis SHA for federation (40-char hex)"
+                           "--branch <name>                          Branch name override (defaults to current git branch)"
                            "--limit <n>                              Max rows"
                            "--db-dir <path>                          Override storage directory"
                            "--host <url>                             Use remote Noumenon host"
@@ -282,7 +285,7 @@
   "Flags that never take a value — always treated as true when present."
   #{"--skip-import" "--skip-enrich" "--skip-analyze" "--skip-synthesize" "--skip-benchmark"
     "--report" "--force" "--analyze" "--verbose" "--debug" "--canary"
-    "--deterministic-only" "--git-commit" "--read-only"})
+    "--deterministic-only" "--git-commit" "--read-only" "--federate"})
 
 (defn- extract-flags
   "Extract --flag value pairs from args. Returns [flags-map remaining-args]."

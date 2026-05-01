@@ -454,6 +454,9 @@
     (and (:raw flags) (:as-of flags))
     (do (tui/eprintln "Error: --raw and --as-of cannot be used together.") 1)
 
+    (and (:federate flags) (or (:raw flags) (:as-of flags)))
+    (do (tui/eprintln "Error: --federate cannot be combined with --raw or --as-of.") 1)
+
     (:raw flags)
     (if-not (string? (:raw flags))
       (do (tui/eprintln "Usage: noum query --raw '<datalog>' <repo> [--limit N]") 1)
@@ -473,6 +476,26 @@
                    (:limit flags) (assoc :limit (parse-long (:limit flags)))
                    (:param flags) (assoc :params (parse-param-flag (:param flags))))]
         (print-api-result (api/post! conn "/api/query-as-of" body))))
+
+    (:federate flags)
+    (cond
+      (< (count positional) 2)
+      (do (tui/eprintln "Usage: noum query <name> <repo> --federate --basis-sha <sha>") 1)
+      (not (:basis-sha flags))
+      (do (tui/eprintln "Error: --federate requires --basis-sha <sha>") 1)
+      :else
+      (let [conn (api/ensure-backend! flags)
+            body (cond-> {:query_name (first positional)
+                          :repo_path  (canonicalize-path (second positional))
+                          :basis_sha  (:basis-sha flags)}
+                   (:branch flags) (assoc :branch (:branch flags))
+                   (:limit flags)  (assoc :limit (parse-long (:limit flags)))
+                   (:param flags)  (assoc :params (parse-param-flag (:param flags))))
+            resp (api/post! conn "/api/query-federated" body)]
+        (when (and (:ok resp) (false? (get-in resp [:data :federation-safe?])))
+          (tui/eprintln (style/yellow
+                         "Warning: query is not federation-safe — returning trunk-only results.")))
+        (print-api-result resp)))
 
     :else
     (do-api-command parsed)))

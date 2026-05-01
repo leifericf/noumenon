@@ -123,3 +123,33 @@
             :federation-safe? (boolean (:federation-safe? query-def))})
          {:error (str "Query '" query-name "' is active but has no definition.")
           :federation-safe? false})))))
+
+;; --- Federation merge ---
+
+(defn delta-paths
+  "Return the set of :file/path values present in a delta DB."
+  [delta-db]
+  (mapv first (d/q '[:find ?p :where [_ :file/path ?p]] delta-db)))
+
+(defn run-federated-query
+  "Run a named query across a trunk DB and a delta DB, concatenating the
+   results. Trunk is queried with :exclude-paths covering every :file/path in
+   the delta — so a path appears in at most one side of the merge.
+
+   When the query is not federation-safe, returns trunk-only with
+   :federation-safe? false (so the caller can show a banner)."
+  [meta-db trunk-db delta-db query-name params]
+  (let [excludes     (delta-paths delta-db)
+        trunk-result (run-named-query meta-db trunk-db query-name params
+                                      {:exclude-paths excludes})]
+    (if (:error trunk-result)
+      trunk-result
+      (let [fsafe?       (:federation-safe? trunk-result)
+            trunk-rows   (vec (:ok trunk-result))
+            delta-result (when fsafe? (run-named-query meta-db delta-db query-name params))
+            delta-rows   (vec (:ok delta-result []))
+            rows         (if fsafe? (into trunk-rows delta-rows) trunk-rows)]
+        {:ok               rows
+         :trunk-count      (count trunk-rows)
+         :delta-count      (count delta-rows)
+         :federation-safe? fsafe?}))))

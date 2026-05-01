@@ -581,6 +581,50 @@
                      :results          (take limit rows)}))
               (error-response 400 (:error result)))))))))
 
+(defn- handle-query-federated
+  "Run a named query over both trunk and a local delta DB, then concatenate
+   delta rows on top of trunk rows. Trunk is queried with :exclude-paths
+   covering every :file/path in the delta, so a path appears in at most one
+   side of the merge.
+
+   Federation requires the query to be marked :federation-safe? in its EDN.
+   Non-federation-safe queries return trunk-only with :federation-safe? false."
+  [request config]
+  (let [params      (parse-json-body request)
+        repo-path   (:repo_path params)
+        basis-sha   (:basis_sha params)
+        query-name  (:query_name params)
+        branch      (:branch params)
+        raw-params  (or (:params params) {})
+        kw-params   (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)]
+    (when-not (and repo-path basis-sha query-name)
+      (throw (ex-info "Missing required fields"
+                      {:status 400
+                       :message "repo_path, basis_sha, and query_name are required"})))
+    (when-not (sync/valid-sha? basis-sha)
+      (throw (ex-info "Invalid basis_sha"
+                      {:status 400 :message "basis_sha must be a 40-char lowercase hex SHA"})))
+    (when-let [reason (util/validate-repo-path repo-path)]
+      (throw (ex-info reason {:status 400 :message (str "repo_path " reason)})))
+    (validate-query-params! kw-params)
+    (let [delta-opts (cond-> {} branch (assoc :branch-name branch))
+          delta-conn (delta/ensure-delta-db! repo-path basis-sha delta-opts)
+          _          (delta/update-delta! delta-conn repo-path basis-sha delta-opts)
+          delta-db   (d/db delta-conn)
+          limit      (min (or (some-> (:limit params) str parse-long) 500) 10000)]
+      (with-repo {:repo_path repo-path} (:db-dir config)
+        (fn [{:keys [db meta-db]}]
+          (let [result (query/run-federated-query meta-db db delta-db query-name kw-params)]
+            (if (:error result)
+              (error-response 400 (:error result))
+              (ok {:query            query-name
+                   :total            (count (:ok result))
+                   :trunk-count      (:trunk-count result)
+                   :delta-count      (:delta-count result)
+                   :basis-sha        basis-sha
+                   :federation-safe? (:federation-safe? result)
+                   :results          (take limit (:ok result))}))))))))
+
 (defn- handle-queries [_request config]
   (let [meta-conn (db/ensure-meta-db (:db-dir config))
         meta-db   (d/db meta-conn)
@@ -1100,6 +1144,7 @@
    [:post "/api/query"                 handle-query-exec]
    [:post "/api/query-raw"             handle-query-raw]
    [:post "/api/query-as-of"           handle-query-as-of]
+   [:post "/api/query-federated"       handle-query-federated]
    [:get  "/api/queries"               handle-queries]
    [:get  "/api/schema/:repo"          handle-schema]
    [:get  "/api/status/:repo"          handle-status]
