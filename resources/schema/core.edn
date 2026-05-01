@@ -185,12 +185,12 @@
  {:db/ident       :tx/op
   :db/valueType   :db.type/keyword
   :db/cardinality :db.cardinality/one
-  :db/doc         "Transaction operation — :import, :analyze, :llm-analyze"}
+  :db/doc         "Transaction operation — :import, :analyze, :llm-analyze, :promote"}
 
  {:db/ident       :tx/source
   :db/valueType   :db.type/keyword
   :db/cardinality :db.cardinality/one
-  :db/doc         "Data source — :deterministic or :llm"}
+  :db/doc         "Data source — :deterministic, :llm, or :promoted"}
 
  {:db/ident       :tx/analyzer
   :db/valueType   :db.type/string

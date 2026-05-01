@@ -312,10 +312,11 @@
                                                           :model-id model-id
                                                           :provider (name provider-kw)
                                                           :concurrency concurrency
+                                                          :no-promote? (boolean (:no_promote params))
                                                           :progress-fn progress-fn)
                                              (:max_files params)
                                              (assoc :max-files (:max_files params))))]
-    (select-keys result [:files-analyzed :files-skipped
+    (select-keys result [:files-analyzed :files-promoted :files-skipped
                          :files-errored :files-parse-errored
                          :total-usage])))
 
@@ -418,8 +419,10 @@
                                                                    (assoc selector
                                                                           :meta-db meta-db :model-id model-id
                                                                           :provider (name provider-kw)
-                                                                          :concurrency 3 :progress-fn (step-fn "analyze")))]
-                                      (select-keys r [:files-analyzed :total-usage]))))
+                                                                          :concurrency 3
+                                                                          :no-promote? (boolean (:no_promote params))
+                                                                          :progress-fn (step-fn "analyze")))]
+                                      (select-keys r [:files-analyzed :files-promoted :total-usage]))))
         synth-r   (when-not (:skip_synthesize params)
                     (step-progress "synthesize"
                                    #(synthesize/synthesize-repo!

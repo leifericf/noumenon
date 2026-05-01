@@ -42,6 +42,7 @@
                            "--model <alias>                          Model alias (e.g. sonnet, haiku, opus)"
                            "--max-files <n>                          Stop after analyzing N files"
                            "--reanalyze <scope>                      Re-analyze scope: all|prompt-changed|model-changed|stale"
+                           "--no-promote                             Skip the content-addressed cache; always call the LLM"
                            "--path <file|dir>                        File/dir selector"
                            "--include <glob[,glob]>                  Include glob selector(s)"
                            "--exclude <glob[,glob]>                  Exclude glob selector(s)"
@@ -285,7 +286,7 @@
   "Flags that never take a value — always treated as true when present."
   #{"--skip-import" "--skip-enrich" "--skip-analyze" "--skip-synthesize" "--skip-benchmark"
     "--report" "--force" "--analyze" "--verbose" "--debug" "--canary"
-    "--deterministic-only" "--git-commit" "--read-only" "--federate"})
+    "--deterministic-only" "--git-commit" "--read-only" "--federate" "--no-promote"})
 
 (defn- extract-flags
   "Extract --flag value pairs from args. Returns [flags-map remaining-args]."

@@ -1,0 +1,140 @@
+(ns noumenon.promotion-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [datomic.client.api :as d]
+            [noumenon.promotion :as promotion]
+            [noumenon.test-helpers :as th]))
+
+(def ^:private blob-x "aaa1111111111111111111111111111111111111")
+(def ^:private blob-y "bbb2222222222222222222222222222222222222")
+(def ^:private prompt-h "ph-current")
+(def ^:private model-v "model-v1")
+
+(defn- analyze-tx
+  "Build a tx that asserts file analysis attrs + matching provenance."
+  [path summary]
+  [{:file/path path :sem/summary summary :sem/complexity :simple :arch/layer :core}
+   {:db/id "datomic.tx"
+    :tx/op :analyze :tx/source :llm
+    :prov/prompt-hash prompt-h
+    :prov/model-version model-v}])
+
+(deftest find-cached-analysis-misses-without-blob
+  (let [conn (th/make-test-conn "promo-miss")]
+    (d/transact conn {:tx-data [{:file/path "src/a.clj" :file/blob-sha blob-x}]})
+    (d/transact conn {:tx-data (analyze-tx "src/a.clj" "donor summary")})
+    (testing "different blob → no donor"
+      (is (nil? (promotion/find-cached-analysis (d/db conn) blob-y prompt-h model-v))))
+    (testing "different prompt → no donor"
+      (is (nil? (promotion/find-cached-analysis (d/db conn) blob-x "other-ph" model-v))))
+    (testing "different model → no donor"
+      (is (nil? (promotion/find-cached-analysis (d/db conn) blob-x prompt-h "other-mv"))))))
+
+(deftest find-cached-analysis-finds-existing-donor
+  (let [conn (th/make-test-conn "promo-hit")]
+    (d/transact conn {:tx-data [{:file/path "src/donor.clj" :file/blob-sha blob-x}]})
+    (d/transact conn {:tx-data (analyze-tx "src/donor.clj" "donor summary")})
+    (let [donor (promotion/find-cached-analysis (d/db conn) blob-x prompt-h model-v)]
+      (is (some? donor))
+      (is (= "donor summary" (:sem/summary donor)))
+      (is (= :simple (:sem/complexity donor)))
+      (is (= :core (:arch/layer donor)))
+      (is (some? (:donor-tx donor))))))
+
+(deftest promote-tx-data-shape
+  (let [donor {:donor-tx 12345 :sem/summary "x" :sem/complexity :simple :arch/layer :core}
+        out   (promotion/promote-tx-data "src/recipient.clj" donor)
+        [file-tx tx-meta] out]
+    (is (= "src/recipient.clj" (:file/path file-tx)))
+    (is (= "x" (:sem/summary file-tx)))
+    (is (= :simple (:sem/complexity file-tx)))
+    (is (= :core (:arch/layer file-tx)))
+    (is (= :promote (:tx/op tx-meta)))
+    (is (= :promoted (:tx/source tx-meta)))
+    (is (= 12345 (:prov/promoted-from tx-meta)))))
+
+(deftest promote-tx-data-skips-unset-donor-attrs
+  (let [donor {:donor-tx 1 :sem/summary "x"}
+        [file-tx _] (promotion/promote-tx-data "src/r.clj" donor)]
+    (is (= #{:file/path :sem/summary} (set (keys file-tx))))))
+
+(deftest promote!-end-to-end
+  (let [conn (th/make-test-conn "promo-e2e")]
+    ;; Donor: src/donor.clj at blob-x, analyzed
+    (d/transact conn {:tx-data [{:file/path "src/donor.clj" :file/blob-sha blob-x}]})
+    (d/transact conn {:tx-data (analyze-tx "src/donor.clj" "donor analysis")})
+    ;; Recipient: src/recipient.clj at blob-x, NOT yet analyzed
+    (d/transact conn {:tx-data [{:file/path "src/recipient.clj" :file/blob-sha blob-x}]})
+    (let [donor   (promotion/find-cached-analysis (d/db conn) blob-x prompt-h model-v)
+          result  (promotion/promote! conn "src/recipient.clj" donor)
+          db'     (d/db conn)
+          rcpt    (d/pull db' '[*] [:file/path "src/recipient.clj"])]
+      (is (= :promoted (:status result)))
+      (is (= "donor analysis" (:sem/summary rcpt))
+          "recipient now carries donor analysis")
+      (testing "recipient's analysis tx points to donor via :prov/promoted-from"
+        (let [rcpt-tx (ffirst (d/q '[:find ?tx
+                                     :where
+                                     [?f :file/path "src/recipient.clj"]
+                                     [?f :sem/summary _ ?tx]]
+                                   db'))
+              prov    (d/pull db' [{:prov/promoted-from [:db/id]}] rcpt-tx)]
+          (is (some? (:prov/promoted-from prov))))))))
+
+(deftest promote!-noop-on-nil-donor
+  (let [conn (th/make-test-conn "promo-noop")]
+    (is (nil? (promotion/promote! conn "src/anything.clj" nil)))))
+
+;; --- analyze-file! integration: promotion bypasses the LLM ---
+
+(defn- llm-counter
+  "Returns [counter-atom invoke-llm-fn]. The fn always throws so a hit on
+   promotion (which avoids invoke-llm) is the only way analyze-file! can
+   return :promoted without erroring."
+  []
+  (let [calls (atom 0)]
+    [calls (fn [_prompt]
+             (swap! calls inc)
+             (throw (ex-info "LLM should not have been called" {})))]))
+
+(deftest analyze-file!-promotes-on-hit
+  (let [conn (th/make-test-conn "promo-analyze")
+        [calls _llm] (llm-counter)]
+    ;; Donor: src/donor.clj at blob-x, fully analyzed
+    (d/transact conn {:tx-data [{:file/path "src/donor.clj" :file/blob-sha blob-x
+                                 :file/lang :clojure :file/size 100}]})
+    (d/transact conn {:tx-data (analyze-tx "src/donor.clj" "donor's analysis")})
+    ;; Recipient: src/recipient.clj at blob-x, NOT analyzed
+    (d/transact conn {:tx-data [{:file/path "src/recipient.clj" :file/blob-sha blob-x
+                                 :file/lang :clojure :file/size 100}]})
+    (let [opts   {:provider "test" :model-id model-v
+                  :prompt-template "irrelevant"
+                  :prompt-hash-val prompt-h
+                  :invoke-llm (fn [_p] (swap! calls inc) (throw (ex-info "should not call" {})))}
+          _ (require 'noumenon.analyze)
+          analyze (resolve 'noumenon.analyze/analyze-file!)
+          out (analyze conn "/tmp/fake-repo" {:file/path "src/recipient.clj" :file/lang :clojure} opts)]
+      (is (= :promoted (:status out)))
+      (is (zero? @calls) "LLM was not invoked")
+      (is (= "donor's analysis"
+             (:sem/summary (d/pull (d/db conn) [:sem/summary] [:file/path "src/recipient.clj"])))))))
+
+(deftest analyze-file!-no-promote-flag-bypasses-cache
+  (let [conn (th/make-test-conn "promo-flag-off")
+        [_calls llm] (llm-counter)]
+    (d/transact conn {:tx-data [{:file/path "src/donor.clj" :file/blob-sha blob-x
+                                 :file/lang :clojure :file/size 100}]})
+    (d/transact conn {:tx-data (analyze-tx "src/donor.clj" "donor")})
+    (d/transact conn {:tx-data [{:file/path "src/recipient.clj" :file/blob-sha blob-x
+                                 :file/lang :clojure :file/size 100}]})
+    (let [analyze (do (require 'noumenon.analyze) (resolve 'noumenon.analyze/analyze-file!))
+          opts {:provider "test" :model-id model-v
+                :prompt-template "irrelevant" :prompt-hash-val prompt-h
+                :invoke-llm llm :no-promote? true}
+          _out (analyze conn "/tmp/fake-repo"
+                        {:file/path "src/recipient.clj" :file/lang :clojure} opts)]
+      ;; With --no-promote we bypass the donor lookup and fall through to the
+      ;; LLM path (which fails on the fake repo); the recipient must NOT have
+      ;; been promoted.
+      (is (nil? (:sem/summary (d/pull (d/db conn) [:sem/summary]
+                                      [:file/path "src/recipient.clj"])))
+          "recipient was not promoted because --no-promote bypassed the cache"))))

@@ -8,6 +8,7 @@
             [noumenon.git :as git]
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
+            [noumenon.promotion :as promotion]
             [noumenon.selector :as selector]
             [noumenon.util :as util :refer [escape-double-mustache log! sha256-hex]])
   (:import [java.util Date]))
@@ -477,32 +478,53 @@
                 (assoc :resolved-model (:resolved-model r1))
                 (update :usage #(llm/sum-usage (:usage r1) %))))))))
 
+(defn- try-promote!
+  "Attempt content-addressed promotion: if an earlier analysis in this DB
+   already covers `path`'s current :file/blob-sha (with the same prompt-hash
+   and model-version), copy its attrs onto `path` and return :promoted.
+   Returns nil on miss or when promotion is disabled."
+  [conn path prompt-hash-val model-version]
+  (let [db (d/db conn)
+        {:file/keys [blob-sha]} (d/pull db [:file/blob-sha] [:file/path path])]
+    (when blob-sha
+      (when-let [donor (promotion/find-cached-analysis
+                        db blob-sha prompt-hash-val model-version)]
+        (promotion/promote! conn path donor)))))
+
 (defn analyze-file!
-  "Analyze a single file. Returns {:status :ok/:parse-error/:error, :usage map-or-nil}.
-   Retries once on parse errors (unparseable LLM response)."
-  [conn repo-path file-map {:keys [provider model-id prompt-template prompt-hash-val invoke-llm]}]
+  "Analyze a single file. Returns {:status :ok/:promoted/:parse-error/:error,
+   :usage map-or-nil}. Retries once on parse errors.
+
+   When `:no-promote?` is falsy and a content-addressed donor analysis
+   exists in the same DB (matching :file/blob-sha + prompt-hash + model
+   version), the donor's attrs are promoted onto the recipient and
+   :status is :promoted with no LLM call."
+  [conn repo-path file-map
+   {:keys [provider model-id prompt-template prompt-hash-val invoke-llm no-promote?]}]
   (let [{:keys [file/path file/lang]} file-map]
     (try
-      (let [{:keys [prompt truncated?]} (build-file-prompt (d/db conn) repo-path
-                                                           path lang prompt-template)
-            result (invoke-with-retry invoke-llm prompt truncated? path)
-            model-source (cond
-                           (:resolved-model result) :resolved-model
-                           model-id                :requested-model
-                           :else                   :unknown)
-            model-version (or (:resolved-model result) model-id "unknown")]
-        (if-let [analysis (:analysis result)]
-          (let [tx-data (analysis->tx-data path analysis
-                                           {:model-source    model-source
-                                            :model-version   model-version
-                                            :provider        provider
-                                            :prompt-hash-val prompt-hash-val
-                                            :analyzer        "noumenon.analyze/0.1.0"
-                                            :usage           (:usage result)})]
-            (d/transact conn {:tx-data tx-data})
-            {:status :ok :usage (:usage result) :truncated? truncated?})
-          (do (log! (str "WARNING: unparseable response for " path ", skipping"))
-              {:status :parse-error :usage (:usage result) :truncated? truncated?})))
+      (or (when-not no-promote?
+            (try-promote! conn path prompt-hash-val (or model-id "unknown")))
+          (let [{:keys [prompt truncated?]} (build-file-prompt (d/db conn) repo-path
+                                                               path lang prompt-template)
+                result (invoke-with-retry invoke-llm prompt truncated? path)
+                model-source (cond
+                               (:resolved-model result) :resolved-model
+                               model-id                :requested-model
+                               :else                   :unknown)
+                model-version (or (:resolved-model result) model-id "unknown")]
+            (if-let [analysis (:analysis result)]
+              (let [tx-data (analysis->tx-data path analysis
+                                               {:model-source    model-source
+                                                :model-version   model-version
+                                                :provider        provider
+                                                :prompt-hash-val prompt-hash-val
+                                                :analyzer        "noumenon.analyze/0.1.0"
+                                                :usage           (:usage result)})]
+                (d/transact conn {:tx-data tx-data})
+                {:status :ok :usage (:usage result) :truncated? truncated?})
+              (do (log! (str "WARNING: unparseable response for " path ", skipping"))
+                  {:status :parse-error :usage (:usage result) :truncated? truncated?}))))
       (catch Exception e
         (log! (str "  Error analyzing " path ": " (.getMessage e)))
         {:status :error}))))
@@ -599,7 +621,7 @@
                cost-str ", " est-time))))
 
 (def ^:private empty-analysis-result
-  {:files-analyzed 0 :files-skipped 0
+  {:files-analyzed 0 :files-promoted 0 :files-skipped 0
    :files-parse-errored 0 :files-errored 0
    :elapsed-ms 0 :total-usage llm/zero-usage})
 
@@ -621,6 +643,8 @@
         cost     (:cost-usd tu 0.0)
         pe-paths (:parse-error-paths results [])]
     (log! (str "Done. " (:ok results 0) " analyzed"
+               (when (pos? (:promoted results 0))
+                 (str ", " (:promoted results 0) " promoted"))
                (when (pos? (:truncated results 0))
                  (str ", " (:truncated results 0) " truncated"))
                (when (pos? (:parse-error results 0))
@@ -633,6 +657,7 @@
     (when (seq pe-paths)
       (log! (str "  Parse-errored files: " (str/join ", " pe-paths))))
     {:files-analyzed      (:ok results 0)
+     :files-promoted      (:promoted results 0)
      :files-skipped       0
      :files-parse-errored (:parse-error results 0)
      :parse-error-paths   pe-paths
@@ -647,7 +672,7 @@
    Returns summary map with :total-usage."
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
   ([conn repo-path invoke-llm {:keys [meta-db model-id provider concurrency min-delay-ms max-files progress-fn
-                                      path include exclude lang]
+                                      path include exclude lang no-promote?]
                                :or   {concurrency 3 min-delay-ms 0}}]
    (let [head-paths    (into #{} (map :path) (files/parse-ls-tree (files/git-ls-tree repo-path)))
          prompt-map    (load-prompt-template meta-db)
@@ -662,8 +687,10 @@
          total         (count files)
          analysis-opts {:prompt-template (:template prompt-map)
                         :provider provider
+                        :model-id model-id
                         :prompt-hash-val prompt-h
-                        :invoke-llm invoke-llm}]
+                        :invoke-llm invoke-llm
+                        :no-promote? no-promote?}]
      (log-drift-recommendations! dbv prompt-h model-id)
      (when (pos? (:excluded summary 0))
        (log! (str "Selection filters excluded " (:excluded summary) " file(s).")))
@@ -675,7 +702,7 @@
                     (when (> concurrency 1) (str " (concurrency=" concurrency ")"))
                     "..."))
          (estimate-banner files model-id)
-         (let [stats-atom (atom {:ok 0 :parse-error 0 :error 0 :started 0
+         (let [stats-atom (atom {:ok 0 :promoted 0 :parse-error 0 :error 0 :started 0
                                  :elapsed-ms 0 :total-usage llm/zero-usage})
                ctx        {:conn conn :repo-path repo-path
                            :analysis-opts analysis-opts
