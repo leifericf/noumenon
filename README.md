@@ -126,6 +126,10 @@ Five pipeline stages compile raw git data into a queryable knowledge graph:
 
 Three query interfaces sit on top: Datalog queries, natural-language Ask, and MCP tools. The Ask agent uses TF-IDF vector search to seed relevant files before querying the graph. `introspect` uses benchmarks to autonomously improve the Ask agent.
 
+### Branch-aware graph & federation (experimental)
+
+Each Noumenon database is tagged with the branch it represents. When a developer is on a feature branch, `noum delta-ensure` materializes a sparse local *delta DB* under `~/.noumenon/deltas/` containing only the files that differ from a trunk basis SHA. Federated queries (`noum query <name> <repo> --federate --basis-sha <sha>`) merge trunk and delta in a single roundtrip — trunk rows minus delta paths, plus the delta's own rows — so answers reflect the working branch without the user reconfiguring connections. Content-addressed analysis promotion (`:file/blob-sha` + matching prompt+model provenance) copies prior analyses onto unchanged blobs, skipping the LLM. See `CHANGES.md` "Unreleased" for scope and current limits (delta DBs require a co-located daemon; promotion is same-DB only).
+
 ## MCP Server
 
 ```bash

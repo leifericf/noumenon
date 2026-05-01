@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- **Branch-aware graph foundation** — every database now records which branch it represents. New `:branch/name`, `:branch/kind` (`:trunk` / `:feature` / `:release` / `:unknown`), `:branch/vcs`, and a tuple identity `:branch/repo+name` are populated automatically on every `update`. Repos point to their current branch via `:repo/branch`.
+- **Content-addressed file identity** — `:file/blob-sha` is now imported from `git ls-tree` for every file, enabling content-based comparisons and cache lookups. Existing files lazy-fill on next sync.
+- **Local delta databases** — `noum delta-ensure <repo> --basis-sha <sha>` (or `POST /api/delta/ensure`) materializes a sparse Datomic DB at `~/.noumenon/deltas/<repo>__<branch>__<basis>` containing only files added/modified/deleted between the trunk basis and the current HEAD. Deletions are recorded as `:file/deleted? true` tombstones. Delta DBs link back to their parent via `:branch/basis-sha`, `:branch/parent-host`, and `:branch/parent-db-name`.
+- **Federated trunk + delta queries** — a subset of named queries are tagged `:federation-safe?` and accept `:exclude_paths` so the daemon can return trunk results minus rows the launcher will overlay from a delta DB. New endpoint `POST /api/query-federated` does the merge in a single roundtrip; new flag `noum query <name> <repo> --federate --basis-sha <sha>` opts in. Federation-safe queries seeded so far: `orphan-files`, `complex-hotspots`, `import-hotspots`, `hotspots`, `ai-authored-segments`, `bug-hotspots`, `files-by-churn`. Non-federation-safe queries return trunk-only with a banner.
+- **Content-addressed analysis promotion** — when a file's `:file/blob-sha` equals a previously-analyzed blob in the same DB whose `:prov/prompt-hash` and `:prov/model-version` match the current run, `noum analyze` copies the donor's `:sem/*` and `:arch/*` attrs onto the recipient and skips the LLM call. Donor lineage is preserved via `:prov/promoted-from`. Pass `--no-promote` to bypass the cache. The analyze summary surfaces a `:files-promoted` counter alongside `:files-analyzed`.
+
+### Changed
+
+- **No `:file/deleted?` in trunk transactions** — trunk DBs hard-retract deleted files as before; only delta DBs use tombstones. A guard asserts this in `retract-deleted-files!`.
+- **Schema files** — added `resources/schema/branch.edn`. New attrs `:file/blob-sha`, `:file/deleted?`, `:prov/promoted-from` in existing schema files. `:tx/op` doc lists `:promote`; `:tx/source` doc lists `:promoted`. New `:artifact.query/federation-safe?` flag.
+
+### Notes
+
+- Datomic schema is additive: no migrations runner, no version stamps. `ensure-schema` re-transacts every connect; existing DBs pick up new attrs and queries pick up `:federation-safe?` on next start.
+- Delta DBs require a co-located daemon in this release. Cross-machine federation (remote daemon, launcher-side delta) is deferred.
+- Promotion is same-DB only in this release. Cross-DB promotion (delta lookups against trunk's history) is deferred.
+
 ## 0.7.0
 
 ### Changed

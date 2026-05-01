@@ -67,7 +67,25 @@ flowchart LR
 | Mid | File, Commit, Person | "Which files have the most safety concerns?" |
 | Micro | Code Segment | "Which functions are complex and impure?" |
 
-Analysis transactions carry provenance: `:prov/model-version`, `:prov/prompt-hash`, `:prov/analyzed-at`, and token/cost tracking.
+Analysis transactions carry provenance: `:prov/model-version`, `:prov/prompt-hash`, `:prov/analyzed-at`, and token/cost tracking. Promoted (cache-hit) analyses additionally carry `:prov/promoted-from` pointing to the donor transaction.
+
+Each database also carries branch metadata: `:branch/name`, `:branch/kind`, `:branch/vcs`, with composite identity via the tuple attribute `:branch/repo+name`. Repos point to their current branch via `:repo/branch`. For *delta* databases (see below), the branch entity additionally records `:branch/basis-sha`, `:branch/parent-host`, and `:branch/parent-db-name`.
+
+### Delta databases
+
+When a developer's git HEAD diverges from the hosted trunk basis, `noum delta-ensure` (or `POST /api/delta/ensure`) materializes a sparse local DB under `~/.noumenon/deltas/<repo>__<safe-branch>__<basis7>/` containing only files added/modified/deleted between basis and HEAD. Deletions are stored as `:file/deleted? true` tombstones rather than retracted; trunk DBs continue to hard-retract (a `retract-deleted-files!` assert guards against tombstones leaking into trunk transactions).
+
+Delta DBs are throwaway: schema mismatch or basis drift means wipe and rebuild, never migrate.
+
+### Federated queries
+
+Named queries can opt into federation by setting `:federation-safe? true` in their EDN. The convention is that a federation-safe query binds the file entity as `?file` and projects file path in column 0. The runtime injects `(not [?file :file/path "<p>"])` clauses for each excluded path before executing trunk's query. `POST /api/query-federated` (or `noum query <name> <repo> --federate --basis-sha <sha>`) merges trunk-without-delta-paths with delta's own rows.
+
+Federation lives server-side because the Babashka launcher doesn't carry datomic-client; one HTTP roundtrip beats coordinating multiple from a language without direct DB access.
+
+### Content-addressed promotion
+
+`noumenon.promotion/find-cached-analysis` searches the current DB for a `(file, analyze-tx)` pair where the file held the target `:file/blob-sha` at analyze time and the tx's `:prov/prompt-hash` + `:prov/model-version` match the current run. On hit, `analyze-file!` transacts the donor's `:sem/*` + `:arch/*` attrs onto the recipient with `:prov/promoted-from` pointing to the donor tx — preserving traceability for staleness audits. Pass `--no-promote` to bypass.
 
 ## Language Support
 
