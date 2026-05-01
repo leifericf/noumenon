@@ -3,7 +3,6 @@
   (:require [babashka.fs :as fs]
             [babashka.http-client :as http]
             [babashka.process :as proc]
-            [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [noum.api :as api]
@@ -293,7 +292,7 @@
                         (catch Exception e
                           {:ok false :error (or (.getMessage e) (str (class e)))}))]
           (if (:ok resp)
-            (do (when (not= "up-to-date" (get-in resp [:data :status]))
+            (do (when (not= :up-to-date (get-in resp [:data :status]))
                   (tui/eprintln (str "  Updated: " (get-in resp [:data :added] 0) " added, "
                                      (get-in resp [:data :modified] 0) " modified, "
                                      (get-in resp [:data :deleted] 0) " deleted")))
@@ -326,7 +325,7 @@
                                           {:headers (api/auth-headers conn)
                                            :timeout 30000
                                            :throw   false})]
-                       (json/parse-string (:body r) true))
+                       (api/parse-body (:body r)))
                      (catch Exception e {:ok false :error (.getMessage e)}))]
           (print-api-result resp))))))
 

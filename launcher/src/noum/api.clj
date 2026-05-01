@@ -6,6 +6,7 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [clojure.walk :as walk]
             [noum.daemon :as daemon]
             [noum.jre :as jre]
             [noum.jar :as jar]
@@ -64,6 +65,33 @@
   (cond-> {"Content-Type" "application/json"}
     token (assoc "Authorization" (str "Bearer " token))))
 
+;; --- Response decoding ---
+
+(def ^:private enum-keys
+  "Response fields whose values are domain enums encoded as JSON strings.
+   Restored to keywords on parse so callers can compare against keyword
+   constants in idiomatic Clojure style (e.g. `:up-to-date`, `:synced`)."
+  #{:status})
+
+(defn- restore-enums
+  "Re-keywordize values of known enum fields in a single map."
+  [m]
+  (reduce (fn [acc k]
+            (if (string? (get acc k))
+              (update acc k keyword)
+              acc))
+          m
+          enum-keys))
+
+(defn parse-body
+  "Parse a JSON string into Clojure data: keywordize keys and restore known
+   enum values to keywords (the symmetric counterpart to clojure.data.json's
+   keyword-as-string serialization on the daemon side)."
+  [s]
+  (when (string? s)
+    (->> (json/parse-string s true)
+         (walk/postwalk #(if (map? %) (restore-enums %) %)))))
+
 ;; --- SSE ---
 
 (defn parse-sse-events
@@ -79,7 +107,7 @@
             (recur (subs line 7))
 
             (str/starts-with? line "data: ")
-            (let [data (json/parse-string (subs line 6) true)]
+            (let [data (parse-body (subs line 6))]
               (case event-type
                 "progress" (do (when on-progress (on-progress data)) (recur nil))
                 "result"   (do (reset! result data) (recur nil))
@@ -115,12 +143,12 @@
 
        sse?
        (let [body-str (slurp (:body resp))]
-         (try (json/parse-string body-str true)
+         (try (parse-body body-str)
               (catch Exception _
                 {:ok false :error (str "HTTP " (:status resp) ": " body-str)})))
 
        :else
-       (json/parse-string (:body resp) true)))))
+       (parse-body (:body resp))))))
 
 (defn get!
   "GET from the daemon API. Returns parsed JSON response."
@@ -129,7 +157,7 @@
                        {:headers (auth-headers conn)
                         :timeout 30000
                         :throw   false})]
-    (json/parse-string (:body resp) true)))
+    (parse-body (:body resp))))
 
 ;; --- Backend lifecycle ---
 
