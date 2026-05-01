@@ -138,6 +138,30 @@
         {:keys [exit out]} (apply shell/sh args)]
     (when (zero? exit) (str/trim out))))
 
+(defn current-branch-name
+  "Return the current branch name. On detached HEAD, returns the short SHA.
+   nil if neither resolves (broken repo)."
+  [repo-path]
+  (let [args (into ["git"] (concat (git-dir-args repo-path)
+                                   ["symbolic-ref" "--short" "-q" "HEAD"]))
+        {:keys [exit out]} (apply shell/sh args)]
+    (if (zero? exit)
+      (str/trim out)
+      (when-let [sha (head-sha repo-path)]
+        (subs sha 0 (min 7 (count sha)))))))
+
+(defn classify-branch-kind
+  "Map a branch name to a coarse role keyword.
+   :trunk for main/master/trunk, :release for release/* or hotfix/*,
+   :feature otherwise."
+  [branch-name]
+  (cond
+    (nil? branch-name)                                    :unknown
+    (re-matches #"(?i)main|master|trunk|develop|dev"
+                branch-name)                              :trunk
+    (re-matches #"(?i)(release|hotfix)/.*" branch-name)   :release
+    :else                                                 :feature))
+
 ;; Git log format: %x01 = record separator, %x00 = field separator.
 ;; %B (raw body) can contain arbitrary text including blank lines,
 ;; so we bracket it with %x00 to make parsing unambiguous.

@@ -43,3 +43,27 @@
         (is (= [] (:modified result))))))
   (testing "invalid SHA returns nil"
     (is (nil? (sync/changed-files "/tmp" "not-a-sha")))))
+
+(deftest head-and-branch-tx-test
+  (testing "nil sha returns nil"
+    (is (nil? (sync/head-and-branch-tx {:repo-uri "u" :sha nil :branch-name "main"}))))
+  (testing "no branch-name → only head-sha tx, no :repo/branch pointer"
+    (let [tx (sync/head-and-branch-tx {:repo-uri "u" :sha "abc"})]
+      (is (= 1 (count tx)))
+      (is (= {:repo/uri "u" :repo/head-sha "abc"} (first tx)))))
+  (testing "branch-name present → repo gets pointer + branch entity transacted"
+    (let [tx (sync/head-and-branch-tx
+              {:repo-uri    "u"
+               :sha         "abc"
+               :branch-name "main"
+               :branch-kind :trunk
+               :branch-vcs  :git})]
+      (is (= 2 (count tx)))
+      (is (= {:repo/uri "u" :repo/head-sha "abc" :repo/branch "branch"}
+             (first tx)))
+      (is (= {:db/id        "branch"
+              :branch/repo  [:repo/uri "u"]
+              :branch/name  "main"
+              :branch/kind  :trunk
+              :branch/vcs   :git}
+             (second tx))))))

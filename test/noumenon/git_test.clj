@@ -211,6 +211,24 @@
   (is (nil? (git/extract-issue-refs nil)))
   (is (nil? (git/extract-issue-refs ""))))
 
+(deftest classify-branch-kind-test
+  (testing "trunk patterns"
+    (is (= :trunk (git/classify-branch-kind "main")))
+    (is (= :trunk (git/classify-branch-kind "master")))
+    (is (= :trunk (git/classify-branch-kind "trunk")))
+    (is (= :trunk (git/classify-branch-kind "Main")))
+    (is (= :trunk (git/classify-branch-kind "develop"))))
+  (testing "release patterns"
+    (is (= :release (git/classify-branch-kind "release/1.0")))
+    (is (= :release (git/classify-branch-kind "hotfix/security-fix")))
+    (is (= :release (git/classify-branch-kind "Release/2.5"))))
+  (testing "feature is the default"
+    (is (= :feature (git/classify-branch-kind "feat/branch-aware-graph")))
+    (is (= :feature (git/classify-branch-kind "users/leif/exp")))
+    (is (= :feature (git/classify-branch-kind "abc1234"))))
+  (testing "nil → :unknown"
+    (is (= :unknown (git/classify-branch-kind nil)))))
+
 (deftest tx-data-includes-issue-refs
   (let [commit  {:sha "abc" :parent-shas [] :message "fix(api): handle timeout (#42, PROJ-7)"
                  :author-name "A" :author-email "a@x.com" :authored-at #inst "2024-01-01"

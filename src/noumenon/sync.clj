@@ -176,12 +176,41 @@
                                              (conj [:db/retractEntity eid]))))]
       (transact-retractions! conn results))))
 
+(defn- branch-vcs
+  "VCS identifier for the branch entity — :perforce for git-p4 clones, :git otherwise."
+  [repo-path]
+  (if (and (.isDirectory (java.io.File. (str repo-path)))
+           (git/p4-clone? repo-path))
+    :perforce
+    :git))
+
+(defn head-and-branch-tx
+  "Pure tx-data builder for HEAD SHA + branch upsert. The branch is identified
+   by tuple [:branch/repo+name [<repo-eid> <branch-name>]] resolved via the
+   :repo/uri lookup ref. Returns nil if sha is missing."
+  [{:keys [repo-uri sha branch-name branch-kind branch-vcs]}]
+  (when sha
+    (let [repo-tx (cond-> {:repo/uri repo-uri :repo/head-sha sha}
+                    branch-name (assoc :repo/branch "branch"))]
+      (cond-> [repo-tx]
+        branch-name (conj {:db/id        "branch"
+                           :branch/repo  [:repo/uri repo-uri]
+                           :branch/name  branch-name
+                           :branch/kind  branch-kind
+                           :branch/vcs   branch-vcs})))))
+
 (defn- update-head-sha!
-  "Store the current HEAD SHA on the repo entity."
+  "Store the current HEAD SHA on the repo entity and upsert the branch entity."
   [conn repo-path repo-uri]
-  (let [sha (git/head-sha repo-path)]
-    (when sha
-      (d/transact conn {:tx-data [{:repo/uri repo-uri :repo/head-sha sha}]}))))
+  (let [branch-name (git/current-branch-name repo-path)
+        tx-data     (head-and-branch-tx
+                     {:repo-uri    repo-uri
+                      :sha         (git/head-sha repo-path)
+                      :branch-name branch-name
+                      :branch-kind (git/classify-branch-kind branch-name)
+                      :branch-vcs  (branch-vcs repo-path)})]
+    (when tx-data
+      (d/transact conn {:tx-data tx-data}))))
 
 ;; --- Commit reclassification ---
 
