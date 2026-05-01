@@ -293,9 +293,10 @@
                         (catch Exception e
                           {:ok false :error (or (.getMessage e) (str (class e)))}))]
           (if (:ok resp)
-            (do (when (not= :up-to-date (get-in resp [:data :status]))
+            (do (when (not= "up-to-date" (get-in resp [:data :status]))
                   (tui/eprintln (str "  Updated: " (get-in resp [:data :added] 0) " added, "
-                                     (get-in resp [:data :modified] 0) " modified")))
+                                     (get-in resp [:data :modified] 0) " modified, "
+                                     (get-in resp [:data :deleted] 0) " deleted")))
                 (Thread/sleep (* interval-s 1000))
                 (recur 0))
             (let [n       (inc failures)
