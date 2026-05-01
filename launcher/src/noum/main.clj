@@ -628,6 +628,11 @@
         (do (tui/eprintln (str "Error: " (.getMessage e)))
             1)))))
 
+(defn- do-delta-ensure [{:keys [flags] :as parsed}]
+  (if-not (or (:basis-sha flags) (:basis_sha flags))
+    (do (tui/eprintln "Usage: noum delta-ensure <repo> --basis-sha <sha>") 1)
+    (do-api-command (assoc parsed :command "delta-ensure"))))
+
 (def dispatch
   {"help"       do-help
    "version"    do-version
@@ -638,6 +643,7 @@
    "ping"       do-ping
    "upgrade"    do-upgrade
    "serve"      do-serve
+   "delta-ensure" do-delta-ensure
    "watch"      do-watch
    "status"     do-status
    "schema"     do-schema

@@ -210,19 +210,30 @@
     :git))
 
 (defn head-and-branch-tx
-  "Pure tx-data builder for HEAD SHA + branch upsert. The branch is identified
-   by tuple [:branch/repo+name [<repo-eid> <branch-name>]] resolved via the
-   :repo/uri lookup ref. Returns nil if sha is missing."
-  [{:keys [repo-uri sha branch-name branch-kind branch-vcs]}]
+  "Pure tx-data builder for HEAD SHA + branch upsert. Self-contained: the
+   repo entity is referenced via tempid \"repo\" so this tx can run on a
+   fresh DB (delta DB on first sync) as well as an existing one (trunk
+   incremental sync). :repo/uri is :db.unique/identity, so the tempid
+   resolves to an existing repo if present, else creates one.
+   Delta-only opts (basis-sha, parent-host, parent-db-name) are emitted onto
+   the branch entity when supplied; nil on trunk. Returns nil if sha missing."
+  [{:keys [repo-uri sha branch-name branch-kind branch-vcs
+           basis-sha parent-host parent-db-name]}]
   (when sha
-    (let [repo-tx (cond-> {:repo/uri repo-uri :repo/head-sha sha}
-                    branch-name (assoc :repo/branch "branch"))]
+    (let [repo-tx   (cond-> {:db/id         "repo"
+                             :repo/uri      repo-uri
+                             :repo/head-sha sha}
+                      branch-name (assoc :repo/branch "branch"))
+          branch-tx (cond-> {:db/id        "branch"
+                             :branch/repo  "repo"
+                             :branch/name  branch-name
+                             :branch/kind  branch-kind
+                             :branch/vcs   branch-vcs}
+                      basis-sha      (assoc :branch/basis-sha basis-sha)
+                      parent-host    (assoc :branch/parent-host parent-host)
+                      parent-db-name (assoc :branch/parent-db-name parent-db-name))]
       (cond-> [repo-tx]
-        branch-name (conj {:db/id        "branch"
-                           :branch/repo  [:repo/uri repo-uri]
-                           :branch/name  branch-name
-                           :branch/kind  branch-kind
-                           :branch/vcs   branch-vcs})))))
+        branch-name (conj branch-tx)))))
 
 (defn- update-head-sha!
   "Store the current HEAD SHA on the repo entity and upsert the branch entity."

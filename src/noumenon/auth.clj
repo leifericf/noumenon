@@ -97,7 +97,7 @@
   "URI path prefixes that require admin role."
   #{"/api/import" "/api/analyze" "/api/enrich" "/api/update"
     "/api/synthesize" "/api/digest" "/api/introspect" "/api/reseed"
-    "/api/tokens" "/api/repos" "/api/webhook"
+    "/api/tokens" "/api/repos" "/api/webhook" "/api/delta"
     "/api/settings" "/api/query-raw" "/api/ask/sessions"})
 
 (def ^:private write-prefixes

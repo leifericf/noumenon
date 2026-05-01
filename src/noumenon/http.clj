@@ -13,6 +13,7 @@
             [noumenon.artifacts :as artifacts]
             [noumenon.benchmark :as bench]
             [noumenon.db :as db]
+            [noumenon.delta :as delta]
             [noumenon.embed :as embed]
             [noumenon.files :as files]
             [noumenon.git :as git]
@@ -318,6 +319,27 @@
         (if (wants-sse? request)
           (with-sse request (partial run-enrich ctx params))
           (ok (run-enrich ctx params nil)))))))
+
+(defn- handle-delta-ensure [request _config]
+  (let [params    (parse-json-body request)
+        repo-path (:repo_path params)
+        basis-sha (:basis_sha params)
+        branch    (:branch params)]
+    (when-not (and repo-path basis-sha)
+      (throw (ex-info "Missing repo_path or basis_sha"
+                      {:status 400 :message "repo_path and basis_sha are required"})))
+    (when-not (sync/valid-sha? basis-sha)
+      (throw (ex-info "Invalid basis_sha"
+                      {:status 400 :message "basis_sha must be a 40-char lowercase hex SHA"})))
+    (when-let [reason (util/validate-repo-path repo-path)]
+      (throw (ex-info reason {:status 400 :message (str "repo_path " reason)})))
+    (let [delta-opts (cond-> {}
+                       branch                     (assoc :branch-name branch)
+                       (:parent_host params)      (assoc :parent-host (:parent_host params))
+                       (:parent_db_name params)   (assoc :parent-db-name (:parent_db_name params)))
+          conn       (delta/ensure-delta-db! repo-path basis-sha delta-opts)
+          result     (delta/update-delta! conn repo-path basis-sha delta-opts)]
+      (ok result))))
 
 (defn- handle-update [request config]
   (let [params (parse-json-body request)]
@@ -1036,6 +1058,7 @@
    [:post "/api/analyze"               handle-analyze]
    [:post "/api/enrich"                handle-enrich]
    [:post "/api/update"                handle-update]
+   [:post "/api/delta/ensure"          handle-delta-ensure]
    [:post "/api/synthesize"            handle-synthesize]
    [:post "/api/digest"                handle-digest]
    [:post "/api/ask"                   handle-ask]

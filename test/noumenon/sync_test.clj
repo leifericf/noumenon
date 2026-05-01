@@ -55,7 +55,7 @@
   (testing "no branch-name → only head-sha tx, no :repo/branch pointer"
     (let [tx (sync/head-and-branch-tx {:repo-uri "u" :sha "abc"})]
       (is (= 1 (count tx)))
-      (is (= {:repo/uri "u" :repo/head-sha "abc"} (first tx)))))
+      (is (= {:db/id "repo" :repo/uri "u" :repo/head-sha "abc"} (first tx)))))
   (testing "branch-name present → repo gets pointer + branch entity transacted"
     (let [tx (sync/head-and-branch-tx
               {:repo-uri    "u"
@@ -64,11 +64,33 @@
                :branch-kind :trunk
                :branch-vcs  :git})]
       (is (= 2 (count tx)))
-      (is (= {:repo/uri "u" :repo/head-sha "abc" :repo/branch "branch"}
+      (is (= {:db/id "repo" :repo/uri "u" :repo/head-sha "abc" :repo/branch "branch"}
              (first tx)))
       (is (= {:db/id        "branch"
-              :branch/repo  [:repo/uri "u"]
+              :branch/repo  "repo"
               :branch/name  "main"
               :branch/kind  :trunk
               :branch/vcs   :git}
-             (second tx))))))
+             (second tx)))))
+  (testing "delta opts populate basis-sha + parent fields on the branch entity"
+    (let [tx (sync/head-and-branch-tx
+              {:repo-uri        "u"
+               :sha             "dev"
+               :branch-name     "feat/x"
+               :branch-kind     :feature
+               :branch-vcs      :git
+               :basis-sha       "trunk-sha"
+               :parent-host     "noumenon.example"
+               :parent-db-name  "myrepo"})
+          branch (second tx)]
+      (is (= "trunk-sha" (:branch/basis-sha branch)))
+      (is (= "noumenon.example" (:branch/parent-host branch)))
+      (is (= "myrepo" (:branch/parent-db-name branch)))))
+  (testing "delta opts omitted on trunk → no basis/parent attrs emitted"
+    (let [branch (-> (sync/head-and-branch-tx
+                      {:repo-uri "u" :sha "abc" :branch-name "main"
+                       :branch-kind :trunk :branch-vcs :git})
+                     second)]
+      (is (not (contains? branch :branch/basis-sha)))
+      (is (not (contains? branch :branch/parent-host)))
+      (is (not (contains? branch :branch/parent-db-name))))))
