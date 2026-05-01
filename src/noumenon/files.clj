@@ -236,7 +236,7 @@
   "Build a Datomic entity map for a file.
    `file-map` is a parsed ls-tree entry, `line-counts` is {path count}."
   [file-map line-counts]
-  (let [{:keys [path size]} file-map
+  (let [{:keys [path size sha]} file-map
         ext   (file-ext path)
         lang  (when ext (ext->lang ext))
         lines (get line-counts path)]
@@ -245,7 +245,8 @@
       ext   (assoc :file/ext ext)
       size  (assoc :file/size size)
       lang  (assoc :file/lang lang)
-      lines (assoc :file/lines lines))))
+      lines (assoc :file/lines lines)
+      sha   (assoc :file/blob-sha sha))))
 
 ;; --- Import orchestration ---
 

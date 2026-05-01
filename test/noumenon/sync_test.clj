@@ -44,6 +44,11 @@
   (testing "invalid SHA returns nil"
     (is (nil? (sync/changed-files "/tmp" "not-a-sha")))))
 
+(deftest deleted-file-tx-test
+  (testing "produces tombstone upsert keyed on :file/path identity"
+    (is (= {:file/path "src/gone.clj" :file/deleted? true}
+           (sync/deleted-file-tx "src/gone.clj")))))
+
 (deftest head-and-branch-tx-test
   (testing "nil sha returns nil"
     (is (nil? (sync/head-and-branch-tx {:repo-uri "u" :sha nil :branch-name "main"}))))

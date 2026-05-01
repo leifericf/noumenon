@@ -132,6 +132,16 @@
   :db/cardinality :db.cardinality/one
   :db/doc         "Parent directory"}
 
+ {:db/ident       :file/blob-sha
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Git blob SHA of the file's content at the imported revision — enables content-addressed analysis promotion across branches"}
+
+ {:db/ident       :file/deleted?
+  :db/valueType   :db.type/boolean
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Tombstone marker for delta DBs — true means this file is deleted relative to the parent (trunk) DB. Never set in trunk DBs; trunk deletions hard-retract the entity instead."}
+
  ;; --- Directories ---
  {:db/ident       :dir/path
   :db/valueType   :db.type/string

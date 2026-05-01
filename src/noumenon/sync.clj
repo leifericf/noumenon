@@ -165,16 +165,41 @@
   (->> (d/q '[:find ?src :in $ ?target :where [?src :file/imports ?target]] db eid)
        (mapv (fn [[src-eid]] [:db/retract src-eid :file/imports eid]))))
 
+(defn deleted-file-tx
+  "Pure tx-data builder for tombstoning a deleted file in a delta DB.
+   Uses :file/path identity so the tombstone upserts whether the entity
+   already exists in the delta or not. Never used in trunk DBs — trunk
+   deletions hard-retract via retract-deleted-files!."
+  [path]
+  {:file/path path :file/deleted? true})
+
+(defn- assert-no-tombstones
+  "Guard: trunk-mode retraction tx must never carry :file/deleted?.
+   Tombstones are a delta-DB-only concept."
+  [tx-data]
+  (assert (not-any? #(and (map? %) (contains? % :file/deleted?)) tx-data)
+          "Trunk retraction tx must not contain :file/deleted? — tombstones are delta-only"))
+
 (defn- retract-deleted-files!
-  "Retract entire file entities for deleted files. Returns count actually retracted."
-  [conn paths]
+  "Trunk DB: hard-retract entire file entities (with inbound imports + code segments).
+   Delta DB: upsert tombstones via deleted-file-tx so the delta records the deletion
+   without losing the entity. Returns count of files affected."
+  [conn paths {:keys [delta-db?]}]
   (when (seq paths)
-    (let [results (build-retraction-tx (d/db conn) paths
-                                       (fn [db eid]
-                                         (-> (retract-inbound-imports db eid)
-                                             (into (retract-code-segments db eid))
-                                             (conj [:db/retractEntity eid]))))]
-      (transact-retractions! conn results))))
+    (if delta-db?
+      (let [tx-data (mapv deleted-file-tx paths)]
+        (d/transact conn {:tx-data tx-data})
+        (count tx-data))
+      (let [results (build-retraction-tx (d/db conn) paths
+                                         (fn [db eid]
+                                           (-> (retract-inbound-imports db eid)
+                                               (into (retract-code-segments db eid))
+                                               (conj [:db/retractEntity eid]))))
+            tx-data (into [] cat results)]
+        (assert-no-tombstones tx-data)
+        (when (seq tx-data)
+          (d/transact conn {:tx-data tx-data}))
+        (count results)))))
 
 (defn- branch-vcs
   "VCS identifier for the branch entity — :perforce for git-p4 clones, :git otherwise."
@@ -287,7 +312,8 @@
         (when (seq (:modified changes))
           (retract-stale! conn (:modified changes)))
         (when (seq (:deleted changes))
-          (retract-deleted-files! conn (:deleted changes)))
+          (retract-deleted-files! conn (:deleted changes)
+                                  {:delta-db? (:delta-db? opts)}))
         (when-not fresh?
           (log! (str "Incremental sync: "
                      (count (:added changes)) " added, "

@@ -72,7 +72,14 @@
       (is (= :clojure (:file/lang tx)))
       (is (= 1234 (:file/size tx)))
       (is (= 42 (:file/lines tx)))
-      (is (= "dir-src" (:file/directory tx))))))
+      (is (= "dir-src" (:file/directory tx))))
+    (testing "populates :file/blob-sha from ls-tree :sha"
+      (is (= "abc" (:file/blob-sha tx))))))
+
+(deftest file->tx-data-no-sha
+  (testing "missing :sha → no :file/blob-sha key"
+    (let [tx (files/file->tx-data {:path "x.txt" :size 10} {})]
+      (is (not (contains? tx :file/blob-sha))))))
 
 (deftest file->tx-data-no-extension
   (let [tx (files/file->tx-data {:path "Makefile" :size 500} {})]
@@ -176,13 +183,15 @@
       (is (pos? (ffirst (d/q '[:find (count ?e) :where [?e :dir/path _]] db)))))
     (testing "known file has expected attributes"
       (let [entity (d/pull db '[:file/path :file/ext :file/lang :file/size :file/lines
+                                :file/blob-sha
                                 {:file/directory [:dir/path]}]
                            [:file/path "src/noumenon/git.clj"])]
         (is (= "clj" (:file/ext entity)))
         (is (= :clojure (:file/lang entity)))
         (is (pos? (:file/size entity)))
         (is (pos? (:file/lines entity)))
-        (is (= "src/noumenon" (get-in entity [:file/directory :dir/path])))))))
+        (is (= "src/noumenon" (get-in entity [:file/directory :dir/path])))
+        (is (re-matches #"[0-9a-f]{40}" (:file/blob-sha entity)))))))
 
 (deftest import-idempotency
   (let [conn    (test-conn)

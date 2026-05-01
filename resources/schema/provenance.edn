@@ -16,4 +16,9 @@
  {:db/ident       :prov/analyzed-at
   :db/valueType   :db.type/instant
   :db/cardinality :db.cardinality/one
-  :db/doc         "Timestamp when LLM analysis was performed"}]
+  :db/doc         "Timestamp when LLM analysis was performed"}
+
+ {:db/ident       :prov/promoted-from
+  :db/valueType   :db.type/ref
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Donor transaction this analysis was promoted from — set on tx entities when content-addressed promotion copies an analysis from another tx instead of re-running the LLM"}]
