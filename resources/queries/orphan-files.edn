@@ -1,5 +1,6 @@
 {:name "orphan-files"
  :description "Source code files that neither import nor are imported by any other file — excludes config, data, CI, and doc files"
+ :federation-safe? true
  :query [:find ?path
          :where
          [?file :file/path ?path]

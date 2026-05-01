@@ -57,6 +57,29 @@
     (when (string? v)
       (validate-string-length! (name k) v max-param-value-len))))
 
+(def ^:private max-exclude-paths 1000)
+
+(defn- validate-exclude-paths!
+  "Validate the :exclude_paths parameter for federation queries.
+   Accepts nil/missing, an empty seq, or a vector of strings.
+   Returns the (possibly empty) vector of paths."
+  [v]
+  (cond
+    (nil? v) []
+    (not (sequential? v))
+    (throw (ex-info "exclude_paths must be an array of strings"
+                    {:status 400 :message "exclude_paths must be an array of strings"}))
+    (> (count v) max-exclude-paths)
+    (throw (ex-info (str "exclude_paths exceeds max " max-exclude-paths)
+                    {:status 400 :message (str "exclude_paths exceeds max " max-exclude-paths)}))
+    :else
+    (mapv (fn [p]
+            (when-not (string? p)
+              (throw (ex-info "exclude_paths entries must be strings"
+                              {:status 400 :message "exclude_paths entries must be strings"})))
+            (validate-string-length! "exclude_paths" p max-param-value-len)
+            p) v)))
+
 (defn- validate-layers
   "Parse and validate a comma-separated layers string. Returns keyword vector or nil."
   [layers-str]
@@ -481,17 +504,20 @@
   (let [params (parse-json-body request)]
     (with-repo params (:db-dir config)
       (fn [{:keys [db meta-db]}]
-        (let [query-name (:query_name params)
-              raw-params (or (:params params) {})
-              kw-params  (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
-              _          (validate-query-params! kw-params)
-              result     (query/run-named-query meta-db db query-name kw-params)]
+        (let [query-name    (:query_name params)
+              raw-params    (or (:params params) {})
+              kw-params     (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
+              _             (validate-query-params! kw-params)
+              exclude-paths (validate-exclude-paths! (:exclude_paths params))
+              result        (query/run-named-query meta-db db query-name kw-params
+                                                   {:exclude-paths exclude-paths})]
           (if (:ok result)
             (let [rows  (:ok result)
                   limit (min (or (some-> (:limit params) str parse-long) 500) 10000)]
-              (ok {:query   query-name
-                   :total   (count rows)
-                   :results (take limit rows)}))
+              (ok {:query            query-name
+                   :total            (count rows)
+                   :federation-safe? (:federation-safe? result)
+                   :results          (take limit rows)}))
             (error-response 400 (:error result))))))))
 
 (defn- handle-query-raw [request config]
@@ -503,6 +529,11 @@
           (when-not query-edn
             (throw (ex-info "Missing query" {:status 400 :message "query is required (EDN string)"})))
           (validate-string-length! "query" query-edn max-param-value-len)
+          ;; Raw queries are not federation-safe in v1: column types are unknown,
+          ;; so we can't guarantee the launcher can row-merge with delta DB rows.
+          ;; The :exclude_paths parameter is accepted but ignored; the response
+          ;; surfaces :federation-safe? false so the launcher falls back to trunk-only.
+          (validate-exclude-paths! (:exclude_paths params))
           (let [parsed (try (edn/read-string {:readers {}} query-edn)
                             (catch Exception e
                               (throw (ex-info "Invalid EDN"
@@ -514,19 +545,21 @@
                              (catch Exception e
                                (throw (ex-info "Query failed"
                                                {:status 400 :message (str "Query error: " (.getMessage e))}))))]
-            (ok {:total   (count results)
-                 :results (take limit (vec results))})))))))
+            (ok {:total            (count results)
+                 :federation-safe? false
+                 :results          (take limit (vec results))})))))))
 
 (defn- handle-query-as-of [request config]
   (let [params (parse-json-body request)]
     (with-repo params (:db-dir config)
       (fn [{:keys [conn meta-db]}]
-        (let [as-of-str  (:as_of params)
-              query-name (:query_name params)
-              raw-params (or (:params params) {})
-              kw-params  (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
-              _          (validate-query-params! kw-params)
-              limit      (min (or (some-> (:limit params) str parse-long) 500) 10000)]
+        (let [as-of-str     (:as_of params)
+              query-name    (:query_name params)
+              raw-params    (or (:params params) {})
+              kw-params     (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
+              _             (validate-query-params! kw-params)
+              exclude-paths (validate-exclude-paths! (:exclude_paths params))
+              limit         (min (or (some-> (:limit params) str parse-long) 500) 10000)]
           (when-not as-of-str
             (throw (ex-info "Missing as_of" {:status 400 :message "as_of is required (ISO-8601 or epoch ms)"})))
           (let [as-of-inst (try
@@ -537,13 +570,15 @@
                                (throw (ex-info "Invalid as_of"
                                                {:status 400 :message (str "Invalid as_of: " (.getMessage e))}))))
                 db (d/as-of (d/db conn) as-of-inst)
-                result (query/run-named-query meta-db db query-name kw-params)]
+                result (query/run-named-query meta-db db query-name kw-params
+                                              {:exclude-paths exclude-paths})]
             (if (:ok result)
               (let [rows (:ok result)]
-                (ok {:query   query-name
-                     :as-of   (str as-of-inst)
-                     :total   (count rows)
-                     :results (take limit rows)}))
+                (ok {:query            query-name
+                     :as-of            (str as-of-inst)
+                     :total            (count rows)
+                     :federation-safe? (:federation-safe? result)
+                     :results          (take limit rows)}))
               (error-response 400 (:error result)))))))))
 
 (defn- handle-queries [_request config]

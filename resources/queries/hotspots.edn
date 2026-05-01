@@ -1,5 +1,6 @@
 {:name "hotspots"
  :description "Files ranked by number of commits (churn)"
+ :federation-safe? true
  :query [:find ?path (count ?commit)
          :where
          [?commit :commit/changed-files ?file]

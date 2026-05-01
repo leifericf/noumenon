@@ -26,8 +26,9 @@
              :artifact.query/description (:description qdef "")
              :artifact.query/query-edn   (pr-str (:query qdef))
              :artifact.query/active      (contains? active-set query-name)}
-      (:uses-rules qdef)  (assoc :artifact.query/uses-rules true)
-      (seq (:inputs qdef)) (assoc :artifact.query/inputs (pr-str (:inputs qdef))))))
+      (:uses-rules qdef)        (assoc :artifact.query/uses-rules true)
+      (seq (:inputs qdef))      (assoc :artifact.query/inputs (pr-str (:inputs qdef)))
+      (:federation-safe? qdef)  (assoc :artifact.query/federation-safe? true))))
 
 (defn- chunk-template
   "Split a template string into chunk transaction maps if it exceeds chunk-size.
@@ -51,16 +52,17 @@
 
 (defn load-named-query
   "Load a named query definition from Datomic.
-   Returns {:name str :description str :query vec :inputs vec :uses-rules bool}
-   or nil if not found."
+   Returns {:name str :description str :query vec :inputs vec :uses-rules bool
+            :federation-safe? bool} or nil if not found."
   [meta-db query-name]
   (let [entity (d/pull meta-db '[*] [:artifact.query/name query-name])]
     (when (:artifact.query/query-edn entity)
-      {:name        query-name
-       :description (:artifact.query/description entity)
-       :query       (edn/read-string {:readers {}} (:artifact.query/query-edn entity))
-       :uses-rules  (:artifact.query/uses-rules entity false)
-       :inputs      (some-> (:artifact.query/inputs entity) (->> (edn/read-string {:readers {}})))})))
+      {:name             query-name
+       :description      (:artifact.query/description entity)
+       :query            (edn/read-string {:readers {}} (:artifact.query/query-edn entity))
+       :uses-rules       (:artifact.query/uses-rules entity false)
+       :inputs           (some-> (:artifact.query/inputs entity) (->> (edn/read-string {:readers {}})))
+       :federation-safe? (:artifact.query/federation-safe? entity false)})))
 
 (defn list-active-query-names
   "Return sorted vector of active query names from Datomic."

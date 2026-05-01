@@ -30,6 +30,11 @@
   :db/cardinality :db.cardinality/one
   :db/doc         "Whether this query is available for execution (replaces index.edn allowlist)"}
 
+ {:db/ident       :artifact.query/federation-safe?
+  :db/valueType   :db.type/boolean
+  :db/cardinality :db.cardinality/one
+  :db/doc         "True if this query binds ?file to :file/path and projects rows that can be safely overlaid by per-path delta exclusions. Federation-safe queries accept :exclude_paths and have (not [?file :file/path \"<p>\"]) clauses injected at runtime."}
+
  ;; --- Datalog Rules ---
  {:db/ident       :artifact.rules/id
   :db/valueType   :db.type/string

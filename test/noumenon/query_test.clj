@@ -172,3 +172,61 @@
         (is (= "Alice" name))
         (is (= "a@test.com" email))
         (is (= 2 cnt))))))
+
+;; --- Phase E1: Federation injection ---
+
+(deftest inject-exclusions-empty-passthrough
+  (let [q '[:find ?path :where [?file :file/path ?path]]]
+    (is (= q (query/inject-exclusions q [])))
+    (is (= q (query/inject-exclusions q nil)))))
+
+(deftest inject-exclusions-appends-not-clauses
+  (let [q       '[:find ?path :where [?file :file/path ?path]]
+        out     (query/inject-exclusions q ["src/a.clj" "src/b.clj"])
+        clauses (drop 4 out)]
+    (is (= 6 (count out)))
+    (is (= '(not [?file :file/path "src/a.clj"]) (first clauses)))
+    (is (= '(not [?file :file/path "src/b.clj"]) (second clauses)))))
+
+(deftest federation-safe-flag-loaded-from-edn
+  (let [mdb (meta-db)
+        safe   (artifacts/load-named-query mdb "orphan-files")
+        unsafe (artifacts/load-named-query mdb "files-by-complexity")]
+    (is (true? (:federation-safe? safe)))
+    (is (false? (:federation-safe? unsafe)))))
+
+(deftest run-named-query-surfaces-federation-flag
+  (let [conn (make-conn)
+        mdb  (meta-db)
+        safe   (query/run-named-query mdb (d/db conn) "orphan-files")
+        unsafe (query/run-named-query mdb (d/db conn) "files-by-complexity")]
+    (is (true? (:federation-safe? safe)))
+    (is (false? (:federation-safe? unsafe)))))
+
+(deftest run-named-query-injects-exclusions-when-safe
+  (let [conn (make-conn)
+        mdb  (meta-db)]
+    (d/transact conn {:tx-data [{:file/path "src/a.clj" :file/size 100 :file/lang :clojure}
+                                {:file/path "src/b.clj" :file/size 200 :file/lang :clojure}
+                                {:file/path "src/c.clj" :file/size 300 :file/lang :clojure}]})
+    (let [{:keys [ok]} (query/run-named-query mdb (d/db conn) "orphan-files" {})
+          all-paths    (set (map first ok))
+          {:keys [ok]} (query/run-named-query mdb (d/db conn) "orphan-files" {}
+                                              {:exclude-paths ["src/a.clj"]})
+          remaining    (set (map first ok))]
+      (is (contains? all-paths "src/a.clj"))
+      (is (not (contains? remaining "src/a.clj")) "excluded path is gone")
+      (is (= (disj all-paths "src/a.clj") remaining)))))
+
+(deftest run-named-query-ignores-exclusions-when-unsafe
+  (let [conn (make-conn)
+        mdb  (meta-db)]
+    (d/transact conn {:tx-data [{:file/path "src/a.clj" :file/size 100 :sem/complexity :simple}
+                                {:file/path "src/b.clj" :file/size 200 :sem/complexity :complex}]})
+    (let [{:keys [ok]} (query/run-named-query mdb (d/db conn) "files-by-complexity" {}
+                                              {:exclude-paths ["src/a.clj"]})
+          paths (set (map first ok))]
+      ;; files-by-complexity uses ?e not ?file — exclusion is a no-op (the query
+      ;; isn't federation-safe so inject-exclusions is bypassed entirely).
+      (is (contains? paths "src/a.clj"))
+      (is (contains? paths "src/b.clj")))))

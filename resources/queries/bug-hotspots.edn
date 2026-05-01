@@ -1,5 +1,6 @@
 {:name "bug-hotspots"
  :description "Files ranked by number of fix commits"
+ :federation-safe? true
  :query [:find ?path (count ?commit)
          :in $ %
          :where
