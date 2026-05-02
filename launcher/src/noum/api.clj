@@ -157,6 +157,20 @@
                         (str "HTTP " status ": " body)
                         (str "HTTP " status))}))
 
+(defn- network-error
+  "Turn a network-level exception (ConnectException, UnknownHostException,
+   SocketTimeoutException, …) into the launcher's standard error shape.
+   `:throw false` on the HTTP client only converts HTTP error responses
+   into result maps — exceptions raised before a response (refused
+   connection, DNS failure, timeout) still bubble, so we catch them
+   here and produce a clean message."
+  [host ^Throwable e]
+  (let [class-name (.getSimpleName (class e))
+        msg        (or (.getMessage e) "")]
+    {:ok false :error (str "Could not reach " host
+                           ": " class-name
+                           (when (seq msg) (str " — " msg)))}))
+
 (defn post!
   "POST to the daemon API. When on-progress is non-nil, requests SSE and feeds
    on-progress with each event. Returns parsed response."
@@ -165,13 +179,21 @@
    (let [sse?    (some? on-progress)
          headers (cond-> (auth-headers conn)
                    sse? (assoc "Accept" "text/event-stream"))
-         resp    (http/post (str (base-url conn) path)
-                            {:headers headers
-                             :body    (json/generate-string body)
-                             :timeout 600000
-                             :throw   false
-                             :as      (if sse? :stream :string)})]
+         url     (str (base-url conn) path)
+         resp    (try
+                   (http/post url
+                              {:headers headers
+                               :body    (json/generate-string body)
+                               :timeout 600000
+                               :throw   false
+                               :as      (if sse? :stream :string)})
+                   (catch Exception e
+                     {::network-error e}))]
      (cond
+       (::network-error resp)
+       (network-error (or (:host conn) (str "127.0.0.1:" (:port conn)))
+                      (::network-error resp))
+
        (and sse? (<= 200 (:status resp) 299))
        (let [result (parse-sse-events (:body resp) on-progress)]
          (if (and (map? result) (false? (:ok result)))
@@ -190,12 +212,15 @@
 (defn get!
   "GET from the daemon API. Returns parsed JSON response."
   [conn path]
-  (let [resp (http/get (str (base-url conn) path)
-                       {:headers (auth-headers conn)
-                        :timeout 30000
-                        :throw   false})]
-    (or (parse-body (:body resp))
-        (fallback-error resp))))
+  (try
+    (let [resp (http/get (str (base-url conn) path)
+                         {:headers (auth-headers conn)
+                          :timeout 30000
+                          :throw   false})]
+      (or (parse-body (:body resp))
+          (fallback-error resp)))
+    (catch Exception e
+      (network-error (or (:host conn) (str "127.0.0.1:" (:port conn))) e))))
 
 ;; --- Backend lifecycle ---
 
