@@ -243,7 +243,7 @@
 
 (def command-groups
   [["Get Started" ["demo" "setup"]]
-   ["Pipeline"   ["digest" "import" "analyze" "enrich" "synthesize" "embed" "update" "watch"]]
+   ["Pipeline"   ["digest" "import" "analyze" "enrich" "synthesize" "embed" "update" "watch" "delta-ensure"]]
    ["Query"      ["ask" "query" "queries" "sessions" "feedback" "schema" "status"]]
    ["Benchmark"  ["bench" "results" "compare"]]
    ["Introspect" ["introspect"]]

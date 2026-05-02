@@ -133,6 +133,16 @@
   (when-let [repo (select-repo conn)]
     {:command "delete" :flags {} :positional [repo]}))
 
+(defn- collect-delta-ensure [conn]
+  (when-let [repo (select-repo conn)]
+    (when-let [basis (prompt/ask "Basis SHA (40-char hex):")]
+      (when-not (str/blank? basis)
+        (let [branch (prompt/ask "Branch name (optional, defaults to current):")]
+          {:command "delta-ensure"
+           :flags   (cond-> {:basis-sha basis}
+                      (not (str/blank? branch)) (assoc :branch branch))
+           :positional [repo]})))))
+
 (defn- collect-setup [_conn]
   (when-let [target (choose/select "target" [{:label "Claude Desktop" :value "desktop"}
                                              {:label "Claude Code"    :value "code"}])]
@@ -201,6 +211,7 @@
    "synthesize" collect-repo-command
    "update"     collect-repo-command
    "watch"      collect-repo-command
+   "delta-ensure" (fn [conn _] (collect-delta-ensure conn))
    "ask"        (fn [conn _] (collect-ask conn))
    "query"      (fn [conn _] (collect-query conn))
    "bench"      collect-repo-command
