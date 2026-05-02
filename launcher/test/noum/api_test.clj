@@ -2,7 +2,8 @@
   "Unit tests for noum.api launcher helpers. Run via:
        bb -cp src:resources:test -m clojure.test/run-tests noum.api-test"
   (:require [clojure.test :refer [deftest is testing]]
-            [noum.api :as api]))
+            [noum.api :as api]
+            [noum.cli :as cli]))
 
 (deftest launcher-setting-key?-routes-by-namespace-prefix
   (testing "federation/* keys are launcher-local"
@@ -39,6 +40,17 @@
       (is (false? (boolean (blocked? (java.net.InetAddress/getByName "8.8.8.8"))))))
     (testing "public IPv6 2001:4860:4860::8888 is not private (used to crash with MissingReflectionRegistrationError)"
       (is (false? (boolean (blocked? (java.net.InetAddress/getByName "2001:4860:4860::8888"))))))))
+
+(deftest parse-args-accumulates-repeated-param
+  (testing "a single --param parses normally"
+    (let [parsed (cli/parse-args ["query" "name" "repo" "--param" "k=v"])]
+      (is (= ["k=v"] (-> parsed :flags :param)))))
+  (testing "repeated --param flags accumulate (the help text claims 'repeat command as needed')"
+    (let [parsed (cli/parse-args ["query" "name" "repo"
+                                  "--param" "k1=v1"
+                                  "--param" "k2=v2"
+                                  "--param" "k3=v3"])]
+      (is (= ["k1=v1" "k2=v2" "k3=v3"] (-> parsed :flags :param))))))
 
 (deftest base-url-honors-loopback-with-or-without-scheme
   (testing "bare localhost / 127.0.0.1 are allowed"

@@ -95,12 +95,21 @@
                      :repo_path (canonicalize-path (second pos))})})
 
 (defn- parse-param-flag
-  "Convert --param 'key=value' string into a map entry, or nil."
+  "Convert a `--param` 'key=value' string into a single-entry map, or nil
+   for malformed input. Used internally by `params-map`."
   [s]
   (when (string? s)
     (let [idx (str/index-of s "=")]
       (when (and idx (pos? idx))
         {(subs s 0 idx) (subs s (inc idx))}))))
+
+(defn- params-map
+  "Merge a vector of `--param k=v` strings (as accumulated by
+   `cli/extract-flags`) into a single {key value} map. Returns nil when
+   no usable params are present."
+  [vs]
+  (let [merged (apply merge (keep parse-param-flag vs))]
+    (when (seq merged) merged)))
 
 (defn- underscore-keys
   "Convert hyphenated keyword keys to underscored (CLI convention → API convention)."
@@ -115,7 +124,7 @@
   (let [mapper (get positional-maps (:positional-map cmd-def)
                     (fn [pos] (when-let [repo (first pos)]
                                 {:repo_path (canonicalize-path repo)})))
-        param-map (some-> (:param flags) parse-param-flag)]
+        param-map (params-map (:param flags))]
     (cond-> (merge (underscore-keys (dissoc flags :param)) (mapper positional))
       param-map (assoc :params param-map))))
 
@@ -505,7 +514,7 @@
                             :repo_path  (canonicalize-path (second positional))
                             :as_of      (:as-of flags)}
                      (:limit flags) (assoc :limit (parse-long (:limit flags)))
-                     (:param flags) (assoc :params (parse-param-flag (:param flags))))]
+                     (:param flags) (assoc :params (params-map (:param flags))))]
           (print-api-result (api/post! conn "/api/query-as-of" body))))
 
       (:federate flags)
@@ -521,7 +530,7 @@
                             :basis_sha  (:basis-sha flags)}
                      (:branch flags) (assoc :branch (:branch flags))
                      (:limit flags)  (assoc :limit (parse-long (:limit flags)))
-                     (:param flags)  (assoc :params (parse-param-flag (:param flags))))
+                     (:param flags)  (assoc :params (params-map (:param flags))))
               resp (api/post! conn "/api/query-federated" body)]
           (when (and (:ok resp) (false? (get-in resp [:data :federation-safe?])))
             (tui/eprintln (style/yellow

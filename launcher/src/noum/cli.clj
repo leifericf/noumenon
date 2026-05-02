@@ -291,6 +291,20 @@
     "--deterministic-only" "--git-commit" "--read-only" "--federate" "--no-promote"
     "--no-auto-federate"})
 
+(def ^:private repeatable-flags
+  "Flags whose values accumulate into a vector instead of overwriting.
+   The corresponding flag value is always a vector of strings, even
+   when only one occurrence was passed."
+  #{:param})
+
+(defn- assoc-flag
+  "Set or accumulate a flag value into the flags map. Repeatable flags
+   collect into a vector; everything else overwrites prior values."
+  [flags k v]
+  (if (repeatable-flags k)
+    (update flags k (fnil conj []) v)
+    (assoc flags k v)))
+
 (defn- extract-flags
   "Extract --flag value pairs from args. Returns [flags-map remaining-args]."
   [args]
@@ -307,8 +321,8 @@
             (if (or (boolean-flags arg)
                     (empty? more)
                     (str/starts-with? (first more) "--"))
-              (recur more (assoc flags key true) positional)
-              (recur (rest more) (assoc flags key (first more)) positional)))
+              (recur more (assoc-flag flags key true) positional)
+              (recur (rest more) (assoc-flag flags key (first more)) positional)))
 
           (= "-v" arg)
           (recur more (assoc flags :verbose true) positional)
