@@ -16,7 +16,7 @@ info:
 
     SSE events use the ProgressEvent schema: `event: progress`, `event: result`,
     `event: done`, `event: error`.
-  version: 0.3.0
+  version: 0.7.0
   license:
     name: MIT
     url: https://github.com/leifericf/noumenon/blob/main/LICENSE
@@ -102,6 +102,67 @@ components:
             - type: array
               items: {type: string}
           description: Language selector(s)
+
+    ExcludePaths:
+      type: object
+      properties:
+        exclude_paths:
+          type: array
+          maxItems: 1000
+          items:
+            type: string
+            maxLength: 4096
+          description: |
+            Federation hint — file paths to exclude from query results so the
+            launcher can row-merge with a delta DB without duplicates. Only
+            honored by queries marked `:federation-safe?` in their EDN. Ignored
+            by `/api/query-raw` (always returns `federation-safe?: false`).
+
+    DeltaEnsureResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [synced]
+        added:
+          type: integer
+        modified:
+          type: integer
+        deleted:
+          type: integer
+        basis-sha:
+          type: string
+        head-sha:
+          type: string
+        elapsed-ms:
+          type: integer
+
+    QueryFederatedResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          properties:
+            query:
+              type: string
+            total:
+              type: integer
+            trunk-count:
+              type: integer
+            delta-count:
+              type: integer
+            basis-sha:
+              type: string
+            federation-safe?:
+              type: boolean
+              description: |
+                False when the named query is not flagged `:federation-safe?` in
+                its EDN. Clients should treat the result as trunk-only and warn
+                the user.
+            results:
+              type: array
 
     ProgressEvent:
       description: SSE progress event sent during long-running operations
@@ -214,6 +275,13 @@ paths:
       summary: Run LLM semantic analysis
       description: |
         Supports SSE progress streaming (per-file events).
+
+        Each file is checked against the content-addressed promotion cache
+        before the LLM is called: if a previously-analyzed file held the same
+        `:file/blob-sha` under the current `:prov/prompt-hash` and
+        `:prov/model-version`, its analysis is copied onto the recipient with
+        `:prov/promoted-from` lineage and `files-promoted` is incremented in
+        the response. Pass `no_promote: true` to bypass.
       requestBody:
         required: true
         content:
@@ -234,13 +302,35 @@ paths:
                     reanalyze:
                       type: string
                       enum: [all, prompt-changed, model-changed, stale]
+                    no_promote:
+                      type: boolean
+                      description: Bypass the content-addressed promotion cache; always invoke the LLM
       responses:
         "200":
           description: Analysis complete
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/OkResponse"
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      files-analyzed:
+                        type: integer
+                      files-promoted:
+                        type: integer
+                        description: Files whose analysis was copied from a cached donor (no LLM call)
+                      files-skipped:
+                        type: integer
+                      files-errored:
+                        type: integer
+                      files-parse-errored:
+                        type: integer
+                      total-usage:
+                        type: object
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -337,13 +427,37 @@ paths:
                       description: "Comma-separated: raw,import,enrich,full"
                     report:
                       type: boolean
+                    no_promote:
+                      type: boolean
+                      description: Bypass the content-addressed promotion cache during analyze step
       responses:
         "200":
           description: Digest complete
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/OkResponse"
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      update:
+                        type: object
+                      analyze:
+                        type: object
+                        properties:
+                          files-analyzed:
+                            type: integer
+                          files-promoted:
+                            type: integer
+                          total-usage:
+                            type: object
+                      synthesize:
+                        type: object
+                      benchmark:
+                        type: object
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -410,6 +524,7 @@ paths:
             schema:
               allOf:
                 - $ref: "#/components/schemas/RepoPath"
+                - $ref: "#/components/schemas/ExcludePaths"
                 - type: object
                   properties:
                     query_name:
@@ -440,8 +555,239 @@ paths:
                         type: string
                       total:
                         type: integer
+                      federation-safe?:
+                        type: boolean
+                        description: |
+                          True when the named query is flagged
+                          `:federation-safe?` in its EDN. Clients use this
+                          to decide whether to merge results with a delta DB.
                       results:
                         type: array
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/query-raw:
+    post:
+      operationId: runRawQuery
+      summary: Run an ad-hoc Datalog query (EDN string)
+      description: |
+        Accepts an EDN-encoded Datalog query and optional positional args.
+        Raw queries are NEVER federation-safe in v1: column types are unknown,
+        so the launcher cannot row-merge with a delta DB. The `exclude_paths`
+        param is accepted for compatibility but ignored, and the response
+        always carries `federation-safe?: false`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/RepoPath"
+                - $ref: "#/components/schemas/ExcludePaths"
+                - type: object
+                  properties:
+                    query:
+                      type: string
+                      description: Datalog query as an EDN string
+                    args:
+                      type: array
+                      description: Optional positional args bound after the database
+                    limit:
+                      type: integer
+                      default: 500
+                      maximum: 10000
+                  required: [query]
+      responses:
+        "200":
+          description: Query results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                      federation-safe?:
+                        type: boolean
+                        example: false
+                      results:
+                        type: array
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/query-as-of:
+    post:
+      operationId: runQueryAsOf
+      summary: Run a named query against a historical database value
+      description: |
+        Same shape as `/api/query`, but evaluates against `(d/as-of db t)` for
+        the supplied `as_of` timestamp (ISO-8601 string or epoch milliseconds).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/RepoPath"
+                - $ref: "#/components/schemas/ExcludePaths"
+                - type: object
+                  properties:
+                    query_name:
+                      type: string
+                    as_of:
+                      oneOf:
+                        - type: string
+                          format: date-time
+                        - type: integer
+                      description: ISO-8601 timestamp or epoch milliseconds
+                    params:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    limit:
+                      type: integer
+                      default: 500
+                      maximum: 10000
+                  required: [query_name, as_of]
+      responses:
+        "200":
+          description: Query results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      query:
+                        type: string
+                      as-of:
+                        type: string
+                      total:
+                        type: integer
+                      federation-safe?:
+                        type: boolean
+                      results:
+                        type: array
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/query-federated:
+    post:
+      operationId: runFederatedQuery
+      summary: Run a named query merged across trunk and a local delta DB
+      description: |
+        Materializes (or refreshes) the local delta DB for `(repo_path,
+        basis_sha)`, runs the named query against trunk with the delta's
+        file paths excluded, then concatenates the delta's own rows. The
+        result is trunk-as-of-basis with the developer's branch overlaid.
+
+        Federation requires the named query to be flagged `:federation-safe?`
+        in its EDN. Non-federation-safe queries return trunk-only rows with
+        `federation-safe?: false` so the client can warn the user.
+
+        Federation is server-side because the Babashka launcher does not
+        carry datomic-client; one HTTP roundtrip beats coordinating multiple
+        from a language without direct DB access.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                repo_path:
+                  type: string
+                basis_sha:
+                  type: string
+                  description: 40-char lowercase hex SHA — the trunk basis the delta is based on
+                query_name:
+                  type: string
+                branch:
+                  type: string
+                  description: Branch name (defaults to current local HEAD branch)
+                params:
+                  type: object
+                  additionalProperties:
+                    type: string
+                limit:
+                  type: integer
+                  default: 500
+                  maximum: 10000
+              required: [repo_path, basis_sha, query_name]
+      responses:
+        "200":
+          description: Federated results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryFederatedResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/delta/ensure:
+    post:
+      operationId: ensureDelta
+      summary: Materialize or refresh the local delta DB for a feature branch
+      description: |
+        Opens (creating if absent) the sparse delta DB at
+        `~/.noumenon/deltas/<repo>__<safe-branch>__<basis7>/` and syncs it to
+        contain only files added/modified/deleted between `basis_sha` and the
+        local repository's current HEAD. Deletions are stored as
+        `:file/deleted? true` tombstones.
+
+        Idempotent: re-running with the same parameters is cheap and only
+        transacts changed files.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                repo_path:
+                  type: string
+                basis_sha:
+                  type: string
+                  description: 40-char lowercase hex SHA — the trunk basis to diff against
+                branch:
+                  type: string
+                  description: Branch name (defaults to current local HEAD branch)
+                parent_host:
+                  type: string
+                  description: Optional — host of the trunk daemon, recorded as `:branch/parent-host`
+                parent_db_name:
+                  type: string
+                  description: Optional — db-name of the trunk DB, recorded as `:branch/parent-db-name`
+              required: [repo_path, basis_sha]
+      responses:
+        "200":
+          description: Delta DB synced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/DeltaEnsureResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
