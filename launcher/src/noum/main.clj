@@ -772,12 +772,22 @@
     (do (tui/eprintln "Usage: noum connect <url-or-name> [--token <token>]")
         (tui/eprintln "       noum connect local")
         1)
-    (let [target (first positional)]
-      (if (= target "local")
+    (let [target (first positional)
+          scheme (second (re-find #"^([a-z]+)://" target))]
+      (cond
+        (= target "local")
         (do (api/set-active-connection! "local")
             (tui/eprintln (str (style/green "Switched to local mode.")
                                " Commands will use the local daemon."))
             0)
+
+        (and scheme (not (#{"http" "https"} scheme)))
+        (do (tui/eprintln (str (style/red "Error: ")
+                               "--host scheme must be http or https. Got: "
+                               scheme "://"))
+            1)
+
+        :else
         (let [token (:token flags)
               name  (or (:name flags) (derive-connection-name target))
               conn  {:host target :token token :insecure (:insecure flags)}]

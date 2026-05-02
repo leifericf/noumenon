@@ -60,6 +60,33 @@
         ec  (binding [*err* buf] (f))]
     [ec (str buf)]))
 
+(deftest do-connect-rejects-non-http-schemes
+  ;; Bug: do-connect accepted any URL string. ftp://example.com,
+  ;; file:///path, ssh://host etc. went through to the HTTP client and
+  ;; came back with a generic "invalid URI scheme" error. The launcher
+  ;; should reject up front and name the scheme.
+  (require 'noum.main)
+  (let [do-connect (resolve 'noum.main/do-connect)
+        run        (fn [target]
+                     (let [buf (java.io.StringWriter.)
+                           ec  (binding [*err* buf]
+                                 (do-connect {:flags {:token "x"} :positional [target]}))]
+                       [ec (str buf)]))]
+    (testing "ftp:// rejected with scheme-specific error"
+      (let [[ec err] (run "ftp://example.com:21/abc")]
+        (is (= 1 ec))
+        (is (re-find #"(?i)scheme|http\(s\)|http or https" err))
+        (is (re-find #"ftp" err))))
+    (testing "file:// rejected"
+      (let [[ec err] (run "file:///tmp/foo")]
+        (is (= 1 ec))
+        (is (re-find #"(?i)scheme|http\(s\)|http or https" err))
+        (is (re-find #"file" err))))
+    (testing "ssh:// rejected"
+      (let [[ec err] (run "ssh://host:22")]
+        (is (= 1 ec))
+        (is (re-find #"(?i)scheme|http\(s\)|http or https" err))))))
+
 (deftest ask-secret-never-shows-token-prefix
   ;; Bug: ask-secret echoed the first 4 chars of the secret before
   ;; masking, so short secrets (≤4 chars) were displayed in clear.
