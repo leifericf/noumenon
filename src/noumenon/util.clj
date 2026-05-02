@@ -79,6 +79,34 @@
       (throw (ex-info "Cannot derive database name from repo path"
                       {:repo-path repo-path :basename raw :sanitized sanitized})))))
 
+(defn validate-repo-path-input!
+  "Type-, length-, and blank-check the repo identifier shared by every
+   endpoint that funnels through `with-repo`. nil passes silently so
+   the caller's missing-field check stays the source of truth for
+   'required'. Non-strings, oversized strings, and blank strings throw
+   ex-info with `:status 400`. The full FS-shape validator
+   (`validate-repo-path`) only fits handlers that strictly require a
+   filesystem path; this helper is for the polymorphic identifier
+   (filesystem path, git URL, or db-name) that `with-repo` accepts."
+  [repo-path]
+  (when (some? repo-path)
+    (cond
+      (not (string? repo-path))
+      (let [msg "repo_path must be a string"]
+        (throw (ex-info msg
+                        {:status 400 :message msg :user-message msg
+                         :field "repo_path" :type (some-> repo-path class .getName)})))
+      (str/blank? repo-path)
+      (let [msg "repo_path must not be blank"]
+        (throw (ex-info msg
+                        {:status 400 :message msg :user-message msg
+                         :field "repo_path"})))
+      (> (count repo-path) max-repo-path-len)
+      (let [msg (str "repo_path exceeds maximum length of " max-repo-path-len " characters")]
+        (throw (ex-info msg
+                        {:status 400 :message msg :user-message msg
+                         :field "repo_path" :length (count repo-path) :max max-repo-path-len}))))))
+
 (defn validate-string-length!
   "Throw ex-info with :status 400 if `s` is supplied but isn't a string,
    or is a string longer than `max-len`. nil passes silently so optional

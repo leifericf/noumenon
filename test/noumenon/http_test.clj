@@ -121,6 +121,48 @@
         (is (re-find #"query_name exceeds maximum length" (str error))
             error)))))
 
+(deftest with-repo-rejects-bad-repo_path-shapes
+  (testing "with-repo runs type+length+blank checks before FS work, so
+            non-string / oversized / empty repo_path values get a clean
+            400 instead of leaking ClassCastException as 500. Covers
+            every endpoint that funnels through with-repo (~16); the
+            previous fix only patched delta-ensure."
+    (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+          send    (fn [body]
+                    (let [resp (handler (post-with-body "/api/import" body))
+                          parsed (json/read-str (:body resp) :key-fn keyword)]
+                      {:status (:status resp) :error (:error parsed)}))]
+      (testing "Long (number) is rejected with 400, not 500"
+        (let [{:keys [status error]} (send {:repo_path 42})]
+          (is (= 400 status))
+          (is (re-find #"must be a string" (str error)) error)))
+      (testing "vector is rejected with 400, not 500"
+        (let [{:keys [status error]} (send {:repo_path ["a"]})]
+          (is (= 400 status))
+          (is (re-find #"must be a string" (str error)) error)))
+      (testing "object is rejected with 400, not 500"
+        (let [{:keys [status error]} (send {:repo_path {:a 1}})]
+          (is (= 400 status))
+          (is (re-find #"must be a string" (str error)) error)))
+      (testing "boolean is rejected with 400, not 500"
+        (let [{:keys [status error]} (send {:repo_path true})]
+          (is (= 400 status))
+          (is (re-find #"must be a string" (str error)) error)))
+      (testing "empty string is rejected with 400 (was 500 because empty
+                fell through to the bare-db-name branch and shelled out
+                to git log against db://)"
+        (let [{:keys [status error]} (send {:repo_path ""})]
+          (is (= 400 status))
+          (is (re-find #"(?i)blank|empty|required" (str error)) error)))
+      (testing "repo_path over the 4096-char length cap is rejected with
+                400, not echoed back in a 404 — request-amplification
+                mitigation. (Anything > max-repo-path-len triggers the
+                cap; 5 KB is enough to exercise the gate without
+                ballooning failure output.)"
+        (let [{:keys [status error]} (send {:repo_path (apply str (repeat 5000 \A))})]
+          (is (= 400 status))
+          (is (re-find #"exceeds maximum length" (str error)) error))))))
+
 (deftest federated-delta-opts-derives-parent-metadata
   (let [opts-fn @#'http/federated-delta-opts]
     (is (= {:parent-db-name "myrepo"

@@ -185,11 +185,17 @@
         (throw (ex-info msg (assoc (ex-data e) :status status :message msg)))))))
 
 (defn- with-repo
-  "Execute f with resolved repo context. Returns JSON response."
+  "Execute f with resolved repo context. Returns JSON response.
+   Type-checks, length-caps, and rejects blank `repo_path` up front so
+   non-string / oversized / empty values surface as 400 rather than
+   leaking ClassCastException as 500 inside `resolve-repo`'s FS code
+   path. The full FS-shape validator stays specific to handlers that
+   require a real filesystem path (e.g. delta-ensure)."
   [params db-dir f]
   (let [repo-path (:repo_path params)]
     (when-not repo-path
       (throw (ex-info "Missing repo_path" {:status 400 :message "repo_path is required"})))
+    (util/validate-repo-path-input! repo-path)
     (let [ctx (resolve-repo repo-path db-dir)]
       (f (assoc ctx
                 :db (d/db (:conn ctx))
