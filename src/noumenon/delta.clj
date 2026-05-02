@@ -60,6 +60,15 @@
   [branch-name]
   (subs (util/sha256-hex (or (some-> branch-name str/trim) "")) 0 6))
 
+(def ^:private max-fs-path-component-bytes
+  "POSIX upper bound on a single filesystem-path component. Datomic-Local
+   stores each db at `<storage>/<system>/<db-name>/`, so the synthesized
+   `<db-name>` must fit in one component or `mkdir` fails with `File name
+   too long`. The boundary `validate-string-length!` cap on branch names
+   handles the common case; this check defends against the edge case
+   where a long repo basename pushes a within-cap branch over the limit."
+  255)
+
 (defn delta-db-name
   "Compose a Datomic db-name encoding repo + branch + basis short-SHA.
    Format: `<repo>__<safe-branch>-<branch-hash6>__<basis7>`.
@@ -67,12 +76,24 @@
    Branch separators (e.g. '/') are replaced with '-'; blank or dot-only
    branch names fall back to `detached` so the db-name is filesystem-safe.
    The 6-char hash of the original branch name disambiguates branches that
-   would otherwise sanitize to the same label."
+   would otherwise sanitize to the same label.
+
+   Throws ex-info with :status 400 if the synthesized name would exceed
+   one filesystem path component (255 bytes UTF-8). Surfaces the failure
+   at the right boundary instead of as a downstream `File name too long`."
   [repo-name branch-name basis-sha]
-  (let [short-basis (subs basis-sha 0 (min 7 (count basis-sha)))]
-    (str repo-name "__"
-         (sanitize-branch branch-name) "-" (branch-disambiguator branch-name)
-         "__" short-basis)))
+  (let [short-basis (subs basis-sha 0 (min 7 (count basis-sha)))
+        name        (str repo-name "__"
+                         (sanitize-branch branch-name) "-" (branch-disambiguator branch-name)
+                         "__" short-basis)]
+    (when (> (count (.getBytes name "UTF-8")) max-fs-path-component-bytes)
+      (let [msg (str "Delta db-name component too long for the filesystem "
+                     "(" (count (.getBytes name "UTF-8")) " bytes, limit "
+                     max-fs-path-component-bytes "). Shorten the branch name "
+                     "(currently " (count branch-name) " chars).")]
+        (throw (ex-info msg {:status 400 :message msg :user-message msg
+                             :branch branch-name :db-name name}))))
+    name))
 
 (defn ensure-delta-db!
   "Ensure a delta DB exists for the given repo + current branch + basis-sha.

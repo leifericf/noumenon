@@ -67,3 +67,19 @@
            (util/validate-repo-path "/tmp/definitely-not-a-real-noumenon-path-xyz"))))
   (testing "nil is unchanged — returns nil"
     (is (nil? (util/validate-repo-path nil)))))
+
+(deftest max-branch-name-len-fits-fs-component-with-typical-repo
+  (testing "max-branch-name-len + the fixed surrounding bytes of the
+            synthesized delta db-name (`<repo>__<safe-branch>-<hash6>__<basis7>`)
+            must stay under the POSIX path-component limit (255 bytes) for a
+            reasonable repo basename. Without this constraint, a request
+            that passes branch validation crashes downstream as
+            'File name too long' (500). Math: branch + 18 fixed
+            (`__-<hash6>__<basis7>`) + repo. We require headroom for at
+            least a 35-char repo name (covers most real-world basenames)."
+    (let [fixed-overhead   18
+          assumed-repo-len 35]
+      (is (<= (+ util/max-branch-name-len fixed-overhead assumed-repo-len)
+              255)
+          (str "max-branch-name-len=" util/max-branch-name-len
+               " leaves no FS-component headroom; lower it.")))))

@@ -12,6 +12,23 @@
 (defn- hash6 [s]
   (subs (util/sha256-hex (or s "")) 0 6))
 
+(deftest delta-db-name-rejects-overflowing-fs-component
+  (testing "synthesized db-name uses one filesystem path component
+            (Datomic-Local stores at <storage>/<system>/<db-name>/), so
+            the byte length of the result must not exceed the POSIX
+            255-byte component limit. Without this guard, an overlong
+            branch name accepted by the boundary validator crashed
+            downstream as 'File name too long' / 500. delta-db-name
+            now throws a 400-shaped ex-info before the FS write
+            attempts, so the failure is visible at the right boundary."
+    (let [long-branch (apply str (repeat 250 "a"))
+          err (try (delta/delta-db-name "noumenon" long-branch "abcdef0123456789")
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+      (is (some? err))
+      (is (= 400 (:status (ex-data err))))
+      (is (re-find #"too long|exceeds|component|255" (.getMessage err))))))
+
 (deftest delta-db-name-test
   (testing "encodes repo + sanitized-branch-with-hash + short basis"
     (is (= (str "myrepo__main-" (hash6 "main") "__abcdef0")

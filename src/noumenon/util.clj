@@ -110,7 +110,15 @@
 (def max-param-value-len "Datalog query param values"   4096)
 (def max-question-len    "Free-form ask questions"      8000)
 (def max-query-name-len  "Named query identifiers"      256)
-(def max-branch-name-len "Git/Perforce branch names"    256)
+(def max-branch-name-len
+  "Git/Perforce branch names. Capped well below the natural human-name
+   limit so the synthesized delta db-name (`<repo>__<safe-branch>-<hash6>__<basis7>`)
+   stays under the POSIX path-component limit (255 bytes) for a
+   reasonable repo basename. Math: branch + 18 fixed (`__-<hash6>__<basis7>`)
+   + repo ≤ 255 → branch ≤ 237 - repo. 200 leaves ~37 chars of headroom
+   for the repo basename, which covers virtually every real-world case;
+   `delta-db-name` does a final check too for the long-repo edge case."
+  200)
 (def max-host-len        "host:port hostnames"          256)
 (def max-db-name-len     "Datomic db-name identifiers"  256)
 (def max-run-id-len      "Benchmark/introspect run IDs" 256)
