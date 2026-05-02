@@ -1,228 +1,277 @@
-[;; --- Git Objects ---
+[;; `:noumenon/scope` is defined in schema/federation.edn (loaded earlier)
+ ;; so attrs here can be tagged with it in the same transaction.
+
+ ;; --- Git Objects ---
  {:db/ident       :git/sha
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
   :db/unique      :db.unique/identity
-  :db/doc         "Content-addressed SHA hash of a git object"}
+  :db/doc         "Content-addressed SHA hash of a git object"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :git/type
   :db/valueType   :db.type/keyword
   :db/cardinality :db.cardinality/one
-  :db/doc         "Git object type — :commit, :tree, :blob, :tag"}
+  :db/doc         "Git object type — :commit, :tree, :blob, :tag"
+  :noumenon/scope :trunk-only}
 
  ;; --- Repos ---
  {:db/ident       :repo/uri
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
   :db/unique      :db.unique/identity
-  :db/doc         "Repository URI"}
+  :db/doc         "Repository URI"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :repo/head-sha
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "Git HEAD SHA at last sync — used for staleness detection"}
+  :db/doc         "Git HEAD SHA at last sync — used for staleness detection"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :repo/commits
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/many
-  :db/doc         "Commits belonging to this repository"}
+  :db/doc         "Commits belonging to this repository"
+  :noumenon/scope :trunk-only}
 
  ;; --- Commits ---
  {:db/ident       :commit/tree
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/one
-  :db/doc         "Tree object for this commit"}
+  :db/doc         "Tree object for this commit"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/parents
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/many
-  :db/doc         "Parent commits"}
+  :db/doc         "Parent commits"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/message
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "Commit message, truncated to 4096 chars"}
+  :db/doc         "Commit message, truncated to 4096 chars"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/author
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/one
-  :db/doc         "Person who authored the commit"}
+  :db/doc         "Person who authored the commit"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/authored-at
   :db/valueType   :db.type/instant
   :db/cardinality :db.cardinality/one
-  :db/doc         "Timestamp when the commit was authored"}
+  :db/doc         "Timestamp when the commit was authored"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/committer
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/one
-  :db/doc         "Person who committed"}
+  :db/doc         "Person who committed"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/committed-at
   :db/valueType   :db.type/instant
   :db/cardinality :db.cardinality/one
-  :db/doc         "Timestamp when the commit was committed"}
+  :db/doc         "Timestamp when the commit was committed"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/changed-files
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/many
-  :db/doc         "Files changed in this commit, derived from git log --numstat"}
+  :db/doc         "Files changed in this commit, derived from git log --numstat"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/kind
   :db/valueType   :db.type/keyword
   :db/cardinality :db.cardinality/one
-  :db/doc         "Commit classification — :fix, :feat, :refactor, :chore, :docs, :test, :style, :perf, :revert, :merge, :other"}
+  :db/doc         "Commit classification — :fix, :feat, :refactor, :chore, :docs, :test, :style, :perf, :revert, :merge, :other"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/additions
   :db/valueType   :db.type/long
   :db/cardinality :db.cardinality/one
-  :db/doc         "Total lines added across all files in this commit"}
+  :db/doc         "Total lines added across all files in this commit"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/deletions
   :db/valueType   :db.type/long
   :db/cardinality :db.cardinality/one
-  :db/doc         "Total lines deleted across all files in this commit"}
+  :db/doc         "Total lines deleted across all files in this commit"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :commit/issue-refs
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/many
-  :db/doc         "Issue references extracted from commit message — keys (#123, PROJ-456) and URLs"}
+  :db/doc         "Issue references extracted from commit message — keys (#123, PROJ-456) and URLs"
+  :noumenon/scope :trunk-only}
 
  ;; --- Persons ---
  {:db/ident       :person/email
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
   :db/unique      :db.unique/identity
-  :db/doc         "Git author/committer email"}
+  :db/doc         "Git author/committer email"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :person/name
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "Git author/committer display name"}
+  :db/doc         "Git author/committer display name"
+  :noumenon/scope :trunk-only}
 
  ;; --- Files ---
+ ;; File-shaped attrs are :stable — every file in the delta carries them.
  {:db/ident       :file/path
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
   :db/unique      :db.unique/identity
-  :db/doc         "File path relative to repo root"}
+  :db/doc         "File path relative to repo root"
+  :noumenon/scope :stable}
 
  {:db/ident       :file/ext
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "File extension"}
+  :db/doc         "File extension"
+  :noumenon/scope :stable}
 
  {:db/ident       :file/lang
   :db/valueType   :db.type/keyword
   :db/cardinality :db.cardinality/one
-  :db/doc         "Detected programming language"}
+  :db/doc         "Detected programming language"
+  :noumenon/scope :stable}
 
  {:db/ident       :file/lines
   :db/valueType   :db.type/long
   :db/cardinality :db.cardinality/one
-  :db/doc         "Line count"}
+  :db/doc         "Line count"
+  :noumenon/scope :stable}
 
  {:db/ident       :file/size
   :db/valueType   :db.type/long
   :db/cardinality :db.cardinality/one
-  :db/doc         "File size in bytes"}
+  :db/doc         "File size in bytes"
+  :noumenon/scope :stable}
 
  {:db/ident       :file/directory
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/one
-  :db/doc         "Parent directory"}
+  :db/doc         "Parent directory"
+  :noumenon/scope :stable}
 
  {:db/ident       :file/blob-sha
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "Git blob SHA of the file's content at the imported revision — enables content-addressed analysis promotion across branches"}
+  :db/doc         "Git blob SHA of the file's content at the imported revision — enables content-addressed analysis promotion across branches"
+  :noumenon/scope :stable}
 
  {:db/ident       :file/deleted?
   :db/valueType   :db.type/boolean
   :db/cardinality :db.cardinality/one
-  :db/doc         "Tombstone marker for delta DBs — true means this file is deleted relative to the parent (trunk) DB. Never set in trunk DBs; trunk deletions hard-retract the entity instead."}
+  :db/doc         "Tombstone marker for delta DBs — true means this file is deleted relative to the parent (trunk) DB. Never set in trunk DBs; trunk deletions hard-retract the entity instead."
+  :noumenon/scope :stable}
 
  ;; --- Directories ---
  {:db/ident       :dir/path
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
   :db/unique      :db.unique/identity
-  :db/doc         "Directory path relative to repo root"}
+  :db/doc         "Directory path relative to repo root"
+  :noumenon/scope :stable}
 
  {:db/ident       :dir/parent
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/one
-  :db/doc         "Parent directory"}
+  :db/doc         "Parent directory"
+  :noumenon/scope :stable}
 
  {:db/ident       :dir/repo
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/one
-  :db/doc         "Repository this directory belongs to (set on root dir only)"}
+  :db/doc         "Repository this directory belongs to (set on root dir only)"
+  :noumenon/scope :stable}
 
  ;; --- Trees ---
  {:db/ident       :tree/nodes
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/many
   :db/isComponent true
-  :db/doc         "Tree node children (component)"}
+  :db/doc         "Tree node children (component)"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :node/filename
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "Node filename within tree"}
+  :db/doc         "Node filename within tree"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :node/object
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/one
-  :db/doc         "Git object this node references"}
+  :db/doc         "Git object this node references"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :node/paths
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/many
-  :db/doc         "File entities this node maps to"}
+  :db/doc         "File entities this node maps to"
+  :noumenon/scope :trunk-only}
 
  ;; --- Transaction Metadata ---
+ ;; tx/* lives on transaction entities, not data; tagged :trunk-only because
+ ;; federation queries don't meaningfully cross-reference them on the delta.
  {:db/ident       :tx/op
   :db/valueType   :db.type/keyword
   :db/cardinality :db.cardinality/one
-  :db/doc         "Transaction operation — :import, :analyze, :llm-analyze, :promote"}
+  :db/doc         "Transaction operation — :import, :analyze, :llm-analyze, :promote"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :tx/source
   :db/valueType   :db.type/keyword
   :db/cardinality :db.cardinality/one
-  :db/doc         "Data source — :deterministic, :llm, or :promoted"}
+  :db/doc         "Data source — :deterministic, :llm, or :promoted"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :tx/analyzer
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "Analyzer name and version"}
+  :db/doc         "Analyzer name and version"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :tx/model
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "LLM model identifier for LLM-sourced transactions"}
+  :db/doc         "LLM model identifier for LLM-sourced transactions"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :tx/model-source
   :db/valueType   :db.type/keyword
   :db/cardinality :db.cardinality/one
-  :db/doc         "Source of tx/model — :resolved-model, :requested-model, or :unknown"}
+  :db/doc         "Source of tx/model — :resolved-model, :requested-model, or :unknown"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :tx/provider
   :db/valueType   :db.type/string
   :db/cardinality :db.cardinality/one
-  :db/doc         "LLM provider identifier for LLM-sourced transactions"}
+  :db/doc         "LLM provider identifier for LLM-sourced transactions"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :tx/input-tokens
   :db/valueType   :db.type/long
   :db/cardinality :db.cardinality/one
-  :db/doc         "Input tokens consumed by this transaction's LLM call"}
+  :db/doc         "Input tokens consumed by this transaction's LLM call"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :tx/output-tokens
   :db/valueType   :db.type/long
   :db/cardinality :db.cardinality/one
-  :db/doc         "Output tokens produced by this transaction's LLM call"}
+  :db/doc         "Output tokens produced by this transaction's LLM call"
+  :noumenon/scope :trunk-only}
 
  {:db/ident       :tx/cost-usd
   :db/valueType   :db.type/double
   :db/cardinality :db.cardinality/one
-  :db/doc         "Estimated USD cost of this transaction's LLM call"}]
+  :db/doc         "Estimated USD cost of this transaction's LLM call"
+  :noumenon/scope :trunk-only}]

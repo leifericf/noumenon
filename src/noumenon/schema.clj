@@ -4,7 +4,10 @@
             [datomic.client.api :as d]))
 
 (def schema-files
-  ["schema/core.edn"
+  ;; Order matters: federation.edn defines `:noumenon/scope` and must be
+  ;; transacted BEFORE any schema file that tags attrs with it.
+  ["schema/federation.edn"
+   "schema/core.edn"
    "schema/architecture.edn"
    "schema/provenance.edn"
    "schema/benchmark.edn"

@@ -1,0 +1,27 @@
+[;; --- Federation scope attribute ---
+ ;;
+ ;; Loaded BEFORE every other schema file so subsequent attrs can carry
+ ;; this tag in the same transaction that defines them. Datomic does not
+ ;; let an attribute be defined and used in the same tx — installing it
+ ;; here in a standalone tx avoids that constraint.
+ ;;
+ ;; A data-carrying attribute MAY be tagged :stable or :trunk-only:
+ ;;   :stable      — populated for every entity in both trunk and delta DBs.
+ ;;                  Federation queries that join only on stable attrs can
+ ;;                  safely run against the delta for added paths.
+ ;;   :trunk-only  — populated only in trunk. (Optional tag, used as
+ ;;                  documentation; the validator already treats untagged
+ ;;                  attrs as trunk-only by default.)
+ ;;
+ ;; The seed-time validator (`noumenon.artifacts/validate-federation-mode!`)
+ ;; uses :stable as an allowlist: any query declaring `:federation-mode
+ ;; :added-files-merge` may join only on attrs explicitly tagged :stable.
+ ;; Untagged attrs are conservatively treated as trunk-only so a forgotten
+ ;; tag causes a clean rejection rather than a silent false-positive merge.
+ {:db/ident       :noumenon/scope
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Federation scope of this attribute — :stable means delta
+                   DBs populate it for every relevant entity. The seed-time
+                   validator allows only :stable attrs in :added-files-merge
+                   queries; untagged attrs are treated as trunk-only."}]
