@@ -569,29 +569,38 @@
                  :results          (take limit (vec results))})))))))
 
 (defn- handle-query-as-of [request config]
-  (let [params (parse-json-body request)]
+  (let [params    (parse-json-body request)
+        as-of-str (:as_of params)]
     (validate-string-length! "query_name" (:query_name params) max-query-name-len)
-    (with-repo params (:db-dir config)
-      (fn [{:keys [conn meta-db]}]
-        (let [as-of-str     (:as_of params)
-              query-name    (:query_name params)
-              raw-params    (or (:params params) {})
-              kw-params     (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
-              _             (validate-query-params! kw-params)
-              exclude-paths (validate-exclude-paths! (:exclude_paths params))
-              limit         (min (or (some-> (:limit params) str parse-long) 500) 10000)]
-          (when-not as-of-str
-            (throw (ex-info "Missing as_of" {:status 400 :message "as_of is required (ISO-8601 or epoch ms)"})))
-          (let [as-of-inst (try
-                             (if (string? as-of-str)
-                               (java.util.Date/from (java.time.Instant/parse as-of-str))
-                               (java.util.Date. (long as-of-str)))
-                             (catch Exception e
-                               (throw (ex-info "Invalid as_of"
-                                               {:status 400 :message (str "Invalid as_of: " (.getMessage e))}))))
-                db (d/as-of (d/db conn) as-of-inst)
-                result (query/run-named-query meta-db db query-name kw-params
-                                              {:exclude-paths exclude-paths})]
+    (when-not as-of-str
+      (throw (ex-info "Missing as_of" {:status 400 :message "as_of is required (ISO-8601 or epoch ms)"})))
+    (when-not (or (string? as-of-str) (number? as-of-str))
+      ;; Reject vectors / maps / booleans up front so the catch below
+      ;; doesn't leak the JVM ClassCastException class names into the
+      ;; 400 response body. The string-but-unparseable branch (e.g.
+      ;; "not-a-date") keeps the underlying Instant/parse message so
+      ;; users see the actual complaint about their date string.
+      (throw (ex-info "Invalid as_of"
+                      {:status 400
+                       :message "as_of must be an ISO-8601 string or epoch milliseconds"})))
+    (let [as-of-inst (try
+                       (if (string? as-of-str)
+                         (java.util.Date/from (java.time.Instant/parse as-of-str))
+                         (java.util.Date. (long as-of-str)))
+                       (catch Exception e
+                         (throw (ex-info "Invalid as_of"
+                                         {:status 400 :message (str "Invalid as_of: " (.getMessage e))}))))]
+      (with-repo params (:db-dir config)
+        (fn [{:keys [conn meta-db]}]
+          (let [query-name    (:query_name params)
+                raw-params    (or (:params params) {})
+                kw-params     (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
+                _             (validate-query-params! kw-params)
+                exclude-paths (validate-exclude-paths! (:exclude_paths params))
+                limit         (min (or (some-> (:limit params) str parse-long) 500) 10000)
+                db            (d/as-of (d/db conn) as-of-inst)
+                result        (query/run-named-query meta-db db query-name kw-params
+                                                     {:exclude-paths exclude-paths})]
             (if (:ok result)
               (let [rows (:ok result)]
                 (ok {:query            query-name

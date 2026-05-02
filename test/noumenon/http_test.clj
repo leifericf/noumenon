@@ -240,6 +240,47 @@
       (is (re-find #"(?i)invalid json" (str (:error body)))
           (str "expected 'Invalid JSON' wording, got: " (:error body))))))
 
+(deftest as_of-non-string-non-number-clean-error
+  (testing "as_of with a non-string, non-number value used to surface
+            the JVM ClassCastException message verbatim, leaking
+            class names like 'clojure.lang.PersistentVector cannot be
+            cast to java.lang.Number'. The handler now type-checks
+            as_of first and produces a clean
+            'as_of must be an ISO-8601 string or epoch milliseconds'
+            message. The string-but-unparseable branch (e.g. typo
+            'not-a-date') still passes the JVM message through so
+            the user sees the actual parse complaint."
+    (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+          send    (fn [as-of]
+                    (let [resp (handler (post-with-body "/api/query-as-of"
+                                                        {:repo_path  "any"
+                                                         :query_name "recent-commits"
+                                                         :as_of      as-of}))
+                          body (json/read-str (:body resp) :key-fn keyword)]
+                      {:status (:status resp) :error (:error body)}))]
+      (testing "vector triggers clean message, no class name leak"
+        (let [{:keys [status error]} (send [123])]
+          (is (= 400 status))
+          (is (re-find #"(?i)as_of must be" (str error)) error)
+          (is (not (re-find #"clojure\.lang\." (str error)))
+              (str "expected no JVM class names, got: " error))))
+      (testing "boolean triggers clean message"
+        (let [{:keys [status error]} (send true)]
+          (is (= 400 status))
+          (is (re-find #"(?i)as_of must be" (str error)) error)
+          (is (not (re-find #"java\.lang\.Boolean" (str error))) error)))
+      (testing "object triggers clean message"
+        (let [{:keys [status error]} (send {:foo 1})]
+          (is (= 400 status))
+          (is (re-find #"(?i)as_of must be" (str error)) error)
+          (is (not (re-find #"PersistentArrayMap" (str error))) error)))
+      (testing "string-but-unparseable preserves Instant/parse message"
+        (let [{:keys [status error]} (send "not-a-date")]
+          (is (= 400 status))
+          ;; the JVM message branch is intentionally kept so users see
+          ;; the actual parse complaint
+          (is (re-find #"(?i)not-a-date|could not be parsed" (str error)) error))))))
+
 (deftest with-repo-rejects-bad-repo_path-shapes
   (testing "with-repo runs type+length+blank checks before FS work, so
             non-string / oversized / empty repo_path values get a clean
