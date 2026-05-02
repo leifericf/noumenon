@@ -1,6 +1,6 @@
 (ns noumenon.http-test
   (:require [clojure.data.json :as json]
-            [clojure.test :refer [deftest is]]
+            [clojure.test :refer [deftest is testing]]
             [noumenon.http :as http]))
 
 (deftest health-endpoint
@@ -67,6 +67,46 @@
     (let [body (json/read-str (:body resp) :key-fn keyword)]
       (is (:ok body))
       (is (= [] (:data body))))))
+
+(defn- post-with-body
+  "Build a Ring-shaped POST request with a JSON body."
+  [uri body-map]
+  {:request-method :post
+   :uri            uri
+   :headers        {}
+   :body           (java.io.ByteArrayInputStream.
+                    (.getBytes ^String (json/write-str body-map) "UTF-8"))})
+
+(deftest query_name-length-cap-uniform-across-endpoints
+  (let [handler   (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+        long-name (apply str (repeat 257 \a))
+        send      (fn [uri extra]
+                    (let [resp (handler (post-with-body uri (merge {:repo_path "any"
+                                                                    :query_name long-name}
+                                                                   extra)))
+                          body (json/read-str (:body resp) :key-fn keyword)]
+                      {:status (:status resp) :error (:error body)}))]
+    (testing "POST /api/query rejects 257-char query_name with the shared
+              max-length message — earlier the unknown-query lookup echoed
+              the 300-char name back unchecked"
+      (let [{:keys [status error]} (send "/api/query" {})]
+        (is (= 400 status))
+        (is (re-find #"query_name exceeds maximum length" (str error))
+            error)))
+    (testing "POST /api/query-as-of also rejects oversized query_name
+              before the as_of validation, so the failure mode is uniform"
+      (let [{:keys [status error]} (send "/api/query-as-of" {:as_of "2026-01-01T00:00:00Z"})]
+        (is (= 400 status))
+        (is (re-find #"query_name exceeds maximum length" (str error))
+            error)))
+    (testing "POST /api/query-federated continues to reject oversized
+              query_name (this endpoint already had the cap; the test
+              guards against regression as the constant gets centralized)"
+      (let [{:keys [status error]} (send "/api/query-federated"
+                                         {:basis_sha "31389f9382cbc440aafeeb1b854c27830cf1e26f"})]
+        (is (= 400 status))
+        (is (re-find #"query_name exceeds maximum length" (str error))
+            error)))))
 
 (deftest federated-delta-opts-derives-parent-metadata
   (let [opts-fn @#'http/federated-delta-opts]

@@ -44,6 +44,7 @@
 (def ^:private max-branch-name-len util/max-branch-name-len)
 (def ^:private max-host-len        util/max-host-len)
 (def ^:private max-db-name-len     util/max-db-name-len)
+(def ^:private max-query-name-len  util/max-query-name-len)
 (def ^:private max-layers-len 64)
 (def ^:private allowed-layers #{:raw :import :enrich :full :embedded})
 (def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
@@ -506,6 +507,7 @@
 
 (defn- handle-query-exec [request config]
   (let [params (parse-json-body request)]
+    (validate-string-length! "query_name" (:query_name params) max-query-name-len)
     (with-repo params (:db-dir config)
       (fn [{:keys [db meta-db]}]
         (let [query-name    (:query_name params)
@@ -555,6 +557,7 @@
 
 (defn- handle-query-as-of [request config]
   (let [params (parse-json-body request)]
+    (validate-string-length! "query_name" (:query_name params) max-query-name-len)
     (with-repo params (:db-dir config)
       (fn [{:keys [conn meta-db]}]
         (let [as-of-str     (:as_of params)
@@ -619,13 +622,13 @@
       (throw (ex-info "Missing required fields"
                       {:status 400
                        :message "repo_path, basis_sha, and query_name are required"})))
+    (validate-string-length! "query_name" query-name max-query-name-len)
+    (validate-string-length! "branch" branch max-branch-name-len)
     (when-not (sync/valid-sha? basis-sha)
       (throw (ex-info "Invalid basis_sha"
                       {:status 400 :message "basis_sha must be a 40-char lowercase hex SHA"})))
     (when-let [reason (util/validate-repo-path repo-path)]
       (throw (ex-info reason {:status 400 :message (str "repo_path " reason)})))
-    (validate-string-length! "query_name" query-name 256)
-    (validate-string-length! "branch" branch max-branch-name-len)
     (validate-query-params! kw-params)
     (with-repo {:repo_path repo-path} (:db-dir config)
       (fn [{:keys [db meta-db db-name]}]
