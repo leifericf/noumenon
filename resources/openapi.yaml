@@ -747,10 +747,14 @@ paths:
       summary: Materialize or refresh the local delta DB for a feature branch
       description: |
         Opens (creating if absent) the sparse delta DB at
-        `~/.noumenon/deltas/<repo>__<safe-branch>__<basis7>/` and syncs it to
-        contain only files added/modified/deleted between `basis_sha` and the
-        local repository's current HEAD. Deletions are stored as
-        `:file/deleted? true` tombstones.
+        `~/.noumenon/deltas/noumenon/<repo>__<safe-branch>-<hash6>__<basis7>/`
+        and syncs it to contain only files added/modified/deleted between
+        `basis_sha` and the local repository's current HEAD. The `noumenon/`
+        path component is the Datomic system name; `<hash6>` is the first
+        six chars of `sha256(branch)` so two real branches that sanitize to
+        the same `<safe-branch>` (e.g. `feat/foo` and `feat-foo`) get
+        different DBs. Deletions are stored as `:file/deleted? true`
+        tombstones.
 
         Idempotent: re-running with the same parameters is cheap and only
         transacts changed files.
