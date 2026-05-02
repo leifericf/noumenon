@@ -38,15 +38,34 @@
   [opts]
   (str (.getAbsolutePath (io/file (or (:db-dir opts) default-db-dir)))))
 
+(declare max-repo-path-len)
+
 (defn validate-repo-path
   "Validate that repo-path exists, is a directory, and contains .git.
-   Returns an error reason string, or nil if valid."
+   Returns an error reason string, or nil if valid.
+
+   Type and length are checked before any filesystem call: a non-nil
+   non-string would throw IllegalArgumentException inside `io/file`
+   (no `as-file` impl for vectors/numbers/maps/keywords/booleans), and
+   an unbounded string lets callers walk a multi-MB path through every
+   downstream `.exists`/`.isDirectory`. Both surface here as clean
+   400-shaped reasons via the caller's `when-let` + throw. nil is
+   unchanged: callers already do their own missing-field check before
+   reaching this validator."
   [repo-path]
-  (let [f (io/file repo-path)]
-    (cond
-      (not (.exists f))                    "does not exist"
-      (not (.isDirectory f))               "not a directory"
-      (not (.exists (io/file f ".git")))   "not a git repository")))
+  (cond
+    (nil? repo-path)
+    nil
+    (not (string? repo-path))
+    "must be a string"
+    (> (count repo-path) max-repo-path-len)
+    (str "exceeds maximum length of " max-repo-path-len " characters")
+    :else
+    (let [f (io/file repo-path)]
+      (cond
+        (not (.exists f))                    "does not exist"
+        (not (.isDirectory f))               "not a directory"
+        (not (.exists (io/file f ".git")))   "not a git repository"))))
 
 (defn derive-db-name
   "Extract database name from a repo path: canonicalize, take basename, sanitize.

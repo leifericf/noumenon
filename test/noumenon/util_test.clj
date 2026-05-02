@@ -38,3 +38,32 @@
         (is (re-find #"branch" (.getMessage err)))
         (is (re-find #"string" (.getMessage err))
             (str "message names the expected type for " (pr-str bad)))))))
+
+(deftest validate-repo-path-rejects-non-strings
+  (testing "non-nil non-string repo-path returns a `must be a string`
+            reason instead of letting (io/file <non-string>) throw an
+            IllegalArgumentException downstream. Without this, a JSON
+            request like {\"repo_path\": 42} would surface as a 500
+            instead of a clean 400 at the validation boundary."
+    (doseq [bad [42 ["a"] {:k 1} :kw true]]
+      (let [reason (util/validate-repo-path bad)]
+        (is (string? reason) (str "expected reason string for " (pr-str bad)))
+        (is (re-find #"string" reason)
+            (str "reason mentions string for " (pr-str bad)))))))
+
+(deftest validate-repo-path-rejects-overlong-strings
+  (testing "repo-path strings over max-repo-path-len return a length
+            reason — caps the input at the boundary rather than letting
+            io/file walk a multi-MB string"
+    (let [reason (util/validate-repo-path (apply str (repeat 5000 "a")))]
+      (is (string? reason))
+      (is (re-find #"4096|exceeds" reason)
+          "reason mentions the cap or 'exceeds'"))))
+
+(deftest validate-repo-path-existing-fs-reasons-unchanged
+  (testing "valid string that doesn't exist still returns the existing
+            FS reason"
+    (is (= "does not exist"
+           (util/validate-repo-path "/tmp/definitely-not-a-real-noumenon-path-xyz"))))
+  (testing "nil is unchanged — returns nil"
+    (is (nil? (util/validate-repo-path nil)))))
