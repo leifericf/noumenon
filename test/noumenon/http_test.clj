@@ -49,6 +49,44 @@
     (is (= 400 (:status dots)) "... should be rejected")
     (is (= 400 (:status blank)) ".. in status should be rejected")))
 
+(deftest control-chars-in-db-name-rejected
+  (testing "validate-db-name! used to allow null bytes / newlines /
+            tabs / spaces because the validator only rejected `/`,
+            `\\`, blank, and pure-dot. The actual filesystem effect
+            today is just a 404, but the validator's contract is
+            'reject names that could escape or confuse the storage
+            layer', and JVM NIO has historically had path-truncation
+            bugs around null bytes (CVE-2014-3578 family). Tighten to
+            the [a-zA-Z0-9._-]+ allowlist that derive-db-name uses,
+            so legitimate names still pass and exotic ones fail at
+            the boundary."
+    (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+          probe   (fn [encoded]
+                    (let [resp (handler {:request-method :get
+                                         :uri (str "/api/status/" encoded)})
+                          body (json/read-str (:body resp) :key-fn keyword)]
+                      {:status (:status resp) :error (:error body)}))]
+      (testing "null byte rejected"
+        (let [{:keys [status error]} (probe "foo%00bar")]
+          (is (= 400 status))
+          (is (re-find #"(?i)invalid database name" (str error)) error)))
+      (testing "newline rejected"
+        (let [{:keys [status error]} (probe "foo%0Abar")]
+          (is (= 400 status))
+          (is (re-find #"(?i)invalid database name" (str error)) error)))
+      (testing "tab rejected"
+        (let [{:keys [status error]} (probe "foo%09bar")]
+          (is (= 400 status))
+          (is (re-find #"(?i)invalid database name" (str error)) error)))
+      (testing "space rejected"
+        (let [{:keys [status error]} (probe "foo%20bar")]
+          (is (= 400 status))
+          (is (re-find #"(?i)invalid database name" (str error)) error)))
+      (testing "emoji / non-ASCII rejected"
+        (let [{:keys [status error]} (probe "%F0%9F%92%80")]
+          (is (= 400 status))
+          (is (re-find #"(?i)invalid database name" (str error)) error))))))
+
 (deftest delete-meta-db-rejected
   (testing "DELETE /api/databases/noumenon-internal must not let callers
             wipe the meta DB — it stores tokens, settings, prompts, rules,
@@ -64,14 +102,16 @@
 
 (deftest url-encoded-path-params-decoded
   (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
-        ;; Use a URL-encoded db name like "my%20repo" -> should decode to "my repo"
-        ;; which will fail validation (spaces stripped by derive-db-name) but the
-        ;; error should reference the decoded name, not the encoded one
-        resp    (handler {:request-method :get :uri "/api/status/my%20repo"})
+        ;; URL-encoded db name "my%2Erepo" decodes to "my.repo" — passes
+        ;; the [a-zA-Z0-9._-]+ allowlist (so it isn't rejected at the
+        ;; validate-db-name! gate) but doesn't exist on disk, so the
+        ;; 404 message includes the decoded form. Earlier this test
+        ;; used "my%20repo" → "my repo" with a space, but spaces no
+        ;; longer pass validation so we'd never reach the 404 branch.
+        resp    (handler {:request-method :get :uri "/api/status/my%2Erepo"})
         body    (json/read-str (:body resp) :key-fn keyword)]
-    ;; Should get 404 (db not found) rather than some other error
     (is (= 404 (:status resp)))
-    (is (re-find #"my repo" (:error body)) "db-name should be URL-decoded")))
+    (is (re-find #"my\.repo" (:error body)) "db-name should be URL-decoded")))
 
 (deftest databases-endpoint-empty
   (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})

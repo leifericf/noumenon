@@ -673,12 +673,17 @@
     (ok queries)))
 
 (defn- validate-db-name!
-  "Reject db-name values that could escape the database directory.
-   Throws ExceptionInfo with status 400 on invalid names."
+  "Reject db-name values that aren't filesystem-safe identifiers.
+   Throws ExceptionInfo with status 400 on invalid names. The positive
+   allowlist `[a-zA-Z0-9._-]+` matches what `util/derive-db-name`
+   produces, so every legitimate db-name (canonical user repos and the
+   synthesized delta DBs) passes; control bytes, slashes, spaces, and
+   non-ASCII are rejected at the boundary. Pure-dot names (`.`, `..`,
+   `...`) match the allowlist syntactically but resolve to dir names
+   that traverse upward, so they get the explicit dot-only rejection."
   [db-name]
   (when (or (str/blank? db-name)
-            (str/includes? db-name "/")
-            (str/includes? db-name "\\")
+            (not (re-matches #"[a-zA-Z0-9._-]+" db-name))
             (re-matches #"\.+" db-name))
     (throw (ex-info "Invalid database name"
                     {:status 400 :message "Invalid database name"}))))
