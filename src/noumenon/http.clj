@@ -1037,17 +1037,29 @@
                   (assoc r :head-sha sha)))
               repos))))
 
+(defn- registered-repo!
+  "Look up a registered repo by db-name in the meta DB; throw a 404
+   ex-info if it isn't registered. Shared by remove/refresh so callers
+   surface a clean 'Repo not registered' rather than 500'ing on the
+   downstream Datomic null-deref or 'Clone not found' fs error."
+  [config name]
+  (when-not name
+    (throw (ex-info "Missing repo name" {:status 400 :message "repo name is required"})))
+  (let [meta-conn (or (:meta-conn config) (db/ensure-meta-db (:db-dir config)))
+        meta-db   (d/db meta-conn)]
+    (or (some #(when (= name (:db-name %)) %) (repo-mgr/registered-repos meta-db))
+        (throw (ex-info (str "Repo not registered: " name)
+                        {:status 404 :message (str "Repo not registered: " name)})))))
+
 (defn- handle-repo-remove [request config]
   (let [name (get-in request [:params :name])]
-    (when-not name
-      (throw (ex-info "Missing repo name" {:status 400 :message "repo name is required"})))
+    (registered-repo! config name)
     (repo-mgr/remove-repo! (:meta-conn config) (:db-dir config) name)
     (ok {:removed name})))
 
 (defn- handle-repo-refresh [request config]
   (let [name (get-in request [:params :name])]
-    (when-not name
-      (throw (ex-info "Missing repo name" {:status 400 :message "repo name is required"})))
+    (registered-repo! config name)
     (ok (repo-mgr/refresh-repo! (:db-dir config) name))))
 
 ;; Cache completion source data per db-name (invalidated on import/enrich)

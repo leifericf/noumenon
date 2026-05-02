@@ -121,6 +121,23 @@
         (is (re-find #"query_name exceeds maximum length" (str error))
             error)))))
 
+(deftest repo-remove-and-refresh-unknown-name-404
+  (testing "DELETE /api/repos/<unknown> and POST /api/repos/<unknown>/refresh
+            used to surface as 500 'Internal server error' because the
+            handlers called repo-mgr without an existence check and the
+            downstream ex-info had no :status. They now return a clean
+            404 'Repo not registered: <name>'."
+    (let [tmp     (str "/tmp/noumenon-repo-mgmt-test-" (System/currentTimeMillis))
+          handler (http/make-handler {:db-dir tmp})
+          delete  (handler {:request-method :delete :uri "/api/repos/ghost"})
+          refresh (handler {:request-method :post   :uri "/api/repos/ghost/refresh"})
+          dbody   (json/read-str (:body delete) :key-fn keyword)
+          rbody   (json/read-str (:body refresh) :key-fn keyword)]
+      (is (= 404 (:status delete)))
+      (is (re-find #"(?i)not registered|not found" (str (:error dbody))) (str dbody))
+      (is (= 404 (:status refresh)))
+      (is (re-find #"(?i)not registered|not found" (str (:error rbody))) (str rbody)))))
+
 (deftest ask-feedback-on-missing-session-returns-404
   (testing "POST /api/ask/sessions/<unknown>/feedback used to write
             feedback to a non-existent session and return 200, leaving
