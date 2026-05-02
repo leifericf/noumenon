@@ -796,6 +796,23 @@
    "connections" do-connections
    "disconnect" do-disconnect})
 
+(defn run-handler!
+  "Invoke a command handler with the parsed input and return its exit
+   code. Any uncaught exception becomes exit 1 with a clean error
+   message — never a raw Clojure stack trace. Set NOUM_DEBUG=1 in the
+   environment for the full trace when diagnosing a launcher bug."
+  [handler parsed]
+  (try
+    (handler parsed)
+    (catch Exception e
+      (tui/eprintln (str (style/red "Error: ") (or (.getMessage e) (str (class e)))))
+      (when (= "1" (System/getenv "NOUM_DEBUG"))
+        (binding [*out* *err*]
+          (.printStackTrace e)))
+      (when-not (= "1" (System/getenv "NOUM_DEBUG"))
+        (tui/eprintln (str (style/dim "  Set NOUM_DEBUG=1 for the full stack trace."))))
+      1)))
+
 (defn -main [& args]
   (let [parsed (cli/parse-args args)]
     (if (:error parsed)
@@ -808,4 +825,4 @@
                                                 "\n\n" (cli/format-help)))
                              (System/exit 1)))
       (let [handler (get dispatch (:command parsed) do-api-command)]
-        (System/exit (handler parsed))))))
+        (System/exit (run-handler! handler parsed))))))
