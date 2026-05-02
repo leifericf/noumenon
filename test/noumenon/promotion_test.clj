@@ -96,6 +96,21 @@
   (let [conn (th/make-test-conn "promo-noop")]
     (is (nil? (promotion/promote! conn "src/anything.clj" nil)))))
 
+(deftest find-cached-analysis-rejects-donor-db-without-name
+  (testing "passing :donor-db without :donor-db-name throws — without this
+            guard the lookup would treat the result as same-DB and record a
+            dangling :prov/promoted-from ref pointing into the donor DB
+            (where the tx-id is meaningful) from the recipient DB (where
+            it isn't). Lands defensively before cross-DB promotion is
+            wired into a production caller"
+    (let [recipient (th/make-test-conn "promo-paired-args-recipient")
+          donor     (th/make-test-conn "promo-paired-args-donor")]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"donor-db-name"
+           (promotion/find-cached-analysis
+            (d/db recipient) blob-x prompt-h model-v
+            {:donor-db (d/db donor)}))))))
+
 (deftest find-cached-analysis-cross-db
   (testing "donor lives in trunk-conn; recipient lives in delta-conn — the
   lookup uses :donor-db, the promote happens against the recipient"

@@ -59,6 +59,14 @@
    (find-cached-analysis db blob-sha prompt-hash-val model-version {}))
   ([_recipient-db blob-sha prompt-hash-val model-version
     {:keys [donor-db donor-db-name] :as _opts}]
+   (when (and donor-db (nil? donor-db-name))
+     ;; The two predicates that decide same-DB vs cross-DB are split: the
+     ;; lookup uses :donor-db, but `promote-tx-data` keys cross-DB-ness on
+     ;; :donor-db-name. Without this pairing, a caller who supplies only
+     ;; :donor-db would write `:prov/promoted-from <foreign-tx-id>` — a
+     ;; dangling ref. Fail fast at the boundary instead.
+     (throw (ex-info "Cross-DB promotion requires :donor-db-name when :donor-db is set"
+                     {:donor-db-name donor-db-name})))
    (when (and blob-sha prompt-hash-val model-version)
      (let [search-db (or donor-db _recipient-db)]
        (->> (candidate-pairs search-db prompt-hash-val model-version)
