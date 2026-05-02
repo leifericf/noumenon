@@ -60,6 +60,19 @@
         ec  (binding [*err* buf] (f))]
     [ec (str buf)]))
 
+(deftest do-settings-rejects-extra-positionals
+  ;; Bug: do-settings used `case n-args` with 0/1 branches and a default
+  ;; that handled 2+. So 3+ args silently dropped extras and POSTed
+  ;; (key, val) anyway.
+  (require 'noum.main)
+  (let [do-settings (resolve 'noum.main/do-settings)]
+    (testing "3 positional args rejected with no API call"
+      (is (= 1 (assert-no-http-call
+                #(do-settings {:flags {} :positional ["k" "v" "extra"]})))))
+    (testing "4 positional args rejected"
+      (is (= 1 (assert-no-http-call
+                #(do-settings {:flags {} :positional ["k" "v" "x" "y"]})))))))
+
 (deftest do-help-exit-codes
   ;; Bug: do-help returned 0 even for unknown commands. `noum help foo`
   ;; printed "Unknown command: foo" but exited 0 — inconsistent with

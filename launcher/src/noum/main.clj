@@ -701,6 +701,12 @@
         v       (second positional)
         n-args  (count positional)]
     (cond
+      ;; Reject extra positionals up front. The previous `case n-args`
+      ;; default branch silently dropped args 3+ and acted as if only
+      ;; (key, value) were passed.
+      (>= n-args 3)
+      (do (tui/eprintln "Error: Too many arguments. Usage: noum settings [<key> [<value>]]") 1)
+
       ;; Launcher-local settings live in ~/.noumenon/config.edn — never
       ;; round-tripped through the daemon.
       (and (>= n-args 1) (api/launcher-setting-key? k))
