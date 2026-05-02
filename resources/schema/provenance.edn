@@ -21,4 +21,9 @@
  {:db/ident       :prov/promoted-from
   :db/valueType   :db.type/ref
   :db/cardinality :db.cardinality/one
-  :db/doc         "Donor transaction this analysis was promoted from — set on tx entities when content-addressed promotion copies an analysis from another tx instead of re-running the LLM"}]
+  :db/doc         "Donor transaction this analysis was promoted from — set on tx entities when content-addressed promotion copies an analysis from another tx instead of re-running the LLM. Same-DB lookup: the ref points within the recipient's DB. Cross-DB lookup: the donor tx-id is opaque from the recipient's perspective; pair this with :prov/promoted-from-db-name for the breadcrumb"}
+
+ {:db/ident       :prov/promoted-from-db-name
+  :db/valueType   :db.type/string
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Database name of the donor when promotion crossed databases (e.g. trunk DB name when a delta promoted from trunk). Nil for same-DB promotions"}]

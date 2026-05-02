@@ -42,38 +42,55 @@
       (d/pull (into [:file/path] promotable-attrs) file-eid)))
 
 (defn find-cached-analysis
-  "Search the current DB for a previously-analyzed file whose
-   :file/blob-sha equaled `blob-sha` and whose analysis-tx's
-   :prov/prompt-hash + :prov/model-version match.
+  "Search a DB for a previously-analyzed file whose :file/blob-sha equaled
+   `blob-sha` and whose analysis-tx's :prov/prompt-hash + :prov/model-version
+   match. Returns the most recent donor map, or nil.
 
-   Returns {:donor-tx tx-eid :file/path str <promotable-attrs>} for the
-   most recent matching analysis, or nil. Cross-DB lookups (e.g. a
-   delta DB asking the trunk DB) are not supported in v1 — restrict
-   the caller's `db` to a DB that already contains the prior analysis."
-  [db blob-sha prompt-hash-val model-version]
-  (when (and blob-sha prompt-hash-val model-version)
-    (->> (candidate-pairs db prompt-hash-val model-version)
-         (keep (fn [[file tx]]
-                 (when (= blob-sha (snapshot-blob-sha db file tx))
-                   (let [snap (snapshot-analysis db file tx)]
-                     (when (:sem/summary snap)
-                       (assoc snap :donor-tx tx))))))
-         (sort-by :donor-tx >)
-         first)))
+   Same-DB case (default): pass only the recipient's `db`. The donor must
+   already exist in that DB.
+
+   Cross-DB case: pass the recipient's db plus :donor-db (and optionally
+   :donor-db-name) in opts. The candidate scan and snapshot lookups happen
+   against `donor-db`; the recipient's db is unused by the lookup itself
+   but kept in the signature so callers always pass it (it's the natural
+   anchor for the promote!). Returned donor carries :donor-db-name so
+   promote-tx-data can record :prov/promoted-from-db-name when crossing."
+  ([db blob-sha prompt-hash-val model-version]
+   (find-cached-analysis db blob-sha prompt-hash-val model-version {}))
+  ([_recipient-db blob-sha prompt-hash-val model-version
+    {:keys [donor-db donor-db-name] :as _opts}]
+   (when (and blob-sha prompt-hash-val model-version)
+     (let [search-db (or donor-db _recipient-db)]
+       (->> (candidate-pairs search-db prompt-hash-val model-version)
+            (keep (fn [[file tx]]
+                    (when (= blob-sha (snapshot-blob-sha search-db file tx))
+                      (let [snap (snapshot-analysis search-db file tx)]
+                        (when (:sem/summary snap)
+                          (cond-> (assoc snap :donor-tx tx)
+                            donor-db-name (assoc :donor-db-name donor-db-name)))))))
+            (sort-by :donor-tx >)
+            first)))))
 
 (defn promote-tx-data
   "Build tx-data for promoting `donor` analysis onto the file at
    `recipient-path`. Pure. Returns a vector with the file-attr
-   assertion + the tx-meta entity (which carries provenance and a
-   :prov/promoted-from ref to the donor tx)."
-  [recipient-path {:keys [donor-tx] :as donor}]
-  (let [donor-attrs (select-keys donor (filter donor promotable-attrs))]
+   assertion + the tx-meta entity carrying provenance.
+
+   Same-DB promotion sets :prov/promoted-from to the donor tx ref.
+   Cross-DB promotion (when `:donor-db-name` is set on the donor) skips
+   :prov/promoted-from — a foreign tx-id would resolve to nothing in the
+   recipient DB — and records the donor's db-name in
+   :prov/promoted-from-db-name as the breadcrumb."
+  [recipient-path {:keys [donor-tx donor-db-name] :as donor}]
+  (let [donor-attrs (select-keys donor (filter donor promotable-attrs))
+        cross-db?   (some? donor-db-name)]
     [(into {:file/path recipient-path} donor-attrs)
-     {:db/id              "datomic.tx"
-      :tx/op              :promote
-      :tx/source          :promoted
-      :prov/promoted-from donor-tx
-      :prov/analyzed-at   (Date.)}]))
+     (cond-> {:db/id            "datomic.tx"
+              :tx/op            :promote
+              :tx/source        :promoted
+              :prov/analyzed-at (Date.)}
+       (not cross-db?) (assoc :prov/promoted-from donor-tx)
+       cross-db?       (assoc :prov/promoted-from-db-name donor-db-name))]))
 
 (defn promote!
   "If `donor` is non-nil, transact a promotion for `recipient-path` and

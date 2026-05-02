@@ -479,16 +479,22 @@
                 (update :usage #(llm/sum-usage (:usage r1) %))))))))
 
 (defn- try-promote!
-  "Attempt content-addressed promotion: if an earlier analysis in this DB
-   already covers `path`'s current :file/blob-sha (with the same prompt-hash
-   and model-version), copy its attrs onto `path` and return :promoted.
-   Returns nil on miss or when promotion is disabled."
-  [conn path prompt-hash-val model-version]
+  "Attempt content-addressed promotion: if an earlier analysis (in this
+   DB or in `donor-db`, when supplied) already covers `path`'s current
+   :file/blob-sha under the same prompt-hash + model-version, copy its
+   attrs onto `path` and return :promoted. Returns nil on miss.
+
+   Cross-DB lookup: pass `:donor-db` (a Datomic db value) plus
+   `:donor-db-name` so the recipient tx records :prov/promoted-from-db-name
+   for traceability."
+  [conn path prompt-hash-val model-version
+   {:keys [donor-db donor-db-name]}]
   (let [db (d/db conn)
         {:file/keys [blob-sha]} (d/pull db [:file/blob-sha] [:file/path path])]
     (when blob-sha
       (when-let [donor (promotion/find-cached-analysis
-                        db blob-sha prompt-hash-val model-version)]
+                        db blob-sha prompt-hash-val model-version
+                        {:donor-db donor-db :donor-db-name donor-db-name})]
         (promotion/promote! conn path donor)))))
 
 (defn analyze-file!
@@ -500,11 +506,13 @@
    version), the donor's attrs are promoted onto the recipient and
    :status is :promoted with no LLM call."
   [conn repo-path file-map
-   {:keys [provider model-id prompt-template prompt-hash-val invoke-llm no-promote?]}]
+   {:keys [provider model-id prompt-template prompt-hash-val invoke-llm
+           no-promote? donor-db donor-db-name]}]
   (let [{:keys [file/path file/lang]} file-map]
     (try
       (or (when-not no-promote?
-            (try-promote! conn path prompt-hash-val (or model-id "unknown")))
+            (try-promote! conn path prompt-hash-val (or model-id "unknown")
+                          {:donor-db donor-db :donor-db-name donor-db-name}))
           (let [{:keys [prompt truncated?]} (build-file-prompt (d/db conn) repo-path
                                                                path lang prompt-template)
                 result (invoke-with-retry invoke-llm prompt truncated? path)
@@ -672,7 +680,8 @@
    Returns summary map with :total-usage."
   ([conn repo-path invoke-llm] (analyze-repo! conn repo-path invoke-llm {}))
   ([conn repo-path invoke-llm {:keys [meta-db model-id provider concurrency min-delay-ms max-files progress-fn
-                                      path include exclude lang no-promote?]
+                                      path include exclude lang no-promote?
+                                      donor-db donor-db-name]
                                :or   {concurrency 3 min-delay-ms 0}}]
    (let [head-paths    (into #{} (map :path) (files/parse-ls-tree (files/git-ls-tree repo-path)))
          prompt-map    (load-prompt-template meta-db)
@@ -690,7 +699,9 @@
                         :model-id model-id
                         :prompt-hash-val prompt-h
                         :invoke-llm invoke-llm
-                        :no-promote? no-promote?}]
+                        :no-promote? no-promote?
+                        :donor-db donor-db
+                        :donor-db-name donor-db-name}]
      (log-drift-recommendations! dbv prompt-h model-id)
      (when (pos? (:excluded summary 0))
        (log! (str "Selection filters excluded " (:excluded summary) " file(s).")))

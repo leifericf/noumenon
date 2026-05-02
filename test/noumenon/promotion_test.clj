@@ -57,6 +57,18 @@
         [file-tx _] (promotion/promote-tx-data "src/r.clj" donor)]
     (is (= #{:file/path :sem/summary} (set (keys file-tx))))))
 
+(deftest promote-tx-data-cross-db-records-db-name
+  (testing "donor-db-name set → tx-meta drops :prov/promoted-from (foreign tx
+  ids are meaningless in the recipient DB) and instead records the
+  donor's db-name as a breadcrumb"
+    (let [donor {:donor-tx 99 :sem/summary "x"
+                 :donor-db-name "noumenon-trunk"}
+          [_ tx-meta] (promotion/promote-tx-data "src/r.clj" donor)]
+      (is (nil? (:prov/promoted-from tx-meta)))
+      (is (= "noumenon-trunk" (:prov/promoted-from-db-name tx-meta)))
+      (is (= :promote (:tx/op tx-meta)))
+      (is (= :promoted (:tx/source tx-meta))))))
+
 (deftest promote!-end-to-end
   (let [conn (th/make-test-conn "promo-e2e")]
     ;; Donor: src/donor.clj at blob-x, analyzed
@@ -83,6 +95,52 @@
 (deftest promote!-noop-on-nil-donor
   (let [conn (th/make-test-conn "promo-noop")]
     (is (nil? (promotion/promote! conn "src/anything.clj" nil)))))
+
+(deftest find-cached-analysis-cross-db
+  (testing "donor lives in trunk-conn; recipient lives in delta-conn — the
+  lookup uses :donor-db, the promote happens against the recipient"
+    (let [trunk (th/make-test-conn "promo-cross-trunk")
+          delta (th/make-test-conn "promo-cross-delta")]
+      (d/transact trunk {:tx-data [{:file/path "src/x.clj" :file/blob-sha blob-x}]})
+      (d/transact trunk {:tx-data (analyze-tx "src/x.clj" "trunk's analysis")})
+      (d/transact delta {:tx-data [{:file/path "src/x.clj" :file/blob-sha blob-x}]})
+      (let [donor (promotion/find-cached-analysis
+                   (d/db delta) blob-x prompt-h model-v
+                   {:donor-db (d/db trunk) :donor-db-name "noumenon-trunk"})]
+        (is (some? donor) "trunk donor found via cross-DB scan")
+        (is (= "trunk's analysis" (:sem/summary donor)))
+        (is (= "noumenon-trunk" (:donor-db-name donor))
+            "donor map carries the donor-db-name so promote-tx-data can record it"))
+      (testing "miss: trunk has no donor with that prompt"
+        (is (nil? (promotion/find-cached-analysis
+                   (d/db delta) blob-x "different-ph" model-v
+                   {:donor-db (d/db trunk) :donor-db-name "noumenon-trunk"})))))))
+
+(deftest promote!-cross-db-end-to-end
+  (let [trunk (th/make-test-conn "promo-x-trunk")
+        delta (th/make-test-conn "promo-x-delta")]
+    (d/transact trunk {:tx-data [{:file/path "src/y.clj" :file/blob-sha blob-x}]})
+    (d/transact trunk {:tx-data (analyze-tx "src/y.clj" "trunk analysis")})
+    (d/transact delta {:tx-data [{:file/path "src/y.clj" :file/blob-sha blob-x}]})
+    (let [donor  (promotion/find-cached-analysis
+                  (d/db delta) blob-x prompt-h model-v
+                  {:donor-db (d/db trunk) :donor-db-name "noumenon-trunk"})
+          result (promotion/promote! delta "src/y.clj" donor)
+          db'    (d/db delta)]
+      (is (= :promoted (:status result)))
+      (is (= "trunk analysis"
+             (:sem/summary (d/pull db' [:sem/summary] [:file/path "src/y.clj"]))))
+      (testing "the recipient's tx records :prov/promoted-from-db-name and
+      DROPS :prov/promoted-from (foreign tx-ids are meaningless here)"
+        (let [rcpt-tx (ffirst (d/q '[:find ?tx
+                                     :where
+                                     [?f :file/path "src/y.clj"]
+                                     [?f :sem/summary _ ?tx]]
+                                   db'))
+              tx-meta (d/pull db' [:prov/promoted-from-db-name
+                                   {:prov/promoted-from [:db/id]}] rcpt-tx)]
+          (is (= "noumenon-trunk" (:prov/promoted-from-db-name tx-meta)))
+          (is (nil? (:prov/promoted-from tx-meta))))))))
 
 ;; --- analyze-file! integration: promotion bypasses the LLM ---
 
