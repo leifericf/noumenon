@@ -110,7 +110,12 @@
   (when-let [body (:body request)]
     (let [s (slurp body)]
       (when (seq s)
-        (json/read-str s :key-fn keyword)))))
+        (try
+          (json/read-str s :key-fn keyword)
+          (catch Exception e
+            (log! "http/parse-json" (.getMessage e))
+            (throw (ex-info "Invalid JSON body"
+                            {:status 400 :message "Invalid JSON body"}))))))))
 
 ;; --- Auth ---
 

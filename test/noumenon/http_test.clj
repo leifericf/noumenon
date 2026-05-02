@@ -121,6 +121,25 @@
         (is (re-find #"query_name exceeds maximum length" (str error))
             error)))))
 
+(deftest malformed-json-body-returns-400
+  (testing "POST with a syntactically broken JSON body must surface as
+            400 'Invalid JSON body', not as a generic 500. The previous
+            parse-json-body let json/read-str's exception flow up into
+            the make-handler catch-all, where it became 'Internal
+            server error' even though the issue was wholly the
+            client's input."
+    (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+          request {:request-method :post
+                   :uri            "/api/import"
+                   :headers        {}
+                   :body           (java.io.ByteArrayInputStream.
+                                    (.getBytes "{not json" "UTF-8"))}
+          resp    (handler request)
+          body    (json/read-str (:body resp) :key-fn keyword)]
+      (is (= 400 (:status resp)))
+      (is (re-find #"(?i)invalid json" (str (:error body)))
+          (str "expected 'Invalid JSON' wording, got: " (:error body))))))
+
 (deftest with-repo-rejects-bad-repo_path-shapes
   (testing "with-repo runs type+length+blank checks before FS work, so
             non-string / oversized / empty repo_path values get a clean
