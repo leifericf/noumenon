@@ -12,8 +12,13 @@
   (:require [babashka.fs :as fs]
             [clojure.string :as str]))
 
+;; Datomic-Local stores DBs under <storage-dir>/<system>/<db-name>/. The
+;; daemon uses `:system "noumenon"`, so the actual deltas live one level
+;; deeper than ~/.noumenon/deltas/. Walking the parent dir would surface
+;; the system dir itself as a single "unparseable" entry — and a `y` at
+;; the prompt would then nuke every delta DB on the machine.
 (def deltas-dir
-  (str (fs/path (fs/home) ".noumenon" "deltas")))
+  (str (fs/path (fs/home) ".noumenon" "deltas" "noumenon")))
 
 (def trunk-data-dir
   (str (fs/path (fs/home) ".noumenon" "data" "noumenon")))
@@ -98,14 +103,20 @@
 (defn run
   "Entry point for `bb prune-deltas`."
   []
-  (let [rows  (list-deltas)
-        stale (filter (comp #{:trunk-missing :unparseable} :status) rows)]
+  (let [rows         (list-deltas)
+        unparseable  (filter (comp #{:unparseable} :status) rows)
+        stale        (filter (comp #{:trunk-missing} :status) rows)]
     (when (empty? rows)
       (println "No deltas found under" deltas-dir)
       (System/exit 0))
     (print-table rows)
+    (when (seq unparseable)
+      (println)
+      (println "Unparseable entries are NOT eligible for automatic deletion —")
+      (println "investigate manually before removing:")
+      (doseq [{:keys [path]} unparseable] (println "  " path)))
     (if (empty? stale)
-      (do (println) (println "All deltas appear live. Nothing to prune."))
+      (do (println) (println "All parseable deltas appear live. Nothing to prune."))
       (when (confirm-delete! stale)
         (delete-rows! stale)
         (println "Done.")))))

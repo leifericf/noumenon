@@ -24,3 +24,30 @@
         (is (= :live (p/classify {:repo "live-repo"}))))
       (testing "trunk dir missing → trunk-missing"
         (is (= :trunk-missing (p/classify {:repo "ghost-repo"})))))))
+
+(deftest deltas-dir-points-at-system-subdir
+  (testing "deltas-dir must include the Datomic system subdir 'noumenon' so
+            list-deltas walks the actual delta DBs, not the parent that
+            contains a single 'noumenon' system entry. Without this, a
+            confirmed deletion would wipe every delta on the machine."
+    (is (clojure.string/ends-with? p/deltas-dir "/.noumenon/deltas/noumenon"))))
+
+(deftest list-deltas-skips-system-dir-itself
+  (let [parent  (str (fs/create-temp-dir))
+        system  (str (fs/path parent "noumenon"))
+        live    (str (fs/path system "myrepo__main__abcdef0"))
+        broken  (str (fs/path system "garbage-not-parseable"))
+        trunk   (str (fs/create-temp-dir))]
+    (fs/create-dirs system)
+    (fs/create-dirs live)
+    (fs/create-dirs broken)
+    (fs/create-dirs (fs/path trunk "myrepo"))
+    (with-redefs [p/deltas-dir system
+                  p/trunk-data-dir trunk]
+      (let [rows (p/list-deltas)
+            by-status (group-by :status rows)]
+        (is (= 2 (count rows)) "system dir itself is not a row; the two children are")
+        (is (= 1 (count (:live by-status))))
+        (is (= 1 (count (:unparseable by-status))))
+        (is (= "myrepo__main__abcdef0" (:name (first (:live by-status))))
+            "live row points at the actual delta dir, not the system dir")))))
