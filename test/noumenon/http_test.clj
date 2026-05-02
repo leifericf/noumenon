@@ -121,6 +121,24 @@
         (is (re-find #"query_name exceeds maximum length" (str error))
             error)))))
 
+(deftest ask-feedback-on-missing-session-returns-404
+  (testing "POST /api/ask/sessions/<unknown>/feedback used to write
+            feedback to a non-existent session and return 200, leaving
+            an orphan attribute set in the meta DB and lying to the
+            client. The handler now looks up the session first and
+            404s on miss, matching handle-ask-session-detail."
+    (let [tmp     (str "/tmp/noumenon-feedback-test-" (System/currentTimeMillis))
+          handler (http/make-handler {:db-dir tmp})
+          resp    (handler {:request-method :post
+                            :uri            "/api/ask/sessions/ghostly/feedback"
+                            :headers        {}
+                            :body (java.io.ByteArrayInputStream.
+                                   (.getBytes (json/write-str {:feedback "positive"}) "UTF-8"))})
+          body    (json/read-str (:body resp) :key-fn keyword)]
+      (is (= 404 (:status resp)))
+      (is (re-find #"(?i)session.*not found|not found" (str (:error body)))
+          (str "expected 'not found' wording, got: " (:error body))))))
+
 (deftest malformed-json-body-returns-400
   (testing "POST with a syntactically broken JSON body must surface as
             400 'Invalid JSON body', not as a generic 500. The previous

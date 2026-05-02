@@ -981,8 +981,10 @@
     (validate-string-length! "session_id" session-id max-run-id-len)
     (validate-string-length! "comment" comment max-param-value-len)
     (let [meta-conn (db/ensure-meta-db (:db-dir config))]
-      (ask-store/set-feedback! meta-conn session-id polarity comment)
-      (ok {:session-id session-id}))))
+      (if (ask-store/get-session (d/db meta-conn) session-id)
+        (do (ask-store/set-feedback! meta-conn session-id polarity comment)
+            (ok {:session-id session-id}))
+        (error-response 404 "Session not found")))))
 
 ;; --- Token management (admin only — enforced by role middleware) ---
 
