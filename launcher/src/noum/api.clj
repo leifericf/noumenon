@@ -11,29 +11,31 @@
             [noum.jre :as jre]
             [noum.jar :as jar]
             [noum.paths :as paths])
-  (:import [java.net InetAddress Inet6Address URLEncoder]))
+  (:import [java.net InetAddress URLEncoder]))
 
 ;; --- SSRF protection ---
 
 (def ^:private blocked-ip-patterns
+  ;; Classify entirely on the host-address string (`InetAddress/getHostAddress`)
+  ;; so we never call reflection-only methods like Inet6Address/isLoopbackAddress
+  ;; — bb's native-image build doesn't carry that metadata. IPv4-mapped IPv6
+  ;; addresses (e.g., ::ffff:127.0.0.1) are auto-converted to Inet4Address by
+  ;; the JDK so the IPv4 patterns catch them.
   [#"^127\." #"^10\." #"^172\.(1[6-9]|2[0-9]|3[01])\." #"^192\.168\."
-   #"^0\." #"^169\.254\." #"^::1$" #"^fc00:" #"^fe80:" #"^fd"])
+   #"^0\." #"^169\.254\."
+   ;; IPv6 loopback: `::1` (compressed) or `0:0:0:0:0:0:0:1` (full canonical;
+   ;; bb's native-image-built JDK returns the latter from getHostAddress).
+   #"(?i)^(::1|0:0:0:0:0:0:0:1)$"
+   ;; IPv6 link-local fe80::/10 — covers fe80-febf prefix.
+   #"(?i)^fe[89ab][0-9a-f]:"
+   ;; IPv6 unique local fc00::/7 — covers fc00-fdff prefix.
+   #"(?i)^f[cd][0-9a-f]{2}:"])
 
 (defn- private-ip? [ip-str]
   (some #(re-find % ip-str) blocked-ip-patterns))
 
 (defn- blocked-address? [^InetAddress addr]
-  (let [ip (.getHostAddress addr)]
-    (or (private-ip? ip)
-        (.isLoopbackAddress addr)
-        (.isLinkLocalAddress addr)
-        (.isSiteLocalAddress addr)
-        (when (instance? Inet6Address addr)
-          (let [canon (InetAddress/getByAddress (.getAddress addr))]
-            (or (.isLoopbackAddress canon)
-                (.isLinkLocalAddress canon)
-                (.isSiteLocalAddress canon)
-                (private-ip? (.getHostAddress canon))))))))
+  (private-ip? (.getHostAddress addr)))
 
 (defn- private-address? [host-str]
   (try

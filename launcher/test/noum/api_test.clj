@@ -21,6 +21,25 @@
   (testing "non-hosted conn (no :host) returns nil"
     (is (nil? (api/detect-federation-context "/tmp" {:port 7891})))))
 
+(deftest blocked-address?-classifies-ipv6-without-reflection
+  ;; Bug: bb's native-image lacks reflection metadata for Inet6Address's
+  ;; instance methods (.isLoopbackAddress, .getAddress, etc.). Any host
+  ;; whose DNS lookup returned an Inet6Address used to surface as
+  ;; MissingReflectionRegistrationError. Verify against synthetic
+  ;; addresses that the classifier returns the right answer with no
+  ;; reflection error.
+  (let [blocked? @#'noum.api/blocked-address?]
+    (testing "IPv6 loopback ::1 is private"
+      (is (true? (boolean (blocked? (java.net.InetAddress/getByName "::1"))))))
+    (testing "IPv6 link-local fe80::1 is private"
+      (is (true? (boolean (blocked? (java.net.InetAddress/getByName "fe80::1"))))))
+    (testing "IPv6 unique local fd00::1 is private"
+      (is (true? (boolean (blocked? (java.net.InetAddress/getByName "fd00::1"))))))
+    (testing "IPv4 public 8.8.8.8 is not private"
+      (is (false? (boolean (blocked? (java.net.InetAddress/getByName "8.8.8.8"))))))
+    (testing "public IPv6 2001:4860:4860::8888 is not private (used to crash with MissingReflectionRegistrationError)"
+      (is (false? (boolean (blocked? (java.net.InetAddress/getByName "2001:4860:4860::8888"))))))))
+
 (deftest base-url-honors-loopback-with-or-without-scheme
   (testing "bare localhost / 127.0.0.1 are allowed"
     (is (= "http://localhost:7895"
