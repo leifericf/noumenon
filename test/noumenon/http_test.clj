@@ -1,7 +1,8 @@
 (ns noumenon.http-test
   (:require [clojure.data.json :as json]
             [clojure.test :refer [deftest is testing]]
-            [noumenon.http :as http]))
+            [noumenon.http :as http]
+            [noumenon.repo-manager :as repo-mgr]))
 
 (deftest health-endpoint
   (let [handler (http/make-handler {:db-dir    "data/datomic/"
@@ -185,6 +186,24 @@
                (:status resp) " '" (:error body) "'"))
       (is (re-find #"(?i)question" (str (:error body)))
           (str "expected 'question' in error, got: " (:error body))))))
+
+(deftest refresh-clone-missing-uses-db-name-not-abs-path
+  (testing "refresh-repo!'s 'Clone not found' ex-info used to embed the
+            absolute clone-path so anyone reading the daemon log could
+            deduce the db-dir layout. Now references the db-name only;
+            full path stays in :ex-data for daemon-side debugging but
+            isn't in the message string the http error log prints."
+    (let [tmp (str "/tmp/noumenon-clone-leak-test-" (System/currentTimeMillis))]
+      (try
+        (repo-mgr/refresh-repo! tmp "ghost-name")
+        (is false "expected ex-info — the on-disk clone doesn't exist")
+        (catch clojure.lang.ExceptionInfo e
+          (is (re-find #"ghost-name" (.getMessage e))
+              (str "error should mention db-name, got: " (.getMessage e)))
+          (is (not (re-find (re-pattern (java.util.regex.Pattern/quote tmp))
+                            (.getMessage e)))
+              (str "error must not include the absolute db-dir, got: "
+                   (.getMessage e))))))))
 
 (deftest repo-remove-and-refresh-unknown-name-404
   (testing "DELETE /api/repos/<unknown> and POST /api/repos/<unknown>/refresh

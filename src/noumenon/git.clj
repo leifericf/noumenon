@@ -103,6 +103,17 @@
                (not (#{"localhost" "127.0.0.1"} host)))
       (validate-url-host! url))))
 
+(defn- redact-target-path
+  "Replace occurrences of an absolute clone target-dir in git's stderr
+   with its basename, so log messages don't leak the daemon's db-dir
+   layout. Git produces 'Cloning into bare repository '/abs/path/x'…';
+   we want only `x` in the surfaced message. Full path stays in
+   ex-data for daemon-side debugging."
+  [^String stderr ^String target-dir]
+  (let [base (.getName (io/file target-dir))]
+    (-> stderr
+        (str/replace target-dir base))))
+
 (defn clone!
   "Clone a Git URL into target-dir. Validates URL does not resolve to private IPs. Throws on failure."
   [url target-dir]
@@ -110,7 +121,7 @@
   (io/make-parents (io/file target-dir "dummy"))
   (let [{:keys [exit err]} (shell/sh "git" "clone" "--" url (str target-dir))]
     (when-not (zero? exit)
-      (throw (ex-info (str "git clone failed: " (str/trim err))
+      (throw (ex-info (str "git clone failed: " (str/trim (redact-target-path err (str target-dir))))
                       {:exit exit :url url :target target-dir})))))
 
 (defn clone-bare!
@@ -121,7 +132,7 @@
   (.mkdirs (io/file target-dir))
   (let [{:keys [exit err]} (shell/sh "git" "clone" "--bare" "--" url (str target-dir))]
     (when-not (zero? exit)
-      (throw (ex-info (str "git clone --bare failed: " (str/trim err))
+      (throw (ex-info (str "git clone --bare failed: " (str/trim (redact-target-path err (str target-dir))))
                       {:exit exit :url url :target target-dir})))))
 
 (defn bare-repo?

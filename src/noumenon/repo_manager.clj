@@ -72,7 +72,10 @@
       (throw (ex-info "Invalid db-name: contains '..'" {:db-name db-name})))
     ;; Clone if not already present
     (when-not (.isDirectory clone-dir)
-      (log! (str "Cloning " url " into " clone-path " ..."))
+      ;; Log the db-name only — earlier this echoed the absolute
+      ;; clone-path, leaking the daemon's db-dir layout to anyone
+      ;; with read access to the log.
+      (log! (str "Cloning " url " into " db-name ".git ..."))
       (if p4?
         (git/p4-clone! url clone-path (or p4-opts {}))
         (git/clone-bare! url clone-path)))
@@ -97,7 +100,9 @@
   (let [clone-path (repo-clone-path db-dir db-name)
         conn       (db/get-or-create-conn db-dir db-name)]
     (when-not (.isDirectory (io/file clone-path))
-      (throw (ex-info (str "Clone not found: " clone-path)
+      ;; Reference db-name in the message; absolute clone-path stays
+      ;; in :ex-data for daemon-side debugging but isn't logged.
+      (throw (ex-info (str "Clone not found for " db-name)
                       {:db-name db-name :clone-path clone-path})))
     (log! (str "Fetching " db-name " ..."))
     (if (git/p4-clone? clone-path)
@@ -122,7 +127,7 @@
         (d/transact meta-conn {:tx-data [[:db/retractEntity eid]]})))
     ;; Delete bare clone
     (when (.isDirectory clone-dir)
-      (log! (str "Removing clone " clone-path))
+      (log! (str "Removing clone for " db-name))
       (doseq [f (reverse (file-seq clone-dir))]
         (.delete f)))
     ;; Delete database
