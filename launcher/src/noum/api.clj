@@ -44,19 +44,35 @@
 
 ;; --- Connection ---
 
+(defn- split-scheme
+  "Split a host string into [scheme bare-host]. Scheme is nil when no `://` prefix."
+  [host]
+  (if-let [idx (str/index-of host "://")]
+    [(subs host 0 idx) (subs host (+ idx 3))]
+    [nil host]))
+
+(defn- loopback-host?
+  "True when the bare-host (no scheme) refers to localhost or 127.0.0.1.
+   Anchored on either a port (`:`), path (`/`), or end of string so we
+   don't accidentally match e.g. `localhost.attacker.com`."
+  [bare-host]
+  (boolean (re-find #"^(localhost|127\.0\.0\.1)(:|/|$)" bare-host)))
+
 (defn base-url
   "Build base URL from connection info. Supports remote --host.
-   Remote hosts default to https:// unless --insecure is set.
-   Rejects hosts that resolve to private/link-local addresses (SSRF protection)."
+   Hosts may include an explicit `http(s)://` scheme; otherwise the scheme
+   is derived from --insecure (or the loopback allowlist). Rejects hosts
+   that resolve to private/link-local addresses (SSRF protection)."
   [{:keys [port host insecure]}]
   (or (when host
-        (when (and (not (re-find #"^(localhost|127\.0\.0\.1)(:|$)" host))
-                   (private-address? host))
-          (throw (ex-info "Blocked: --host resolves to a private/internal address"
-                          {:host host})))
-        (if (or insecure (re-find #"^(localhost|127\.0\.0\.1)(:|$)" host))
-          (str "http://" host)
-          (str "https://" host)))
+        (let [[scheme bare-host] (split-scheme host)
+              loopback?          (loopback-host? bare-host)]
+          (when (and (not loopback?) (private-address? bare-host))
+            (throw (ex-info "Blocked: --host resolves to a private/internal address"
+                            {:host host})))
+          (str (or scheme
+                   (if (or insecure loopback?) "http" "https"))
+               "://" bare-host)))
       (str "http://127.0.0.1:" port)))
 
 (defn auth-headers

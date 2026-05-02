@@ -20,3 +20,20 @@
     (is (nil? (api/detect-federation-context "/tmp" nil))))
   (testing "non-hosted conn (no :host) returns nil"
     (is (nil? (api/detect-federation-context "/tmp" {:port 7891})))))
+
+(deftest base-url-honors-loopback-with-or-without-scheme
+  (testing "bare localhost / 127.0.0.1 are allowed"
+    (is (= "http://localhost:7895"
+           (api/base-url {:host "localhost:7895" :insecure true})))
+    (is (= "http://127.0.0.1:7895"
+           (api/base-url {:host "127.0.0.1:7895" :insecure true}))))
+  (testing "scheme-prefixed localhost / 127.0.0.1 are allowed (the SSRF check used to block these)"
+    (is (= "http://localhost:7895"
+           (api/base-url {:host "http://localhost:7895" :insecure true})))
+    (is (= "http://127.0.0.1:7895"
+           (api/base-url {:host "http://127.0.0.1:7895" :insecure true})))
+    (is (= "https://localhost:7895"
+           (api/base-url {:host "https://localhost:7895"}))))
+  (testing "no host falls back to local-daemon port"
+    (is (= "http://127.0.0.1:7895"
+           (api/base-url {:port 7895})))))
