@@ -1349,16 +1349,37 @@
                      :post (shell/sh
                             "curl" "-s" "--config" "-" "-X" "POST" url
                             "-d" (json/write-str args)
-                            :in curl-config))
-              body (json/read-str (:out resp))]
-          (if (get body "ok")
-            (tool-result (json/write-str (get body "data")))
-            (let [error-msg (or (get body "error") "Remote request failed")
-                  status    (get body "status")]
-              (tool-error (cond
-                            (= status 401) "Authentication failed. Run `noum connect <url> --token <new-token>` to update credentials."
-                            (= status 403) "Permission denied. This operation requires admin access."
-                            :else error-msg)))))
+                            :in curl-config))]
+          (cond
+            ;; Curl failed at the transport layer (connection refused,
+            ;; DNS, timeout). Surface the host so the user knows WHAT
+            ;; isn't reachable instead of bubbling up the downstream
+            ;; "JSON error (end-of-file)" produced by parsing curl's
+            ;; empty stdout.
+            (not (zero? (:exit resp)))
+            (tool-error
+             (str "Cannot reach daemon at " host ". "
+                  (when-let [err (not-empty (str/trim (or (:err resp) "")))]
+                    (str "(" err ") "))
+                  "Start it with `noum daemon`, or update "
+                  "~/.noumenon/config.edn to point at a running host."))
+            ;; Curl succeeded but body is empty — likely a misbehaving
+            ;; upstream (204, premature close). Same fix: don't let the
+            ;; JSON parser produce the user-facing message.
+            (str/blank? (:out resp))
+            (tool-error
+             (str "Empty response from daemon at " host ". "
+                  "The daemon may be misconfigured or returning no body."))
+            :else
+            (let [body (json/read-str (:out resp))]
+              (if (get body "ok")
+                (tool-result (json/write-str (get body "data")))
+                (let [error-msg (or (get body "error") "Remote request failed")
+                      status    (get body "status")]
+                  (tool-error (cond
+                                (= status 401) "Authentication failed. Run `noum connect <url> --token <new-token>` to update credentials."
+                                (= status 403) "Permission denied. This operation requires admin access."
+                                :else error-msg)))))))
         (catch Exception e
           (tool-error (str "Remote proxy error: " (.getMessage e))))))))
 
