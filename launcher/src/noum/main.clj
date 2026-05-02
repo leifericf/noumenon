@@ -295,16 +295,27 @@
         1))))
 
 (defn- do-serve [{:keys [flags]}]
-  (let [jre-path (jre/ensure!)
-        jar-path (jar/ensure! version)
-        java-bin (str (fs/path jre-path "bin" "java"))
-        args     (cond-> [java-bin "-jar" jar-path "serve"]
-                   (:db-dir flags)   (into ["--db-dir" (:db-dir flags)])
-                   (:provider flags) (into ["--provider" (:provider flags)])
-                   (:model flags)    (into ["--model" (:model flags)]))
-        env      (cond-> (into {} (System/getenv))
-                   (:token flags) (assoc "NOUMENON_TOKEN" (:token flags)))]
-    (:exit @(proc/process {:cmd args :extra-env env :inherit true}))))
+  (if (:host flags)
+    ;; The MCP server runs colocated with a daemon (local or, via the
+    ;; saved active named connection, a remote one it proxies to).
+    ;; Routing `--host` directly through `serve` was silently dropped,
+    ;; which made the user think they were targeting a remote when in
+    ;; fact they were running against the local daemon.
+    (do (tui/eprintln (str (style/red "Error: ")
+                           "`noum serve` does not accept `--host`. To target a remote, "
+                           "run `noum connect <url>` first; the MCP server then proxies "
+                           "to the active connection."))
+        1)
+    (let [jre-path (jre/ensure!)
+          jar-path (jar/ensure! version)
+          java-bin (str (fs/path jre-path "bin" "java"))
+          args     (cond-> [java-bin "-jar" jar-path "serve"]
+                     (:db-dir flags)   (into ["--db-dir" (:db-dir flags)])
+                     (:provider flags) (into ["--provider" (:provider flags)])
+                     (:model flags)    (into ["--model" (:model flags)]))
+          env      (cond-> (into {} (System/getenv))
+                     (:token flags) (assoc "NOUMENON_TOKEN" (:token flags)))]
+      (:exit @(proc/process {:cmd args :extra-env env :inherit true})))))
 
 (defn- parse-watch-interval
   "Interpret the --interval flag. Returns a positive integer (defaulting

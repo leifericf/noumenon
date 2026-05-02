@@ -42,6 +42,15 @@
     (testing "public IPv6 2001:4860:4860::8888 is not private (used to crash with MissingReflectionRegistrationError)"
       (is (false? (boolean (blocked? (java.net.InetAddress/getByName "2001:4860:4860::8888"))))))))
 
+(deftest serve-rejects-host-flag
+  ;; Bug: `noum serve --host X` silently dropped --host and ran the MCP
+  ;; server colocated with the local daemon. Reject the combination
+  ;; up front; users wanting remote should `noum connect` first.
+  (require 'noum.main)
+  (let [do-serve (resolve 'noum.main/do-serve)]
+    (testing "serve --host rejected with exit 1"
+      (is (= 1 (do-serve {:flags {:host "127.0.0.1:9999" :insecure true}}))))))
+
 (deftest ping-target-respects-host-flag
   ;; Bug: do-ping called daemon/connection directly, ignoring --host /
   ;; --token / --insecure entirely. The new ping-target helper resolves
