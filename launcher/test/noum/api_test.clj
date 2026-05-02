@@ -60,6 +60,27 @@
         ec  (binding [*err* buf] (f))]
     [ec (str buf)]))
 
+(deftest do-introspect-rejects-mutually-exclusive-flags
+  ;; Bug: --status / --stop / --history are mutually exclusive, but the
+  ;; cond order silently picked the first one set, ignoring the others.
+  (require 'noum.main)
+  (let [do-introspect (resolve 'noum.main/do-introspect)]
+    (testing "--status + --stop rejected with no API call"
+      (is (= 1 (assert-no-http-call
+                #(do-introspect {:command "introspect"
+                                 :flags {:status "run-a" :stop "run-b"}
+                                 :positional []})))))
+    (testing "--status + --history rejected"
+      (is (= 1 (assert-no-http-call
+                #(do-introspect {:command "introspect"
+                                 :flags {:status "run-a" :history true}
+                                 :positional []})))))
+    (testing "all three rejected"
+      (is (= 1 (assert-no-http-call
+                #(do-introspect {:command "introspect"
+                                 :flags {:status "a" :stop "b" :history true}
+                                 :positional []})))))))
+
 (deftest do-introspect-handles-valueless-flags
   ;; Bug: --status / --stop with no following value booleanized to true.
   ;; (string? true) was false, so the cond fell through to do-api-command

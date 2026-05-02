@@ -631,6 +631,13 @@
 
 (defn- do-introspect [{:keys [flags] :as parsed}]
   (cond
+    ;; --status / --stop / --history target different sub-actions; pre-
+    ;; reject combinations so the cond order doesn't silently pick the
+    ;; first match. Same pattern do-query already uses for --raw vs
+    ;; --as-of.
+    (> (count (filter #(some? (% flags)) [:status :stop :history])) 1)
+    (do (tui/eprintln "Error: --status, --stop, and --history are mutually exclusive.") 1)
+
     ;; --status / --stop with no following value booleanize to true via
     ;; extract-flags. Without these explicit checks, the cond fell
     ;; through to do-api-command which emitted a "Use `noum databases`"
