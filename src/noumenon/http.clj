@@ -712,6 +712,10 @@
 (defn- handle-delete-database [request config]
   (let [db-name (get-in request [:params :name])
         _       (validate-db-name! db-name)
+        _       (when (= db-name db/meta-db-name)
+                  (throw (ex-info (str "Cannot delete reserved database: " db-name)
+                                  {:status 400
+                                   :message (str "Cannot delete reserved database: " db-name)})))
         db-dir  (:db-dir config)
         db-path (io/file db-dir "noumenon" db-name)]
     (if (.isDirectory db-path)

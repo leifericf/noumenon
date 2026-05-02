@@ -78,12 +78,19 @@
   [db-dir db-name]
   (swap! conn-cache dissoc [db-dir db-name]))
 
+(def meta-db-name
+  "Reserved db-name for the daemon's meta database (tokens, settings,
+   prompts, rules, ask sessions, benchmark/introspect history). Callers
+   that gate on 'this is the meta DB, not a user repo' must compare
+   against this constant rather than the bare string."
+  "noumenon-internal")
+
 (defn ensure-meta-db
-  "Connect to the noumenon-internal meta database, ensure schema, and seed
-   artifacts from classpath if needed. Returns the connection.
-   Uses conn-cache so repeated calls reuse the same connection."
+  "Connect to the meta database, ensure schema, and seed artifacts from
+   classpath if needed. Returns the connection. Uses conn-cache so
+   repeated calls reuse the same connection."
   [storage-dir]
-  (let [conn (get-or-create-conn storage-dir "noumenon-internal")]
+  (let [conn (get-or-create-conn storage-dir meta-db-name)]
     (artifacts/seed-from-classpath! conn)
     conn))
 

@@ -49,6 +49,19 @@
     (is (= 400 (:status dots)) "... should be rejected")
     (is (= 400 (:status blank)) ".. in status should be rejected")))
 
+(deftest delete-meta-db-rejected
+  (testing "DELETE /api/databases/noumenon-internal must not let callers
+            wipe the meta DB — it stores tokens, settings, prompts, rules,
+            ask sessions, and benchmark history, and the daemon's cached
+            :meta-conn would silently break for the rest of the process
+            lifetime."
+    (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+          resp    (handler {:request-method :delete :uri "/api/databases/noumenon-internal"})
+          body    (json/read-str (:body resp) :key-fn keyword)]
+      (is (= 400 (:status resp)))
+      (is (re-find #"reserved" (str (:error body)))
+          (str "expected 'reserved' wording in error, got: " (:error body))))))
+
 (deftest url-encoded-path-params-decoded
   (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
         ;; Use a URL-encoded db name like "my%20repo" -> should decode to "my repo"
