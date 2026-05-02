@@ -47,10 +47,43 @@
        :branch branch
        :basis7 basis7})))
 
+(defn candidate-repos
+  "Possible (repo, branch) splits for a parsed delta entry, ordered by
+   repo length descending. Walks the `__` boundaries between the parsed
+   repo and branch so that `parse-name`'s branch-favoring heuristic
+   (which attributes every `__`-segment to the branch) doesn't lose to
+   a real repo basename that itself contains `__`. Without this,
+   `my__repo__feat-...__...` parses as repo=my and `my` has no trunk —
+   so the delta gets falsely flagged :trunk-missing and offered for
+   deletion even though `my__repo` is the actual live trunk."
+  [{:keys [repo branch]}]
+  (let [parts (when branch (str/split branch #"__"))]
+    (if (or (nil? branch) (< (count parts) 2))
+      [{:repo repo :branch branch}]
+      (->> (range (dec (count parts)) -1 -1)
+           (mapv (fn [i]
+                   {:repo   (str/join "__" (cons repo (take i parts)))
+                    :branch (str/join "__" (drop i parts))}))))))
+
+(defn resolve-against-trunk
+  "Pick the candidate split whose repo dir exists under `trunk-data-dir`,
+   preferring the longest matching repo. Returns the original parsed entry
+   unchanged if no candidate has a trunk dir."
+  [parsed]
+  (or (->> (candidate-repos parsed)
+           (some (fn [c]
+                   (when (fs/directory? (fs/path trunk-data-dir (:repo c)))
+                     c))))
+      parsed))
+
 (defn classify
-  "Return :live or :trunk-missing for a parsed delta entry."
-  [{:keys [repo]}]
-  (if (fs/directory? (fs/path trunk-data-dir repo))
+  "Return :live or :trunk-missing for a parsed delta entry. Walks the
+   `__` boundary between parsed repo and branch so a repo basename
+   containing `__` (which `parse-name`'s branch-favoring heuristic
+   would misattribute to the branch) still classifies correctly."
+  [parsed]
+  (if (->> (candidate-repos parsed)
+           (some #(fs/directory? (fs/path trunk-data-dir (:repo %)))))
     :live
     :trunk-missing))
 
@@ -66,7 +99,10 @@
     (catch Exception _ 0)))
 
 (defn list-deltas
-  "Walk ~/.noumenon/deltas, classify each entry, return sorted rows."
+  "Walk ~/.noumenon/deltas, classify each entry, return sorted rows.
+   When the parser's heuristic split disagrees with what's on disk, the
+   row's :parsed is rewritten to the resolved (repo, branch) so the
+   table shows the truth instead of the misparse."
   []
   (when-not (fs/directory? deltas-dir)
     (println "No deltas directory at" deltas-dir)
@@ -75,11 +111,14 @@
        (filter fs/directory?)
        (mapv (fn [path]
                (let [name   (str (fs/file-name path))
-                     parsed (parse-name name)]
+                     parsed (parse-name name)
+                     status (if parsed (classify parsed) :unparseable)
+                     resolved (when (and parsed (= status :live))
+                                (merge parsed (resolve-against-trunk parsed)))]
                  {:name   name
                   :path   (str path)
-                  :parsed parsed
-                  :status (if parsed (classify parsed) :unparseable)
+                  :parsed (or resolved parsed)
+                  :status status
                   :size   (dir-size-mb path)})))
        (sort-by (juxt (comp #{:trunk-missing :unparseable :live} :status) (comp - :size)))))
 

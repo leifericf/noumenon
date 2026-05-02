@@ -39,6 +39,56 @@
       (testing "trunk dir missing → trunk-missing"
         (is (= :trunk-missing (p/classify {:repo "ghost-repo"})))))))
 
+(deftest classify-walks-double-underscore-boundary
+  (testing "repo basename containing __ resolves to :live when the parser's
+            branch-favoring heuristic misattributes __-segments to the
+            branch. parse-name on `my__repo__feat-aabbcc__abcdef0` returns
+            {:repo \"my\" :branch \"repo__feat\"} under the existing
+            heuristic; classify must walk `__` boundaries to discover that
+            `my__repo` is the real trunk and report :live, not propose the
+            delta for deletion."
+    (let [tmp (str (fs/create-temp-dir))]
+      (fs/create-dirs (fs/path tmp "my__repo"))
+      (with-redefs [p/trunk-data-dir tmp]
+        (is (= :live
+               (p/classify {:repo "my" :branch "repo__feat"}))
+            "longest matching repo wins")
+        (is (= :trunk-missing
+               (p/classify {:repo "my" :branch "ghost__feat"}))
+            "no candidate matches → genuinely trunk-missing"))))
+  (testing "candidate-search prefers the longest matching repo when both
+            short and long trunks exist on disk, matching how
+            derive-db-name produces real on-disk db-names"
+    (let [tmp (str (fs/create-temp-dir))]
+      (fs/create-dirs (fs/path tmp "my"))
+      (fs/create-dirs (fs/path tmp "my__repo"))
+      (with-redefs [p/trunk-data-dir tmp]
+        ;; Either resolution is :live; we just confirm classify is :live
+        ;; in both directions.
+        (is (= :live (p/classify {:repo "my" :branch "repo__feat"})))
+        (is (= :live (p/classify {:repo "my__repo" :branch "feat"})))))))
+
+(deftest list-deltas-shows-resolved-repo-when-walked
+  (testing "When the parser's branch-favoring heuristic gives `repo=my,
+            branch=repo__feat` but `my__repo` is the actual trunk, the
+            displayed row uses the resolved repo/branch so the operator
+            sees the truth, not the misparse."
+    (let [parent  (str (fs/create-temp-dir))
+          system  (str (fs/path parent "noumenon"))
+          delta   (str (fs/path system "my__repo__feat-aabbcc__abcdef0"))
+          trunk   (str (fs/create-temp-dir))]
+      (fs/create-dirs system)
+      (fs/create-dirs delta)
+      (fs/create-dirs (fs/path trunk "my__repo"))
+      (with-redefs [p/deltas-dir system
+                    p/trunk-data-dir trunk]
+        (let [rows (p/list-deltas)
+              row  (first rows)]
+          (is (= 1 (count rows)))
+          (is (= :live (:status row)))
+          (is (= "my__repo" (-> row :parsed :repo)))
+          (is (= "feat"     (-> row :parsed :branch))))))))
+
 (deftest deltas-dir-points-at-system-subdir
   (testing "deltas-dir must include the Datomic system subdir 'noumenon' so
             list-deltas walks the actual delta DBs, not the parent that
