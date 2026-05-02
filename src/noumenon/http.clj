@@ -33,32 +33,27 @@
            [java.security MessageDigest]))
 
 ;; --- Input validation ---
+;; Length caps and the params validator live in noumenon.util so the
+;; MCP layer (which talks to the same handlers) shares the exact same
+;; thresholds. HTTP-specific validators (CORS-style ones, exclude_paths
+;; cardinality) stay here.
 
-(def ^:private max-param-value-len 4096)
-(def ^:private max-question-len 8000)
-(def ^:private max-run-id-len 256)
+(def ^:private max-param-value-len util/max-param-value-len)
+(def ^:private max-question-len    util/max-question-len)
+(def ^:private max-run-id-len      util/max-run-id-len)
+(def ^:private max-branch-name-len util/max-branch-name-len)
+(def ^:private max-host-len        util/max-host-len)
+(def ^:private max-db-name-len     util/max-db-name-len)
 (def ^:private max-layers-len 64)
-(def ^:private max-branch-name-len 256)
-(def ^:private max-host-len 256)
-(def ^:private max-db-name-len 256)
 (def ^:private allowed-layers #{:raw :import :enrich :full :embedded})
 (def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
 
-(defn- validate-string-length!
-  "Reject string values exceeding max-len. Wraps util version with :status 400."
-  [field-name s max-len]
-  (try
-    (util/validate-string-length! field-name s max-len)
-    (catch clojure.lang.ExceptionInfo e
-      (throw (ex-info (.getMessage e)
-                      (assoc (ex-data e) :status 400))))))
+(def ^:private validate-string-length! util/validate-string-length!)
 
 (defn- validate-query-params!
-  "Reject query parameter values exceeding max-param-value-len."
+  "Reject query parameter map shapes that exceed shared limits."
   [kw-params]
-  (doseq [[k v] kw-params]
-    (when (string? v)
-      (validate-string-length! (name k) v max-param-value-len))))
+  (util/validate-params! kw-params))
 
 (def ^:private max-exclude-paths 1000)
 

@@ -53,9 +53,12 @@
   {:content [{:type "text" :text text}] :isError true})
 
 ;; --- Input validation ---
+;; Length caps live in noumenon.util so the HTTP handlers and the MCP
+;; layer agree on what constitutes a valid request shape. MCP-specific
+;; bits (model alias / provider name / layers tokenization) stay local.
 
-(def ^:private max-repo-path-len 4096)
-(def ^:private max-question-len 8000)
+(def ^:private max-repo-path-len   util/max-repo-path-len)
+(def ^:private max-question-len    util/max-question-len)
 (def ^:private max-model-len 256)
 (def ^:private max-provider-len 64)
 (def ^:private max-layers-len 64)
@@ -424,15 +427,11 @@
           (tool-result "No results found. The index may be empty — run analyze + embed first."))))))
 
 (defn- handle-query [args defaults]
-  (util/validate-string-length! "query_name" (args "query_name") 256)
+  (util/validate-string-length! "query_name" (args "query_name") util/max-query-name-len)
   (with-conn args defaults
     (fn [{:keys [db meta-db]}]
       (let [raw-params (args "params")
-            _          (when (> (count raw-params) 20)
-                         (throw (ex-info "Too many params"
-                                         {:user-message "params: max 20 entries"})))
-            _          (doseq [[k v] raw-params]
-                         (util/validate-string-length! (str "params." k) (str v) 1024))
+            _          (util/validate-params! raw-params)
             params     (into {} (map (fn [[k v]] [(keyword k) v])) raw-params)
             result (query/run-named-query meta-db db (args "query_name") params)]
         (if (:ok result)
@@ -456,7 +455,8 @@
           (tool-error (:error result)))))))
 
 (defn- handle-query-federated [args defaults]
-  (util/validate-string-length! "query_name" (args "query_name") 256)
+  (util/validate-string-length! "query_name" (args "query_name") util/max-query-name-len)
+  (util/validate-string-length! "branch" (args "branch") util/max-branch-name-len)
   (let [basis-sha (args "basis_sha")
         branch    (args "branch")]
     (when-not (sync/valid-sha? basis-sha)
@@ -465,11 +465,7 @@
     (with-conn args defaults
       (fn [{:keys [db meta-db repo-path]}]
         (let [raw-params (args "params")
-              _          (when (> (count raw-params) 20)
-                           (throw (ex-info "Too many params"
-                                           {:user-message "params: max 20 entries"})))
-              _          (doseq [[k v] raw-params]
-                           (util/validate-string-length! (str "params." k) (str v) 1024))
+              _          (util/validate-params! raw-params)
               params     (into {} (map (fn [[k v]] [(keyword k) v])) raw-params)
               delta-opts (cond-> {} branch (assoc :branch-name branch))
               delta-conn (delta/ensure-delta-db! repo-path basis-sha delta-opts)

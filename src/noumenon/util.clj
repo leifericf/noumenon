@@ -68,8 +68,37 @@
   (when (and (string? s) (> (count s) max-len))
     (let [msg (str field-name " exceeds maximum length of " max-len " characters")]
       (throw (ex-info msg
-                      {:status 400 :message msg
+                      {:status 400 :message msg :user-message msg
                        :field field-name :length (count s) :max max-len})))))
+
+;; --- Shared input limits ---
+;; Used by both HTTP handlers (src/noumenon/http.clj) and the MCP layer
+;; (src/noumenon/mcp.clj) so the two interfaces stay in lockstep on what
+;; counts as a valid request shape. Adjust here once; both surfaces follow.
+
+(def max-repo-path-len   "Filesystem paths"             4096)
+(def max-param-value-len "Datalog query param values"   4096)
+(def max-question-len    "Free-form ask questions"      8000)
+(def max-query-name-len  "Named query identifiers"      256)
+(def max-branch-name-len "Git/Perforce branch names"    256)
+(def max-host-len        "host:port hostnames"          256)
+(def max-db-name-len     "Datomic db-name identifiers"  256)
+(def max-run-id-len      "Benchmark/introspect run IDs" 256)
+(def max-params-count    "Max named-query :params keys" 20)
+(def max-param-key-len   "Named-query :params key len"  256)
+
+(defn validate-params!
+  "Validate a named-query :params map: cap on entry count, key length,
+   and value length. Throws ex-info :status 400 on any breach. Accepts
+   nil/missing or an empty map."
+  [params]
+  (when params
+    (when (> (count params) max-params-count)
+      (let [msg (str "params: max " max-params-count " entries")]
+        (throw (ex-info msg {:status 400 :message msg :user-message msg}))))
+    (doseq [[k v] params]
+      (validate-string-length! (str "params key " (str k)) (name (keyword k)) max-param-key-len)
+      (validate-string-length! (str "params." (name (keyword k))) (str v) max-param-value-len))))
 
 (defn env
   "Read an env var, with optional _FILE variant for Docker secrets.
