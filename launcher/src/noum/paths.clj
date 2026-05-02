@@ -6,12 +6,16 @@
             [clojure.string :as str]))
 
 (defn ensure-private!
-  "Set file permissions to owner-only (600) if the file exists.
-   No-op on platforms without POSIX file permissions (e.g. Windows)."
+  "Set permissions to owner-only — 600 (rw-------) for files, 700
+   (rwx------) for directories. Files only need read+write; directories
+   need execute too or they become unenterable. No-op on platforms
+   without POSIX file permissions (e.g. Windows)."
   [path]
   (when (fs/exists? path)
     (try
-      (fs/set-posix-file-permissions path "rw-------")
+      (fs/set-posix-file-permissions
+       path
+       (if (fs/directory? path) "rwx------" "rw-------"))
       (catch UnsupportedOperationException _))))
 
 (def version
