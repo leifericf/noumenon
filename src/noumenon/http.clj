@@ -38,6 +38,9 @@
 (def ^:private max-question-len 8000)
 (def ^:private max-run-id-len 256)
 (def ^:private max-layers-len 64)
+(def ^:private max-branch-name-len 256)
+(def ^:private max-host-len 256)
+(def ^:private max-db-name-len 256)
 (def ^:private allowed-layers #{:raw :import :enrich :full :embedded})
 (def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
 
@@ -357,6 +360,9 @@
                       {:status 400 :message "basis_sha must be a 40-char lowercase hex SHA"})))
     (when-let [reason (util/validate-repo-path repo-path)]
       (throw (ex-info reason {:status 400 :message (str "repo_path " reason)})))
+    (validate-string-length! "branch" branch max-branch-name-len)
+    (validate-string-length! "parent_host" (:parent_host params) max-host-len)
+    (validate-string-length! "parent_db_name" (:parent_db_name params) max-db-name-len)
     (let [delta-opts (cond-> {}
                        branch                     (assoc :branch-name branch)
                        (:parent_host params)      (assoc :parent-host (:parent_host params))
@@ -609,6 +615,8 @@
                       {:status 400 :message "basis_sha must be a 40-char lowercase hex SHA"})))
     (when-let [reason (util/validate-repo-path repo-path)]
       (throw (ex-info reason {:status 400 :message (str "repo_path " reason)})))
+    (validate-string-length! "query_name" query-name 256)
+    (validate-string-length! "branch" branch max-branch-name-len)
     (validate-query-params! kw-params)
     (let [delta-opts (cond-> {} branch (assoc :branch-name branch))
           delta-conn (delta/ensure-delta-db! repo-path basis-sha delta-opts)
