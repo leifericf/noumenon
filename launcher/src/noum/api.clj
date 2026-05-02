@@ -104,11 +104,16 @@
 (defn parse-body
   "Parse a JSON string into Clojure data: keywordize keys and restore known
    enum values to keywords (the symmetric counterpart to clojure.data.json's
-   keyword-as-string serialization on the daemon side)."
+   keyword-as-string serialization on the daemon side). Returns nil on
+   nil/non-JSON input — the daemon's error middleware sometimes responds
+   with text/plain (e.g. when a 500 escapes from inside the auth path),
+   and the launcher should not propagate a JsonParseException to the user."
   [s]
-  (when (string? s)
-    (->> (json/parse-string s true)
-         (walk/postwalk #(if (map? %) (restore-enums %) %)))))
+  (when (and (string? s) (seq s))
+    (try
+      (->> (json/parse-string s true)
+           (walk/postwalk #(if (map? %) (restore-enums %) %)))
+      (catch Exception _ nil))))
 
 ;; --- SSE ---
 
@@ -138,6 +143,20 @@
 
 ;; --- API calls ---
 
+(defn- fallback-error
+  "Construct the launcher's standard `{:ok false :error ...}` shape from
+   an HTTP response whose body wasn't JSON-parseable. Truncates long
+   bodies so a 5MB error page doesn't dump the whole thing into the user
+   terminal."
+  [resp]
+  (let [status (:status resp)
+        body   (str (:body resp))
+        body   (str/trim body)
+        body   (if (> (count body) 200) (str (subs body 0 200) "…") body)]
+    {:ok false :error (if (seq body)
+                        (str "HTTP " status ": " body)
+                        (str "HTTP " status))}))
+
 (defn post!
   "POST to the daemon API. When on-progress is non-nil, requests SSE and feeds
    on-progress with each event. Returns parsed response."
@@ -161,12 +180,12 @@
 
        sse?
        (let [body-str (slurp (:body resp))]
-         (try (parse-body body-str)
-              (catch Exception _
-                {:ok false :error (str "HTTP " (:status resp) ": " body-str)})))
+         (or (parse-body body-str)
+             (fallback-error (assoc resp :body body-str))))
 
        :else
-       (parse-body (:body resp))))))
+       (or (parse-body (:body resp))
+           (fallback-error resp))))))
 
 (defn get!
   "GET from the daemon API. Returns parsed JSON response."
@@ -175,7 +194,8 @@
                        {:headers (auth-headers conn)
                         :timeout 30000
                         :throw   false})]
-    (parse-body (:body resp))))
+    (or (parse-body (:body resp))
+        (fallback-error resp))))
 
 ;; --- Backend lifecycle ---
 

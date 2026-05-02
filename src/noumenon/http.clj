@@ -147,14 +147,26 @@
         (constant-time= bearer token)
         nil
 
-        ;; Check Datomic-stored tokens
+        ;; Check Datomic-stored tokens. Wrap the lookup so any internal
+        ;; failure (closed channel, transient Datomic error, etc.) surfaces
+        ;; as a clean 401 — never leak Datalog clauses or JVM exception
+        ;; classes to an unauthenticated caller.
         :else
-        (if-let [{:keys [role]} (when meta-conn
-                                  (auth/validate-token
-                                   (datomic.client.api/db meta-conn) bearer))]
-          (when (and (= role :reader) (auth/requires-admin? method path))
-            (error-response 403 "Forbidden — admin token required for this operation"))
-          (error-response 401 "Unauthorized — invalid or revoked token"))))))
+        (let [valid (try
+                      (when meta-conn
+                        (auth/validate-token
+                         (datomic.client.api/db meta-conn) bearer))
+                      (catch Exception _ ::lookup-failed))]
+          (cond
+            (= valid ::lookup-failed)
+            (error-response 401 "Unauthorized — invalid or revoked token")
+
+            (some? valid)
+            (when (and (= (:role valid) :reader) (auth/requires-admin? method path))
+              (error-response 403 "Forbidden — admin token required for this operation"))
+
+            :else
+            (error-response 401 "Unauthorized — invalid or revoked token")))))))
 
 ;; --- Repo resolution ---
 
