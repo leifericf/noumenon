@@ -24,15 +24,28 @@
   (str (fs/path (fs/home) ".noumenon" "data" "noumenon")))
 
 (defn parse-name
-  "Parse a delta DB name like `<repo>__<safe-branch>__<basis7>` into its
-   parts. Returns nil for names that don't match the shape."
+  "Parse a delta DB name like `<repo>__<safe-branch>-<hash6>__<basis7>` into
+   its parts. Returns nil for names that don't match the shape.
+
+   Anchored on the trailing `-<hash6>__<basis7>` so branch names that
+   themselves contain `__` (e.g. `feat__under`) round-trip correctly. The
+   prior split-on-`__` parser misclassified those names — it treated the
+   first `__` boundary as the repo/branch separator regardless of how many
+   `__` substrings the branch happened to contain, falsely flagging the
+   delta as :trunk-missing.
+
+   Pre-disambiguator names (no `-<hash6>` suffix on the branch segment)
+   no longer parse — that format predates commit e55e745 and stale
+   pre-disambiguator deltas are expected to be re-created rather than
+   supported alongside the new format."
   [delta-name]
-  (let [parts (str/split delta-name #"__")]
-    (when (and (>= (count parts) 3)
-               (re-matches #"[a-f0-9]{7}" (last parts)))
-      {:repo   (str/join "__" (drop-last 2 parts))
-       :branch (last (butlast parts))
-       :basis7 (last parts)})))
+  (when-let [[_ repo branchhash basis7]
+             (re-matches #"(.+?)__(.+)__([a-f0-9]{7})" delta-name)]
+    (when-let [[_ branch _hash6]
+               (re-matches #"(.+)-([a-f0-9]{6})" branchhash)]
+      {:repo   repo
+       :branch branch
+       :basis7 basis7})))
 
 (defn classify
   "Return :live or :trunk-missing for a parsed delta entry."
