@@ -92,6 +92,7 @@
                            "--model <alias>                          Model alias"
                            "--max-iterations <n>                     Max query iterations"
                            "--continue-from <session-id>             Resume budget-exhausted session"
+                           "--no-auto-federate                       Skip auto-federation banner when on a feature branch"
                            "--db-dir <path>                          Override storage directory"
                            "--verbose, -v                            Verbose output"
                            "--host <url>                             Use remote Noumenon host"
@@ -107,6 +108,7 @@
                            "--federate                               Federate against a local delta DB"
                            "--basis-sha <sha>                        Trunk basis SHA for federation (40-char hex)"
                            "--branch <name>                          Branch name override (defaults to current git branch)"
+                           "--no-auto-federate                       Disable transparent auto-federation for this call"
                            "--limit <n>                              Max rows"
                            "--db-dir <path>                          Override storage directory"
                            "--host <url>                             Use remote Noumenon host"
@@ -286,7 +288,8 @@
   "Flags that never take a value — always treated as true when present."
   #{"--skip-import" "--skip-enrich" "--skip-analyze" "--skip-synthesize" "--skip-benchmark"
     "--report" "--force" "--analyze" "--verbose" "--debug" "--canary"
-    "--deterministic-only" "--git-commit" "--read-only" "--federate" "--no-promote"})
+    "--deterministic-only" "--git-commit" "--read-only" "--federate" "--no-promote"
+    "--no-auto-federate"})
 
 (defn- extract-flags
   "Extract --flag value pairs from args. Returns [flags-map remaining-args]."

@@ -232,5 +232,87 @@
         (daemon/ensure! (merge {:jre-path jre-path :jar-path jar-path}
                                (select-keys effective [:db-dir :provider :model :token])))))))
 
+;; --- Launcher-local settings ---
+
+(def ^:private launcher-setting-prefixes
+  "Setting key prefixes that live in the launcher's config (not the daemon).
+   Each key is namespaced — e.g. :federation/auto-route."
+  #{"federation"})
+
+(defn launcher-setting-key?
+  "True if this setting key is a launcher-side concern (not daemon-side)."
+  [k]
+  (let [ns-part (cond
+                  (keyword? k) (namespace k)
+                  (string? k)  (let [parts (str/split k #"/" 2)]
+                                 (when (= 2 (count parts)) (first parts))))]
+    (contains? launcher-setting-prefixes ns-part)))
+
+(defn launcher-setting
+  "Read a launcher-local setting from ~/.noumenon/config.edn."
+  ([k] (launcher-setting k nil))
+  ([k default]
+   (let [config (load-config)]
+     (get-in config [:launcher-settings (keyword k)] default))))
+
+(defn set-launcher-setting!
+  "Persist a launcher-local setting to ~/.noumenon/config.edn."
+  [k v]
+  (save-config! (assoc-in (load-config) [:launcher-settings (keyword k)] v)))
+
+;; --- Federation auto-routing ---
+
+(defn- git-cmd
+  "Run a git command in cwd; return trimmed stdout or nil on failure."
+  [cwd & args]
+  (try
+    (let [proc (.exec (Runtime/getRuntime)
+                      (into-array String (into ["git" "-C" (str cwd)] args)))
+          _    (.waitFor proc)]
+      (when (zero? (.exitValue proc))
+        (str/trim (slurp (.getInputStream proc)))))
+    (catch Exception _ nil)))
+
+(defn- local-head-sha [cwd]   (git-cmd cwd "rev-parse" "HEAD"))
+(defn- local-branch [cwd]     (or (git-cmd cwd "symbolic-ref" "--short" "HEAD")
+                                  (some-> (local-head-sha cwd) (subs 0 (min 7 40)))))
+
+(defn- path->db-name
+  "Mirror server-side util/derive-db-name for the launcher."
+  [path]
+  (let [f (java.io.File. (str path))]
+    (when (.exists f)
+      (-> (.getCanonicalPath f) (str/replace #"/+$" "") (str/split #"/") last
+          (str/replace #"[^a-zA-Z0-9\-_.]" "")))))
+
+(defn- hosted-trunk-head-sha
+  "GET /api/status/<db-name> on the hosted daemon and return :head-sha."
+  [conn db-name]
+  (try
+    (when db-name
+      (let [resp (get! conn (str "/api/status/" db-name))]
+        (when (:ok resp) (get-in resp [:data :head-sha]))))
+    (catch Exception _ nil)))
+
+(defn detect-federation-context
+  "When the active connection is hosted and local HEAD has diverged from
+   the trunk DB's :repo/head-sha, return {:basis-sha <hosted-head>
+   :branch <local-branch>}. Otherwise nil. Catches and swallows all
+   transient errors so a missing daemon, missing git, or unimported
+   trunk gracefully falls through to non-federated behavior."
+  [cwd conn]
+  (try
+    (when (and conn (:host conn))
+      (let [db-name      (path->db-name cwd)
+            local-head   (local-head-sha cwd)
+            trunk-head   (hosted-trunk-head-sha conn db-name)]
+        (when (and (string? local-head)
+                   (string? trunk-head)
+                   (not= local-head trunk-head)
+                   (re-matches #"[a-f0-9]{40}" trunk-head))
+          {:basis-sha trunk-head
+           :branch    (local-branch cwd)})))
+    (catch Exception _ nil)))
+
 (defn url-encode [s]
   (URLEncoder/encode (str s) "UTF-8"))

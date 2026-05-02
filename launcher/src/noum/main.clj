@@ -449,56 +449,108 @@
 
 ;; --- Query (raw + as-of) ---
 
-(defn- do-query [{:keys [flags positional] :as parsed}]
-  (cond
-    (and (:raw flags) (:as-of flags))
-    (do (tui/eprintln "Error: --raw and --as-of cannot be used together.") 1)
+(defn- maybe-auto-federate
+  "When the active connection is hosted and the local repo's HEAD has
+   diverged from the trunk DB's :repo/head-sha, rewrite parsed flags to
+   set :federate, :basis-sha, and :branch — turning a plain `noum query`
+   into the federated path. A one-line yellow banner makes the rerouting
+   visible. No-op when --federate is already explicit, --no-auto-federate
+   was passed, the launcher setting :federation/auto-route is false, or
+   the active connection is local."
+  [{:keys [flags positional] :as parsed}]
+  (let [opt-out? (or (:federate flags)
+                     (:no-auto-federate flags)
+                     (:raw flags)
+                     (:as-of flags)
+                     (< (count positional) 2)
+                     (not (api/launcher-setting :federation/auto-route true)))]
+    (if opt-out?
+      parsed
+      (let [hosted (api/active-connection)
+            cwd    (canonicalize-path (second positional))
+            ctx    (when hosted (api/detect-federation-context cwd hosted))]
+        (if-not ctx
+          parsed
+          (do
+            (tui/eprintln (style/yellow
+                           (str "Federating against local delta @"
+                                (subs (:basis-sha ctx) 0 7) "…")))
+            (update parsed :flags merge {:federate  true
+                                         :basis-sha (:basis-sha ctx)
+                                         :branch    (:branch ctx)})))))))
 
-    (and (:federate flags) (or (:raw flags) (:as-of flags)))
-    (do (tui/eprintln "Error: --federate cannot be combined with --raw or --as-of.") 1)
-
-    (:raw flags)
-    (if-not (string? (:raw flags))
-      (do (tui/eprintln "Usage: noum query --raw '<datalog>' <repo> [--limit N]") 1)
-      (let [conn (api/ensure-backend! flags)
-            body (cond-> {:query     (:raw flags)
-                          :repo_path (canonicalize-path (or (first positional) "."))}
-                   (:limit flags) (assoc :limit (parse-long (:limit flags))))]
-        (print-api-result (api/post! conn "/api/query-raw" body))))
-
-    (:as-of flags)
-    (if (< (count positional) 2)
-      (do (tui/eprintln "Usage: noum query <name> <repo> --as-of <date> [--param key=value]") 1)
-      (let [conn (api/ensure-backend! flags)
-            body (cond-> {:query_name (first positional)
-                          :repo_path  (canonicalize-path (second positional))
-                          :as_of      (:as-of flags)}
-                   (:limit flags) (assoc :limit (parse-long (:limit flags)))
-                   (:param flags) (assoc :params (parse-param-flag (:param flags))))]
-        (print-api-result (api/post! conn "/api/query-as-of" body))))
-
-    (:federate flags)
+(defn- do-query [parsed]
+  (let [{:keys [flags positional] :as parsed} (maybe-auto-federate parsed)]
     (cond
-      (< (count positional) 2)
-      (do (tui/eprintln "Usage: noum query <name> <repo> --federate --basis-sha <sha>") 1)
-      (not (:basis-sha flags))
-      (do (tui/eprintln "Error: --federate requires --basis-sha <sha>") 1)
-      :else
-      (let [conn (api/ensure-backend! flags)
-            body (cond-> {:query_name (first positional)
-                          :repo_path  (canonicalize-path (second positional))
-                          :basis_sha  (:basis-sha flags)}
-                   (:branch flags) (assoc :branch (:branch flags))
-                   (:limit flags)  (assoc :limit (parse-long (:limit flags)))
-                   (:param flags)  (assoc :params (parse-param-flag (:param flags))))
-            resp (api/post! conn "/api/query-federated" body)]
-        (when (and (:ok resp) (false? (get-in resp [:data :federation-safe?])))
-          (tui/eprintln (style/yellow
-                         "Warning: query is not federation-safe — returning trunk-only results.")))
-        (print-api-result resp)))
+      (and (:raw flags) (:as-of flags))
+      (do (tui/eprintln "Error: --raw and --as-of cannot be used together.") 1)
 
-    :else
-    (do-api-command parsed)))
+      (and (:federate flags) (or (:raw flags) (:as-of flags)))
+      (do (tui/eprintln "Error: --federate cannot be combined with --raw or --as-of.") 1)
+
+      (:raw flags)
+      (if-not (string? (:raw flags))
+        (do (tui/eprintln "Usage: noum query --raw '<datalog>' <repo> [--limit N]") 1)
+        (let [conn (api/ensure-backend! flags)
+              body (cond-> {:query     (:raw flags)
+                            :repo_path (canonicalize-path (or (first positional) "."))}
+                     (:limit flags) (assoc :limit (parse-long (:limit flags))))]
+          (print-api-result (api/post! conn "/api/query-raw" body))))
+
+      (:as-of flags)
+      (if (< (count positional) 2)
+        (do (tui/eprintln "Usage: noum query <name> <repo> --as-of <date> [--param key=value]") 1)
+        (let [conn (api/ensure-backend! flags)
+              body (cond-> {:query_name (first positional)
+                            :repo_path  (canonicalize-path (second positional))
+                            :as_of      (:as-of flags)}
+                     (:limit flags) (assoc :limit (parse-long (:limit flags)))
+                     (:param flags) (assoc :params (parse-param-flag (:param flags))))]
+          (print-api-result (api/post! conn "/api/query-as-of" body))))
+
+      (:federate flags)
+      (cond
+        (< (count positional) 2)
+        (do (tui/eprintln "Usage: noum query <name> <repo> --federate --basis-sha <sha>") 1)
+        (not (:basis-sha flags))
+        (do (tui/eprintln "Error: --federate requires --basis-sha <sha>") 1)
+        :else
+        (let [conn (api/ensure-backend! flags)
+              body (cond-> {:query_name (first positional)
+                            :repo_path  (canonicalize-path (second positional))
+                            :basis_sha  (:basis-sha flags)}
+                     (:branch flags) (assoc :branch (:branch flags))
+                     (:limit flags)  (assoc :limit (parse-long (:limit flags)))
+                     (:param flags)  (assoc :params (parse-param-flag (:param flags))))
+              resp (api/post! conn "/api/query-federated" body)]
+          (when (and (:ok resp) (false? (get-in resp [:data :federation-safe?])))
+            (tui/eprintln (style/yellow
+                           "Warning: query is not federation-safe — returning trunk-only results.")))
+          (print-api-result resp)))
+
+      :else
+      (do-api-command parsed))))
+
+(defn- do-ask
+  "noum ask <repo> <question>. When the active connection is hosted and
+   local HEAD diverges from trunk's :repo/head-sha, emit a yellow banner
+   warning the user — there is no federated ask endpoint in v1, so the
+   answer reflects trunk and the agent's internal sub-queries do not
+   cross over to the local delta. Falls through to do-api-command for
+   the actual call."
+  [{:keys [flags positional] :as parsed}]
+  (when (and (not (:no-auto-federate flags))
+             (api/launcher-setting :federation/auto-route true)
+             (>= (count positional) 1))
+    (let [hosted (api/active-connection)
+          cwd    (canonicalize-path (first positional))
+          ctx    (when hosted (api/detect-federation-context cwd hosted))]
+      (when ctx
+        (tui/eprintln (style/yellow
+                       (str "Note: local HEAD diverges from trunk @"
+                            (subs (:basis-sha ctx) 0 7)
+                            "; ask sub-queries are trunk-only."))))))
+  (do-api-command parsed))
 
 ;; --- Introspect (status / stop / history) ---
 
@@ -540,24 +592,48 @@
                    (:comment flags) (assoc :comment (:comment flags)))]
         (print-api-result (api/post! conn (str "/api/ask/sessions/" (api/url-encode session-id) "/feedback") body))))))
 
+(defn- parse-setting-value
+  "Parse a setting value string into the most natural type."
+  [s]
+  (cond
+    (nil? s)               nil
+    (= "true" s)           true
+    (= "false" s)          false
+    (re-matches #"-?\d+" s) (parse-long s)
+    :else                  s))
+
 (defn- do-settings [{:keys [flags positional]}]
-  (let [conn (api/ensure-backend! flags)]
-    (case (count positional)
-      0 (print-api-result (api/get! conn "/api/settings"))
-      1 (let [k    (first positional)
-              resp (api/get! conn (str "/api/settings/" k))]
-          (if (:ok resp)
-            (do (tui/eprintln (str "  " k ": " (:data resp))) 0)
-            ;; Fall back to fetching all if per-key endpoint not available
-            (let [all (api/get! conn "/api/settings")]
-              (if (:ok all)
-                (let [val (get (:data all) (keyword k))]
-                  (if (some? val)
-                    (do (tui/eprintln (str "  " k ": " val)) 0)
-                    (do (tui/eprintln (str "No setting: " k)) 1)))
-                (print-api-result all)))))
-      (print-api-result (api/post! conn "/api/settings"
-                                   {:key (first positional) :value (second positional)})))))
+  (let [k       (first positional)
+        v       (second positional)
+        n-args  (count positional)]
+    (cond
+      ;; Launcher-local settings live in ~/.noumenon/config.edn — never
+      ;; round-tripped through the daemon.
+      (and (>= n-args 1) (api/launcher-setting-key? k))
+      (case n-args
+        1 (let [val (api/launcher-setting (keyword k))]
+            (if (some? val)
+              (do (tui/eprintln (str "  " k ": " val)) 0)
+              (do (tui/eprintln (str "No setting: " k)) 1)))
+        2 (do (api/set-launcher-setting! (keyword k) (parse-setting-value v))
+              (tui/eprintln (str "  " k " = " (parse-setting-value v))) 0))
+
+      :else
+      (let [conn (api/ensure-backend! flags)]
+        (case n-args
+          0 (print-api-result (api/get! conn "/api/settings"))
+          1 (let [resp (api/get! conn (str "/api/settings/" k))]
+              (if (:ok resp)
+                (do (tui/eprintln (str "  " k ": " (:data resp))) 0)
+                (let [all (api/get! conn "/api/settings")]
+                  (if (:ok all)
+                    (let [val (get (:data all) (keyword k))]
+                      (if (some? val)
+                        (do (tui/eprintln (str "  " k ": " val)) 0)
+                        (do (tui/eprintln (str "No setting: " k)) 1)))
+                    (print-api-result all)))))
+          (print-api-result (api/post! conn "/api/settings"
+                                       {:key k :value v})))))))
 
 ;; --- Connection management ---
 
@@ -676,6 +752,7 @@
    "history"    do-history
    "open"       do-open
    "query"      do-query
+   "ask"        do-ask
    "introspect" do-introspect
    "sessions"   do-sessions
    "feedback"   do-feedback
