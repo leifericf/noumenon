@@ -73,7 +73,8 @@
 (defn update-delta!
   "Sync a delta DB to record changes between basis-sha and current HEAD.
    :parent-host and :parent-db-name in opts link the delta to its trunk.
-   Idempotent — re-running with the same basis applies the same diff."
+   Idempotent — re-running with the same basis applies the same diff and
+   updates the existing branch entity in place via `update-head-and-branch!`."
   [conn repo-path basis-sha opts]
   (let [start-ms      (System/currentTimeMillis)
         current       (git/head-sha repo-path)
@@ -86,20 +87,19 @@
                                 :deleted         (:deleted changes [])
                                 :lstree-by-path  lstree-by-path
                                 :line-counts     line-counts})
-        branch-name   (or (:branch-name opts) (git/current-branch-name repo-path))
-        head-tx       (sync/head-and-branch-tx
-                       {:repo-uri        repo-path
-                        :sha             current
-                        :branch-name     branch-name
-                        :branch-kind     (git/classify-branch-kind branch-name)
-                        :branch-vcs      :git
-                        :basis-sha       basis-sha
-                        :parent-host     (:parent-host opts)
-                        :parent-db-name  (:parent-db-name opts)})]
+        branch-name   (or (:branch-name opts) (git/current-branch-name repo-path))]
     (when (and tx (> (count tx) 1))
       (d/transact conn {:tx-data tx}))
-    (when head-tx
-      (d/transact conn {:tx-data head-tx}))
+    (sync/update-head-and-branch!
+     conn
+     {:repo-uri        repo-path
+      :sha             current
+      :branch-name     branch-name
+      :branch-kind     (git/classify-branch-kind branch-name)
+      :branch-vcs      :git
+      :basis-sha       basis-sha
+      :parent-host     (:parent-host opts)
+      :parent-db-name  (:parent-db-name opts)})
     (let [elapsed (- (System/currentTimeMillis) start-ms)]
       (log! (str "Delta sync: " (count (:added changes [])) " added, "
                  (count (:modified changes [])) " modified, "

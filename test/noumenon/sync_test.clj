@@ -1,7 +1,9 @@
 (ns noumenon.sync-test
   (:require [clojure.java.shell :as shell]
             [clojure.test :refer [deftest is testing]]
-            [noumenon.sync :as sync]))
+            [datomic.client.api :as d]
+            [noumenon.sync :as sync]
+            [noumenon.test-helpers :as th]))
 
 (deftest valid-sha?-test
   (testing "accepts valid 40-char hex SHA"
@@ -94,3 +96,26 @@
       (is (not (contains? branch :branch/basis-sha)))
       (is (not (contains? branch :branch/parent-host)))
       (is (not (contains? branch :branch/parent-db-name))))))
+
+(deftest update-head-and-branch!-is-idempotent
+  (testing "Re-running update-head-and-branch! on the same repo+branch
+            does not trip :branch/repo+name unique-conflict — the existing
+            entity is upserted in place rather than recreated as a new tempid"
+    (let [conn (th/make-test-conn "head-branch-idempotent")
+          opts {:repo-uri    "/Users/leif/Code/noumenon"
+                :sha         "abc123def456789012345678901234567890abcd"
+                :branch-name "feat/branch-aware-graph"
+                :branch-kind :feature
+                :branch-vcs  :git}
+          eid1 (sync/update-head-and-branch! conn opts)
+          eid2 (sync/update-head-and-branch! conn opts)
+          eid3 (sync/update-head-and-branch! conn (assoc opts :sha "ffffffff00000000000000000000000000000fff"))]
+      (is (some? eid1) "first call returns the new repo eid")
+      (is (= eid1 eid2) "second call (no changes) returns the same eid, no exception")
+      (is (= eid1 eid3) "third call with a different HEAD SHA still upserts in place")
+      (testing "trunk-side update with a different branch creates a second branch entity"
+        (let [other-eid (sync/update-head-and-branch! conn (assoc opts :branch-name "main" :branch-kind :trunk))]
+          (is (= eid1 other-eid) "repo eid stable across branch switches")
+          (let [branches (d/q '[:find ?n :where [?b :branch/name ?n]] (d/db conn))]
+            (is (= #{"feat/branch-aware-graph" "main"} (into #{} (map first) branches))
+                "both branches are recorded in the DB")))))))

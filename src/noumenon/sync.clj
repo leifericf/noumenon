@@ -210,11 +210,15 @@
     :git))
 
 (defn head-and-branch-tx
-  "Pure tx-data builder for HEAD SHA + branch upsert. Self-contained: the
-   repo entity is referenced via tempid \"repo\" so this tx can run on a
-   fresh DB (delta DB on first sync) as well as an existing one (trunk
-   incremental sync). :repo/uri is :db.unique/identity, so the tempid
-   resolves to an existing repo if present, else creates one.
+  "Pure tx-data builder for HEAD SHA + branch upsert. Self-contained for
+   FRESH DBs only — uses tempid \"repo\" and tempid \"branch\".
+
+   This is suitable for the very first sync of a delta or trunk DB. For
+   subsequent syncs, use `update-head-and-branch!` which resolves
+   existing repo and branch eids before transacting. Tuple identity
+   (`:branch/repo+name`) does not auto-unify a fresh tempid with an
+   existing entity — Datomic creates a new eid that then conflicts.
+
    Delta-only opts (basis-sha, parent-host, parent-db-name) are emitted onto
    the branch entity when supplied; nil on trunk. Returns nil if sha missing."
   [{:keys [repo-uri sha branch-name branch-kind branch-vcs
@@ -235,18 +239,66 @@
       (cond-> [repo-tx]
         branch-name (conj branch-tx)))))
 
+(defn- existing-repo-and-branch-eids
+  "Look up the existing repo eid (by :repo/uri) and branch eid (by the
+   composite :branch/repo+name tuple) in `db`. Returns [repo-eid branch-eid]
+   where each may be nil if the entity doesn't exist yet."
+  [db repo-uri branch-name]
+  (let [repo-eid   (try
+                     (:db/id (d/pull db [:db/id] [:repo/uri repo-uri]))
+                     (catch Exception _ nil))
+        branch-eid (when (and repo-eid branch-name)
+                     (try
+                       (:db/id (d/pull db [:db/id]
+                                       [:branch/repo+name [repo-eid branch-name]]))
+                       (catch Exception _ nil)))]
+    [repo-eid branch-eid]))
+
+(defn update-head-and-branch!
+  "Idempotently upsert the repo entity and (when supplied) its branch
+   entity. Looks up existing eids first so re-syncing the same repo or
+   re-running `delta-ensure` doesn't trip the `:branch/repo+name` unique
+   constraint — tempids in tuple components don't auto-unify with
+   existing entities, so we must resolve them ourselves.
+
+   Returns the resolved repo eid, or nil when sha is missing."
+  [conn {:keys [repo-uri sha branch-name branch-kind branch-vcs
+                basis-sha parent-host parent-db-name]}]
+  (when sha
+    (let [[existing-repo existing-branch]
+          (existing-repo-and-branch-eids (d/db conn) repo-uri branch-name)
+          repo-id    (or existing-repo "repo")
+          branch-id  (or existing-branch "branch")
+          repo-tx    (cond-> {:db/id         repo-id
+                              :repo/uri      repo-uri
+                              :repo/head-sha sha}
+                       branch-name (assoc :repo/branch branch-id))
+          branch-tx  (when branch-name
+                       (cond-> {:db/id       branch-id
+                                :branch/repo repo-id
+                                :branch/name branch-name
+                                :branch/kind branch-kind
+                                :branch/vcs  branch-vcs}
+                         basis-sha      (assoc :branch/basis-sha basis-sha)
+                         parent-host    (assoc :branch/parent-host parent-host)
+                         parent-db-name (assoc :branch/parent-db-name parent-db-name)))
+          tx-data    (cond-> [repo-tx] branch-tx (conj branch-tx))
+          {:keys [tempids]} (d/transact conn {:tx-data tx-data})]
+      (or existing-repo (get tempids "repo")))))
+
 (defn- update-head-sha!
-  "Store the current HEAD SHA on the repo entity and upsert the branch entity."
+  "Store the current HEAD SHA on the repo entity and upsert the branch entity.
+   Idempotent — uses `update-head-and-branch!` which resolves existing eids
+   to avoid `:branch/repo+name` unique-conflicts on re-sync."
   [conn repo-path repo-uri]
-  (let [branch-name (git/current-branch-name repo-path)
-        tx-data     (head-and-branch-tx
-                     {:repo-uri    repo-uri
-                      :sha         (git/head-sha repo-path)
-                      :branch-name branch-name
-                      :branch-kind (git/classify-branch-kind branch-name)
-                      :branch-vcs  (branch-vcs repo-path)})]
-    (when tx-data
-      (d/transact conn {:tx-data tx-data}))))
+  (let [branch-name (git/current-branch-name repo-path)]
+    (update-head-and-branch!
+     conn
+     {:repo-uri    repo-uri
+      :sha         (git/head-sha repo-path)
+      :branch-name branch-name
+      :branch-kind (git/classify-branch-kind branch-name)
+      :branch-vcs  (branch-vcs repo-path)})))
 
 ;; --- Commit reclassification ---
 
