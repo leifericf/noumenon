@@ -374,14 +374,15 @@
       (do (tui/eprintln (str "Unknown type: " atype ". Must be 'prompt' or 'rules'.")) 1)
 
       (and (= "prompt" atype) (nil? aname))
-      (let [names (->> (io/resource "prompts/")
-                       io/file .listFiles seq
-                       (keep #(when (str/ends-with? (.getName %) ".edn")
-                                (str/replace (.getName %) ".edn" "")))
-                       sort)]
-        (tui/eprintln "Usage: noum history prompt <name>")
-        (tui/eprintln (str "Available prompts: " (str/join ", " (map #(str "'" % "'") names))))
-        1)
+      ;; Don't try to enumerate prompt files from the launcher classpath:
+      ;; the daemon's `resources/prompts/` directory isn't bundled with
+      ;; the bb-side launcher (the two are separate projects), so
+      ;; `(io/resource "prompts/")` returned nil and `io/file` NPE'd.
+      ;; Until there's a daemon endpoint to list available names, ask
+      ;; the user to provide one.
+      (do (tui/eprintln "Usage: noum history prompt <name>")
+          (tui/eprintln "Common names: 'agent-system', 'agent-examples', 'analyze-file', 'introspect', 'synthesize-merge'.")
+          1)
 
       :else
       (let [conn   (api/ensure-backend! flags)

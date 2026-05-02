@@ -1,7 +1,6 @@
 (ns noum.interactive
   "Interactive TUI menu for noum (no-args mode)."
-  (:require [clojure.java.io :as io]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [noum.api :as api]
             [noum.cli :as cli]
             [noum.tui.choose :as choose]
@@ -193,14 +192,14 @@
                                                    {:label "prompt" :value "prompt"}])]
     (if (= "rules" (:value atype))
       {:command "history" :flags {} :positional ["rules"]}
-      (let [prompt-names (->> (io/resource "prompts/")
-                              io/file .listFiles seq
-                              (keep #(when (str/ends-with? (.getName %) ".edn")
-                                       (str/replace (.getName %) ".edn" "")))
-                              sort)
-            options      (mapv (fn [n] {:label n :value n}) prompt-names)]
-        (when-let [pname (choose/select "prompt" options)]
-          {:command "history" :flags {} :positional ["prompt" (:value pname)]})))))
+      ;; Free-text prompt instead of a menu: the daemon's prompt files
+      ;; live in `resources/prompts/` inside `noumenon.jar`, which the
+      ;; launcher doesn't have on its classpath. There's no daemon
+      ;; endpoint to enumerate them either, so the previous
+      ;; `(io/resource "prompts/")` call returned nil and NPE'd.
+      (when-let [pname (prompt/ask "Prompt name (e.g. analyze-file, introspect):")]
+        (when-not (str/blank? pname)
+          {:command "history" :flags {} :positional ["prompt" pname]})))))
 
 (def ^:private arg-collectors
   "Commands that need interactive arg collection. Missing = dispatch immediately."
