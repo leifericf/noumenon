@@ -71,14 +71,20 @@
 
 (defn ensure-delta-db!
   "Ensure a delta DB exists for the given repo + current branch + basis-sha.
-   Returns a connection. Idempotent — re-opens an existing DB."
+   Returns a connection. Idempotent — re-opens an existing DB.
+
+   Routes through `db/get-or-create-conn` so the conn (and its schema-load
+   tx) is cached per process. The previous direct call to
+   `connect-and-ensure-schema` re-transacted every schema file on every
+   ensure call, growing the delta's db.log on every read-shaped HTTP
+   request even when nothing changed."
   [repo-path basis-sha opts]
   (let [repo-name   (util/derive-db-name repo-path)
         branch-name (or (:branch-name opts) (git/current-branch-name repo-path))
         db-name     (delta-db-name repo-name branch-name basis-sha)
         storage-dir (delta-storage-dir opts)]
     (log! (str "Ensuring delta DB " db-name " at " storage-dir))
-    (db/connect-and-ensure-schema storage-dir db-name)))
+    (db/get-or-create-conn storage-dir db-name)))
 
 (defn diff-tx
   "Pure tx-data builder for a delta sync.
@@ -100,46 +106,68 @@
       (seq delete-tx) (into delete-tx)
       :always         (conj tx-meta))))
 
+(defn- delta-up-to-date?
+  "True when the delta DB already reflects (basis-sha, current-HEAD).
+   Lets read-shaped callers (`/api/query-federated`) short-circuit so a
+   no-op refresh doesn't write a tx on every read."
+  [db basis-sha current-head]
+  (let [stored-head  (sync/stored-head-sha db)
+        stored-basis (ffirst (d/q '[:find ?b :where [_ :branch/basis-sha ?b]] db))]
+    (and stored-head  (= stored-head current-head)
+         stored-basis (= stored-basis basis-sha))))
+
 (defn update-delta!
   "Sync a delta DB to record changes between basis-sha and current HEAD.
    :parent-host and :parent-db-name in opts link the delta to its trunk.
    Idempotent — re-running with the same basis applies the same diff and
-   updates the existing branch entity in place via `update-head-and-branch!`."
+   updates the existing branch entity in place via `update-head-and-branch!`.
+
+   Short-circuits to :up-to-date when basis-sha + HEAD haven't moved since
+   the last sync; without this guard, a read-only call to query-federated
+   would still write a head-and-branch tx on every invocation."
   [conn repo-path basis-sha opts]
-  (let [start-ms      (System/currentTimeMillis)
-        current       (git/head-sha repo-path)
-        changes       (sync/changed-files repo-path basis-sha)
-        all-ls-tree   (files/parse-ls-tree (files/git-ls-tree repo-path))
-        lstree-by-path (into {} (map (juxt :path identity)) all-ls-tree)
-        line-counts   (files/git-line-counts repo-path)
-        tx            (diff-tx {:added           (:added changes [])
-                                :modified        (:modified changes [])
-                                :deleted         (:deleted changes [])
-                                :lstree-by-path  lstree-by-path
-                                :line-counts     line-counts})
-        branch-name   (or (:branch-name opts) (git/current-branch-name repo-path))]
-    (when (and tx (> (count tx) 1))
-      (d/transact conn {:tx-data tx}))
-    (sync/update-head-and-branch!
-     conn
-     {:repo-uri        repo-path
-      :sha             current
-      :branch-name     branch-name
-      :branch-kind     (git/classify-branch-kind branch-name)
-      :branch-vcs      :git
-      :basis-sha       basis-sha
-      :parent-host     (:parent-host opts)
-      :parent-db-name  (:parent-db-name opts)})
-    (let [elapsed (- (System/currentTimeMillis) start-ms)]
-      (log! (str "Delta sync: " (count (:added changes [])) " added, "
-                 (count (:modified changes [])) " modified, "
-                 (count (:deleted changes [])) " deleted "
-                 "(basis " (subs basis-sha 0 7) " → " (subs current 0 7) ", "
-                 elapsed " ms)"))
-      {:status     :synced
-       :added      (count (:added changes []))
-       :modified   (count (:modified changes []))
-       :deleted    (count (:deleted changes []))
-       :basis-sha  basis-sha
-       :head-sha   current
-       :elapsed-ms elapsed})))
+  (let [start-ms (System/currentTimeMillis)
+        current  (git/head-sha repo-path)]
+    (if (delta-up-to-date? (d/db conn) basis-sha current)
+      (do (log! (str "Delta already up to date (basis " (subs basis-sha 0 7)
+                     " → HEAD " (subs current 0 7) ")"))
+          {:status     :up-to-date
+           :added      0 :modified 0 :deleted 0
+           :basis-sha  basis-sha
+           :head-sha   current
+           :elapsed-ms 0})
+      (let [changes        (sync/changed-files repo-path basis-sha)
+            all-ls-tree    (files/parse-ls-tree (files/git-ls-tree repo-path))
+            lstree-by-path (into {} (map (juxt :path identity)) all-ls-tree)
+            line-counts    (files/git-line-counts repo-path)
+            tx             (diff-tx {:added          (:added changes [])
+                                     :modified       (:modified changes [])
+                                     :deleted        (:deleted changes [])
+                                     :lstree-by-path lstree-by-path
+                                     :line-counts    line-counts})
+            branch-name    (or (:branch-name opts) (git/current-branch-name repo-path))]
+        (when (and tx (> (count tx) 1))
+          (d/transact conn {:tx-data tx}))
+        (sync/update-head-and-branch!
+         conn
+         {:repo-uri       repo-path
+          :sha            current
+          :branch-name    branch-name
+          :branch-kind    (git/classify-branch-kind branch-name)
+          :branch-vcs     :git
+          :basis-sha      basis-sha
+          :parent-host    (:parent-host opts)
+          :parent-db-name (:parent-db-name opts)})
+        (let [elapsed (- (System/currentTimeMillis) start-ms)]
+          (log! (str "Delta sync: " (count (:added changes [])) " added, "
+                     (count (:modified changes [])) " modified, "
+                     (count (:deleted changes [])) " deleted "
+                     "(basis " (subs basis-sha 0 7) " → " (subs current 0 7) ", "
+                     elapsed " ms)"))
+          {:status     :synced
+           :added      (count (:added changes []))
+           :modified   (count (:modified changes []))
+           :deleted    (count (:deleted changes []))
+           :basis-sha  basis-sha
+           :head-sha   current
+           :elapsed-ms elapsed})))))

@@ -157,3 +157,26 @@
                               :out str/split-lines count)]
           (is (< (count delta-files) repo-files)
               "Delta should contain fewer files than the full tree"))))))
+
+(deftest update-delta!-noop-on-unchanged-basis-and-head
+  (testing "calling update-delta! a second time with the same basis and
+            unchanged HEAD writes no new transactions — read-shaped
+            endpoints like /api/query-federated must not grow the delta
+            log on every call"
+    (let [conn     (conn-for-test)
+          basis-sha "6f5d226"
+          full-sha  (-> (shell/sh "git" "-C" noumenon-repo
+                                  "rev-parse" basis-sha)
+                        :out str/trim)
+          opts     {:parent-host "noumenon.example"
+                    :parent-db-name "noumenon-trunk"}
+          tx-count #(count (d/q '[:find ?tx :where [?tx :db/txInstant _]]
+                                (d/db conn)))
+          _first   (delta/update-delta! conn noumenon-repo full-sha opts)
+          before   (tx-count)
+          second   (delta/update-delta! conn noumenon-repo full-sha opts)
+          after    (tx-count)]
+      (is (= :up-to-date (:status second))
+          "second call reports up-to-date status")
+      (is (= before after)
+          "no new Datomic transactions were written"))))
