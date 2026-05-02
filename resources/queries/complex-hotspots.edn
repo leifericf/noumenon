@@ -1,6 +1,6 @@
 {:name "complex-hotspots"
  :description "Files that are both high-churn and high-complexity"
- :federation-safe? true
+ :federation-mode :tombstone-only
  :query [:find ?path ?complexity (count ?commit)
          :where
          [?file :file/path ?path]

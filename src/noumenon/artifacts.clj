@@ -18,17 +18,30 @@
   [resource-path]
   (some-> (io/resource resource-path) slurp edn/read-string))
 
+(def ^:private valid-federation-modes
+  #{:tombstone-only :added-files-merge})
+
 (defn- query-seed-tx
-  "Build a transaction map for a single named query from its classpath EDN."
+  "Build a transaction map for a single named query from its classpath EDN.
+   :federation-mode (when present) populates the new attribute and also
+   sets the legacy :federation-safe? boolean for response-shape backward
+   compatibility (the launcher's banner reads it)."
   [query-name active-set]
   (when-let [qdef (load-edn-resource (str "queries/" query-name ".edn"))]
-    (cond-> {:artifact.query/name        query-name
-             :artifact.query/description (:description qdef "")
-             :artifact.query/query-edn   (pr-str (:query qdef))
-             :artifact.query/active      (contains? active-set query-name)}
-      (:uses-rules qdef)        (assoc :artifact.query/uses-rules true)
-      (seq (:inputs qdef))      (assoc :artifact.query/inputs (pr-str (:inputs qdef)))
-      (:federation-safe? qdef)  (assoc :artifact.query/federation-safe? true))))
+    (let [mode (:federation-mode qdef)]
+      (when (and mode (not (valid-federation-modes mode)))
+        (throw (ex-info (str "Query '" query-name "' has invalid :federation-mode "
+                             (pr-str mode) ". Must be one of " valid-federation-modes
+                             " or omitted.")
+                        {:query query-name :mode mode})))
+      (cond-> {:artifact.query/name        query-name
+               :artifact.query/description (:description qdef "")
+               :artifact.query/query-edn   (pr-str (:query qdef))
+               :artifact.query/active      (contains? active-set query-name)}
+        (:uses-rules qdef)   (assoc :artifact.query/uses-rules true)
+        (seq (:inputs qdef)) (assoc :artifact.query/inputs (pr-str (:inputs qdef)))
+        mode                 (assoc :artifact.query/federation-mode mode
+                                    :artifact.query/federation-safe? true)))))
 
 (defn- chunk-template
   "Split a template string into chunk transaction maps if it exceeds chunk-size.
@@ -53,16 +66,20 @@
 (defn load-named-query
   "Load a named query definition from Datomic.
    Returns {:name str :description str :query vec :inputs vec :uses-rules bool
-            :federation-safe? bool} or nil if not found."
+            :federation-mode kw :federation-safe? bool} or nil if not found.
+   :federation-safe? is derived from :federation-mode for the response-shape
+   the launcher already understands; absent mode = not federation-safe."
   [meta-db query-name]
   (let [entity (d/pull meta-db '[*] [:artifact.query/name query-name])]
     (when (:artifact.query/query-edn entity)
-      {:name             query-name
-       :description      (:artifact.query/description entity)
-       :query            (edn/read-string {:readers {}} (:artifact.query/query-edn entity))
-       :uses-rules       (:artifact.query/uses-rules entity false)
-       :inputs           (some-> (:artifact.query/inputs entity) (->> (edn/read-string {:readers {}})))
-       :federation-safe? (:artifact.query/federation-safe? entity false)})))
+      (let [mode (:artifact.query/federation-mode entity)]
+        {:name             query-name
+         :description      (:artifact.query/description entity)
+         :query            (edn/read-string {:readers {}} (:artifact.query/query-edn entity))
+         :uses-rules       (:artifact.query/uses-rules entity false)
+         :inputs           (some-> (:artifact.query/inputs entity) (->> (edn/read-string {:readers {}})))
+         :federation-mode  mode
+         :federation-safe? (some? mode)}))))
 
 (defn list-active-query-names
   "Return sorted vector of active query names from Datomic."

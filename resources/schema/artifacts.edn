@@ -33,7 +33,12 @@
  {:db/ident       :artifact.query/federation-safe?
   :db/valueType   :db.type/boolean
   :db/cardinality :db.cardinality/one
-  :db/doc         "True if this query binds ?file to :file/path and projects rows that can be safely overlaid by per-path delta exclusions. Federation-safe queries accept :exclude_paths and have (not [?file :file/path \"<p>\"]) clauses injected at runtime."}
+  :db/doc         "DEPRECATED — derived from :artifact.query/federation-mode. Kept for response shape (the launcher's banner toggles on this). Set automatically when federation-mode is non-nil; not read from query EDN anymore."}
+
+ {:db/ident       :artifact.query/federation-mode
+  :db/valueType   :db.type/keyword
+  :db/cardinality :db.cardinality/one
+  :db/doc         "Federation merge mode declared by the query. :tombstone-only — trunk minus tombstoned paths; never include delta rows (the safe default). :added-files-merge — current trunk-plus-delta-rows behavior; opt-in for queries that join only on :stable attrs (validated at seed time). Absent — query is not federation-safe; trunk-only response."}
 
  ;; --- Datalog Rules ---
  {:db/ident       :artifact.rules/id

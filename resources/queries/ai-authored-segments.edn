@@ -1,6 +1,6 @@
 {:name "ai-authored-segments"
  :description "Code segments rated as likely or possibly AI-generated"
- :federation-safe? true
+ :federation-mode :tombstone-only
  :query [:find ?path ?name ?likelihood ?complexity
          :where
          [?seg :code/ai-likelihood ?likelihood]

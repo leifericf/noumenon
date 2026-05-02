@@ -1,6 +1,6 @@
 {:name "files-by-churn"
  :description "Files ranked by total lines added and deleted"
- :federation-safe? true
+ :federation-mode :tombstone-only
  :query [:find ?path (sum ?adds) (sum ?dels)
          :where
          [?commit :commit/changed-files ?file]

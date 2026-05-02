@@ -267,15 +267,52 @@
                                             "orphan-files" {})
           paths  (set (map first (:ok result)))]
       (is (true? (:federation-safe? result)))
-      (testing "tombstone-only merge keeps trunk's view of modified files"
-        ;; Trunk: a (modified — KEPT), b (unchanged — kept), c (tombstoned — excluded)
+      (is (= :tombstone-only (:federation-mode result)))
+      (testing "tombstone-only merge keeps trunk's view of modified files,
+                excludes tombstoned files, and does NOT include added files —
+                the delta DB lacks the joins (here :file/imports) that the
+                query needs, so adding d.clj from the delta would falsely
+                report it as an orphan"
         (is (= 2 (:trunk-count result)) "trunk has a and b (c excluded by tombstone)")
         (is (contains? paths "src/a.clj") "modified file a.clj keeps trunk's row")
         (is (contains? paths "src/b.clj") "unchanged file b.clj is in trunk view")
-        (is (not (contains? paths "src/c.clj")) "tombstoned file c.clj is gone"))
-      (testing "delta side contributes only ADDED files (not modified — would double-count)"
-        (is (= 1 (:delta-count result)) "delta contributes only d.clj")
-        (is (contains? paths "src/d.clj") "added file d.clj is included from delta")))))
+        (is (not (contains? paths "src/c.clj")) "tombstoned file c.clj is gone")
+        (is (= 0 (:delta-count result)) "tombstone-only merge contributes no delta rows")
+        (is (not (contains? paths "src/d.clj")) "added file is NOT included — would be a false orphan")))))
+
+(deftest run-federated-query-added-files-merge-mode
+  (testing "queries declared :added-files-merge include delta rows for files
+            ADDED in the branch — opt-in for queries that join only on
+            :stable attrs, where the delta has the data the query needs"
+    (let [trunk     (th/make-test-conn "fed-add-trunk")
+          delta     (th/make-test-conn "fed-add-delta")
+          meta-conn (db/ensure-meta-db :mem)
+          ;; Synthetic stable-only query: list files with :file/lang.
+          ;; :file/lang is :stable, so :added-files-merge is permitted.
+          _         (d/transact meta-conn
+                                {:tx-data [{:artifact.query/name             "test-stable-by-lang"
+                                            :artifact.query/description      "test query"
+                                            :artifact.query/query-edn        (pr-str '[:find ?path
+                                                                                       :where
+                                                                                       [?file :file/path ?path]
+                                                                                       [?file :file/lang _]])
+                                            :artifact.query/active           true
+                                            :artifact.query/federation-mode  :added-files-merge
+                                            :artifact.query/federation-safe? true}]})
+          mdb       (d/db meta-conn)]
+      (d/transact trunk {:tx-data [{:file/path "src/a.clj" :file/lang :clojure}
+                                   {:file/path "src/b.clj" :file/lang :clojure}]})
+      (d/transact delta {:tx-data [{:file/path "src/a.clj" :file/lang :clojure}    ;; modified
+                                   {:file/path "src/c.clj" :file/lang :clojure}    ;; added
+                                   {:file/path "src/b.clj" :file/deleted? true}]}) ;; tombstoned
+      (let [result (query/run-federated-query mdb (d/db trunk) (d/db delta)
+                                              "test-stable-by-lang" {})
+            paths  (set (map first (:ok result)))]
+        (is (= :added-files-merge (:federation-mode result)))
+        (is (contains? paths "src/a.clj") "trunk's a.clj kept")
+        (is (not (contains? paths "src/b.clj")) "tombstoned b.clj excluded")
+        (is (contains? paths "src/c.clj") "delta-added c.clj included via :added-files-merge")
+        (is (= 1 (:delta-count result)) "delta contributed exactly one row")))))
 
 (deftest run-federated-query-falls-back-when-unsafe
   (let [trunk (th/make-test-conn "fed-trunk-unsafe")

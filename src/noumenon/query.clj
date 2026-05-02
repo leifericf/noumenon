@@ -156,39 +156,43 @@
 
 (defn run-federated-query
   "Run a named query across a trunk DB and a delta DB and merge results.
+   Dispatches on the query's `:federation-mode`:
 
-   v1 merge semantics — `:tombstone-only`:
-     • Trunk rows: full trunk view, MINUS files the delta has tombstoned.
-       Modified-in-delta files keep trunk's history (matters for hotspots,
-       files-by-churn, complex-hotspots, bug-hotspots — anything that
-       aggregates over commits or other data the sparse delta lacks).
-     • Delta rows: only files ADDED in the branch (not in trunk). Modified
-       files don't double-count with trunk; deleted files (tombstones) are
-       skipped — they were already excluded above.
+   :tombstone-only (default for federation-safe queries) —
+     Trunk rows: full trunk view MINUS files the delta has tombstoned.
+     No delta rows. Modified-in-delta files keep trunk's history; added
+     files in the branch are not surfaced. The safe choice when the
+     query joins on data the sparse delta DB doesn't carry (commits,
+     imports, analysis, segments).
 
-   The earlier 'exclude all delta paths from trunk + append delta rows'
-   merge made modified files disappear from churn-based queries because
-   the delta DB has no commits to carry their history. Tombstone-only
-   keeps history intact while still respecting branch deletions.
+   :added-files-merge (opt-in for queries that join only on :stable
+     attrs — validated at seed time by validate-federation-mode!) —
+     Trunk rows: full trunk view minus tombstones. Plus delta rows for
+     files ADDED in the branch (not in trunk). Modified-in-delta files
+     keep trunk's view to avoid double-counting.
 
-   Non-federation-safe queries return trunk-only with `:federation-safe?
-   false` so the caller can show a banner."
+   Absent mode — query is not federation-safe; trunk-only response with
+   :federation-safe? false so the caller can show a banner."
   [meta-db trunk-db delta-db query-name params]
   (let [excludes     (delta-tombstoned-paths delta-db)
         trunk-result (run-named-query meta-db trunk-db query-name params
                                       {:exclude-paths excludes})]
     (if (:error trunk-result)
       trunk-result
-      (let [fsafe?       (:federation-safe? trunk-result)
+      (let [query-def    (artifacts/load-named-query meta-db query-name)
+            mode         (:federation-mode query-def)
+            fsafe?       (:federation-safe? trunk-result)
             trunk-rows   (vec (:ok trunk-result))
-            added-paths  (when fsafe? (delta-added-paths trunk-db delta-db))
-            delta-result (when (and fsafe? (seq added-paths))
+            merge?       (= mode :added-files-merge)
+            added-paths  (when merge? (delta-added-paths trunk-db delta-db))
+            delta-result (when (and merge? (seq added-paths))
                            (run-named-query meta-db delta-db query-name params))
             delta-rows   (when (seq added-paths)
                            (filterv #(some #{(first %)} added-paths)
                                     (vec (:ok delta-result []))))
-            rows         (if fsafe? (into trunk-rows (or delta-rows [])) trunk-rows)]
+            rows         (if merge? (into trunk-rows (or delta-rows [])) trunk-rows)]
         {:ok               rows
          :trunk-count      (count trunk-rows)
          :delta-count      (count (or delta-rows []))
+         :federation-mode  mode
          :federation-safe? fsafe?}))))
