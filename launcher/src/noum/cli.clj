@@ -330,13 +330,26 @@
           :else
           (recur more flags (conj positional arg)))))))
 
+(defn- sanitize-positional
+  "Strip NUL bytes from a positional arg and treat blank/whitespace-only
+   results as missing. NUL bytes don't survive any serializer cleanly
+   and only appear from copy-paste / programmatic mistakes; blanks
+   silently resolve to the cwd via `path->db-name`, which causes the
+   wrong DB to be addressed. A literal `.` survives — it's a legitimate
+   current-directory shorthand."
+  [s]
+  (let [stripped (str/replace s " " "")]
+    (when-not (str/blank? stripped)
+      stripped)))
+
 (defn parse-args
   "Parse CLI args. Returns {:command 'name' :flags {} :positional [] :error nil}."
   [args]
   (if-not (seq args)
     {:error :no-args}
     (let [[cmd & rest-args] args
-          [flags positional] (extract-flags rest-args)]
+          [flags positional] (extract-flags rest-args)
+          positional         (into [] (keep sanitize-positional) positional)]
       (cond
         (= "--version" cmd) {:command "version"}
         (#{"--help" "-h"} cmd) {:command "help"}
