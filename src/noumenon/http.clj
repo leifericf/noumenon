@@ -507,7 +507,9 @@
 
 (defn- handle-ask [request config]
   (let [params (parse-json-body request)]
-    (when-not (:question params)
+    (when (or (nil? (:question params))
+              (and (string? (:question params))
+                   (str/blank? (:question params))))
       (throw (ex-info "Missing question" {:status 400 :message "question is required"})))
     (validate-string-length! "question" (:question params) max-question-len)
     (with-repo params (:db-dir config)

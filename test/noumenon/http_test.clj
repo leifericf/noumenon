@@ -121,6 +121,31 @@
         (is (re-find #"query_name exceeds maximum length" (str error))
             error)))))
 
+(deftest ask-empty-question-returns-400
+  (testing "POST /api/ask with question='' must surface as 400 'question
+            is required' rather than reaching agent/ask and dying as
+            500. The existing missing-field check (when-not …) only
+            caught nil; empty string was truthy and slipped past it."
+    (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+          ;; Send a repo_path that exists shape-wise so the question-blank
+          ;; check is the gate that fires first; without my fix, empty
+          ;; question would slip past every check and 500 inside agent/ask
+          ;; (or, with no repo on disk, surface as 404 from resolve-repo —
+          ;; either way, NOT the 400 about question that the contract wants).
+          resp    (handler {:request-method :post
+                            :uri            "/api/ask"
+                            :headers        {}
+                            :body (java.io.ByteArrayInputStream.
+                                   (.getBytes (json/write-str {:repo_path "/tmp/whatever-path"
+                                                               :question  ""})
+                                              "UTF-8"))})
+          body    (json/read-str (:body resp) :key-fn keyword)]
+      (is (= 400 (:status resp))
+          (str "expected 400 from blank-question gate, got "
+               (:status resp) " '" (:error body) "'"))
+      (is (re-find #"(?i)question" (str (:error body)))
+          (str "expected 'question' in error, got: " (:error body))))))
+
 (deftest repo-remove-and-refresh-unknown-name-404
   (testing "DELETE /api/repos/<unknown> and POST /api/repos/<unknown>/refresh
             used to surface as 500 'Internal server error' because the
