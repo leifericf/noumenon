@@ -1,0 +1,14 @@
+{:paths ["dev"]
+ :deps {}
+ :tasks
+ {:requires ([babashka.fs :as fs])
+  prune-deltas
+  {:doc  "Interactively GC stale local delta DBs under ~/.noumenon/deltas/"
+   :requires ([prune-deltas])
+   :task (prune-deltas/run)}
+  test:prune-deltas
+  {:doc      "Run unit tests for the prune-deltas dev task"
+   :requires ([clojure.test :as t]
+              [prune-deltas-test])
+   :task     (let [{:keys [fail error]} (t/run-tests 'prune-deltas-test)]
+               (System/exit (if (zero? (+ (or fail 0) (or error 0))) 0 1)))}}}

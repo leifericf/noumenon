@@ -75,7 +75,7 @@ Each database also carries branch metadata: `:branch/name`, `:branch/kind`, `:br
 
 When a developer's git HEAD diverges from the hosted trunk basis, `noum delta-ensure` (or `POST /api/delta/ensure`) materializes a sparse local DB under `~/.noumenon/deltas/<repo>__<safe-branch>__<basis7>/` containing only files added/modified/deleted between basis and HEAD. Deletions are stored as `:file/deleted? true` tombstones rather than retracted; trunk DBs continue to hard-retract (a `retract-deleted-files!` assert guards against tombstones leaking into trunk transactions).
 
-Delta DBs are throwaway: schema mismatch or basis drift means wipe and rebuild, never migrate.
+Delta DBs are throwaway: schema mismatch or basis drift means wipe and rebuild, never migrate. Run `bb prune-deltas` to interactively GC orphaned delta directories whose trunk DB has been deleted.
 
 ### Federated queries
 
