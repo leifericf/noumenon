@@ -262,15 +262,33 @@
                {:seen #{} :txs []})
        :txs))
 
+(def ^:private safe-datomic-string-len
+  "Datomic-Local rejects single string values around the 4 KB mark with
+   `Item too large`. Cap at 4000 to leave headroom for UTF-8 multi-byte
+   chars; matches `artifacts/chunk-size`. The parse-time `clamp` already
+   limits :summary / :purpose to `max-string-length` (4096), but
+   :sem/synthesis-hints is a `pr-str` of multiple already-clamped fields
+   so it can still overflow at the writer."
+  4000)
+
 (defn- build-file-tx
-  "Build the file entity transaction map from analysis results. Pure."
+  "Build the file entity transaction map from analysis results. Pure.
+
+   Each long-string attribute is truncated at the writer boundary so a
+   verbose LLM response can't blow up the transact with `Item too
+   large`. Truncation is preferred over the chunk-template pattern
+   here — readers expect single-string :sem/summary etc., and chunking
+   would require a schema change."
   [file-path analysis]
   (let [{:keys [summary purpose tags complexity patterns layer
                 category confidence]} analysis
-        hints (build-synthesis-hints analysis)]
+        clamp-tx     #(util/truncate % safe-datomic-string-len)
+        hints        (some-> (build-synthesis-hints analysis) clamp-tx)
+        safe-summary (some-> summary clamp-tx)
+        safe-purpose (some-> purpose clamp-tx)]
     (cond-> {:file/path file-path}
-      summary            (assoc :sem/summary summary)
-      purpose            (assoc :sem/purpose purpose)
+      safe-summary       (assoc :sem/summary safe-summary)
+      safe-purpose       (assoc :sem/purpose safe-purpose)
       (seq tags)         (assoc :sem/tags tags)
       complexity         (assoc :sem/complexity complexity)
       (seq patterns)     (assoc :sem/patterns patterns)

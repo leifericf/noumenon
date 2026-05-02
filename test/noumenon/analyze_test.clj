@@ -1,5 +1,5 @@
 (ns noumenon.analyze-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
@@ -7,6 +7,34 @@
             [noumenon.test-helpers :as th]))
 
 ;; --- Tier 0: Pure function tests ---
+
+(deftest build-file-tx-truncates-overlong-strings
+  (testing "Datomic-Local has a ~4 KB per-string-value limit and used to
+            blow up on transact with `Item too large` when an LLM
+            produced a long :sem/summary, :sem/purpose, or
+            :sem/synthesis-hints. The writer now truncates each long
+            string at the boundary so the transact succeeds and the
+            analysis is preserved (with a short marker that the value
+            was truncated)."
+    (let [too-long (apply str (repeat 8000 "x"))
+          analysis {:summary  too-long
+                    :purpose  too-long
+                    :tags     ["t"]
+                    :patterns ["p"]
+                    :complexity :simple}
+          tx       (#'analyze/build-file-tx "src/x.clj" analysis)]
+      (is (<= (count (:sem/summary tx)) 4096)
+          "summary fits in Datomic-Local's per-string limit")
+      (is (<= (count (:sem/purpose tx)) 4096)
+          "purpose fits in Datomic-Local's per-string limit")
+      (is (<= (count (:sem/synthesis-hints tx)) 4096)
+          "synthesis-hints fits in Datomic-Local's per-string limit"))))
+
+(deftest build-file-tx-passes-through-short-strings
+  (testing "values under the cap are unchanged — no spurious truncation"
+    (let [tx (#'analyze/build-file-tx "src/x.clj" {:summary "short" :purpose "ok"})]
+      (is (= "short" (:sem/summary tx)))
+      (is (= "ok" (:sem/purpose tx))))))
 
 (deftest repo-name-basic
   (is (= "myrepo" (analyze/repo-name "/home/user/myrepo"))))
