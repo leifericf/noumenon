@@ -44,7 +44,7 @@
 - **Trim branch name before disambiguator hash** — `sanitize-branch` already trimmed before producing the on-disk label, but the disambiguator hashed the raw input, so `"foo"` and `"foo "` ended up in different delta DBs for one logical branch. Both paths now agree on the canonical branch.
 - **Uniform `query_name` length cap across query endpoints** — `POST /api/query` and `POST /api/query-as-of` now reject overlong `query_name` with the same 400 the federated endpoint already produced. The shared `util/max-query-name-len` is the single source.
 - **OpenAPI doc reflects the actual delta-DB path** — `/api/delta/ensure` description now shows `~/.noumenon/deltas/noumenon/<repo>__<safe-branch>-<hash6>__<basis7>/` (was missing both the `noumenon/` Datomic system subdir and the `-<hash6>` disambiguator).
-- **Cross-DB promotion guard** — `find-cached-analysis` rejects `:donor-db` without a matching `:donor-db-name`. The two predicates that decide same-DB vs cross-DB used to disagree; passing the partial form would have written a dangling `:prov/promoted-from` ref. Currently dormant (no production caller wires either) but lands defensively before the cross-DB-promotion path gets enabled.
+- **Cross-DB promotion guard** — `find-cached-analysis` rejects `:donor-db` without a matching `:donor-db-name`, and now also the symmetric `:donor-db-name` without `:donor-db`. The two predicates that decide same-DB vs cross-DB used to disagree; either partial form would have written a dangling `:prov/promoted-from` ref or fabricated cross-DB provenance for a donor that actually came from the recipient. Currently dormant (no production caller wires either) but lands defensively before the cross-DB-promotion path gets enabled.
 
 ### Notes
 

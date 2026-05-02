@@ -111,6 +111,21 @@
             (d/db recipient) blob-x prompt-h model-v
             {:donor-db (d/db donor)}))))))
 
+(deftest find-cached-analysis-rejects-name-without-donor-db
+  (testing "the symmetric case — :donor-db-name without :donor-db — also
+            throws. Without this, the lookup falls back to the recipient
+            db (search-db = recipient when donor-db is nil) but
+            promote-tx-data sees `(some? donor-db-name)` and writes
+            `:prov/promoted-from-db-name <name>` while skipping
+            `:prov/promoted-from`, fabricating cross-DB provenance for
+            a donor that actually came from the recipient itself"
+    (let [recipient (th/make-test-conn "promo-paired-args-name-only-recipient")]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"donor-db-name|donor-db"
+           (promotion/find-cached-analysis
+            (d/db recipient) blob-x prompt-h model-v
+            {:donor-db-name "fake-foreign-db"}))))))
+
 (deftest find-cached-analysis-cross-db
   (testing "donor lives in trunk-conn; recipient lives in delta-conn — the
   lookup uses :donor-db, the promote happens against the recipient"

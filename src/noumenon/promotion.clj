@@ -67,6 +67,16 @@
      ;; dangling ref. Fail fast at the boundary instead.
      (throw (ex-info "Cross-DB promotion requires :donor-db-name when :donor-db is set"
                      {:donor-db-name donor-db-name})))
+   (when (and donor-db-name (nil? donor-db))
+     ;; Symmetric guard: with only :donor-db-name set, the lookup falls
+     ;; back to the recipient db (search-db = recipient when donor-db
+     ;; is nil), so a same-DB hit would be written as cross-DB —
+     ;; `:prov/promoted-from-db-name <name>` would record a foreign
+     ;; provenance for a donor that actually came from the recipient
+     ;; itself. Refuse the partial pairing so the caller has to commit
+     ;; to one or the other.
+     (throw (ex-info "Cross-DB promotion requires :donor-db when :donor-db-name is set"
+                     {:donor-db-name donor-db-name})))
    (when (and blob-sha prompt-hash-val model-version)
      (let [search-db (or donor-db _recipient-db)]
        (->> (candidate-pairs search-db prompt-hash-val model-version)
