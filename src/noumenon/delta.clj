@@ -51,9 +51,14 @@
    and `feat-foo` both → `feat-foo`) get DIFFERENT delta DBs.
 
    Without this, branch-switching between the two would silently
-   overwrite each other's diff in the same shared delta DB."
+   overwrite each other's diff in the same shared delta DB.
+
+   The branch is trimmed before hashing — `sanitize-branch` already trims,
+   so hashing the raw input would produce different hashes for `\"foo\"`
+   and `\"foo \"` and create duplicate delta DBs for a single logical
+   branch when a caller forgets to trim."
   [branch-name]
-  (subs (util/sha256-hex (or branch-name "")) 0 6))
+  (subs (util/sha256-hex (or (some-> branch-name str/trim) "")) 0 6))
 
 (defn delta-db-name
   "Compose a Datomic db-name encoding repo + branch + basis short-SHA.

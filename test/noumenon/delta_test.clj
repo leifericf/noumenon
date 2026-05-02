@@ -41,7 +41,17 @@
           b (delta/delta-db-name "r" "feat-foo" "1234567")]
       (is (not= a b))
       (is (clojure.string/starts-with? a "r__feat-foo-"))
-      (is (clojure.string/starts-with? b "r__feat-foo-")))))
+      (is (clojure.string/starts-with? b "r__feat-foo-"))))
+  (testing "whitespace-only differences in the branch name produce the SAME
+            db-name — the disambiguator hashes the trimmed branch the same
+            way sanitize-branch trims it, so a script that accidentally
+            pipes git output without trim doesn't end up with duplicate
+            delta DBs for a single logical branch"
+    (let [canonical (delta/delta-db-name "r" "foo" "1234567")
+          trailing  (delta/delta-db-name "r" "foo " "1234567")
+          padded    (delta/delta-db-name "r" "  foo  " "1234567")]
+      (is (= canonical trailing))
+      (is (= canonical padded)))))
 
 (deftest delta-storage-dir-test
   (testing "default is ~/.noumenon/deltas"
