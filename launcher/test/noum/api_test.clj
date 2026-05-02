@@ -60,6 +60,15 @@
         ec  (binding [*err* buf] (f))]
     [ec (str buf)]))
 
+(deftest insecure-is-always-boolean
+  ;; Bug: --insecure was missing from `boolean-flags`, so it only
+  ;; happened to work when followed by another --flag or end-of-args.
+  ;; `--insecure foo` (foo not starting with --) ate "foo" as the value.
+  (testing "--insecure followed by a non-flag value is still boolean true"
+    (let [parsed (cli/parse-args ["connect" "host:80" "--insecure" "foo"])]
+      (is (true? (-> parsed :flags :insecure)))
+      (is (= ["host:80" "foo"] (:positional parsed))))))
+
 (deftest do-connect-rejects-non-http-schemes
   ;; Bug: do-connect accepted any URL string. ftp://example.com,
   ;; file:///path, ssh://host etc. went through to the HTTP client and

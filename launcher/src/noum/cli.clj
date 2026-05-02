@@ -289,7 +289,7 @@
   #{"--skip-import" "--skip-enrich" "--skip-analyze" "--skip-synthesize" "--skip-benchmark"
     "--report" "--force" "--analyze" "--verbose" "--debug" "--canary"
     "--deterministic-only" "--git-commit" "--read-only" "--federate" "--no-promote"
-    "--no-auto-federate"})
+    "--no-auto-federate" "--insecure"})
 
 (def ^:private repeatable-flags
   "Flags whose values accumulate into a vector instead of overwriting.

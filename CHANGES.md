@@ -23,6 +23,7 @@
 
 ### Fixes
 
+- **`--insecure` always parses as boolean** — the flag was missing from `cli/boolean-flags`, so `--insecure foo` (with a non-flag value following) used to swallow `foo` as the flag's value (`{:insecure "foo"}`). Always boolean now, regardless of what follows.
 - **`noum connect` rejects non-http(s) URL schemes up front** — `noum connect ftp://example.com`, `file:///tmp/foo`, `ssh://host:22` used to flow through the SSRF check (which gave a misleading "private/internal address" message) or surface as a generic "invalid URI scheme" wrapped in the network catch. Now produces a clean `Error: --host scheme must be http or https. Got: <scheme>://` (exit 1) before any network call.
 - **`ask-secret` no longer echoes any prefix of the secret** — the previous mask wrote `(subs input 0 (min 4 (count input))) "****"`, so short tokens (≤ 4 chars) were displayed in clear and longer ones leaked the first 4 characters. Always shows a fixed `********` mask now.
 - **Confirm prompts re-prompt on garbage input** — `tui.confirm/ask` returned `default-val` on any non-y/n input. With `default-val=true` (no current caller, but future ones) a typo would silently confirm a destructive action. Garbage now triggers a re-prompt with a "Please answer y/n." hint; empty input still falls back to the default as before.
