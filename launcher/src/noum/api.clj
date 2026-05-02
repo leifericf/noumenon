@@ -16,19 +16,10 @@
 ;; --- SSRF protection ---
 
 (def ^:private blocked-ip-patterns
-  ;; Classify entirely on the host-address string (`InetAddress/getHostAddress`)
-  ;; so we never call reflection-only methods like Inet6Address/isLoopbackAddress
-  ;; — bb's native-image build doesn't carry that metadata. IPv4-mapped IPv6
-  ;; addresses (e.g., ::ffff:127.0.0.1) are auto-converted to Inet4Address by
-  ;; the JDK so the IPv4 patterns catch them.
   [#"^127\." #"^10\." #"^172\.(1[6-9]|2[0-9]|3[01])\." #"^192\.168\."
    #"^0\." #"^169\.254\."
-   ;; IPv6 loopback: `::1` (compressed) or `0:0:0:0:0:0:0:1` (full canonical;
-   ;; bb's native-image-built JDK returns the latter from getHostAddress).
    #"(?i)^(::1|0:0:0:0:0:0:0:1)$"
-   ;; IPv6 link-local fe80::/10 — covers fe80-febf prefix.
    #"(?i)^fe[89ab][0-9a-f]:"
-   ;; IPv6 unique local fc00::/7 — covers fc00-fdff prefix.
    #"(?i)^f[cd][0-9a-f]{2}:"])
 
 (defn- private-ip? [ip-str]
@@ -54,9 +45,7 @@
     [nil host]))
 
 (defn- loopback-host?
-  "True when the bare-host (no scheme) refers to localhost or 127.0.0.1.
-   Anchored on either a port (`:`), path (`/`), or end of string so we
-   don't accidentally match e.g. `localhost.attacker.com`."
+  "True for `localhost` / `127.0.0.1`, anchored so `localhost.attacker.com` doesn't match."
   [bare-host]
   (boolean (re-find #"^(localhost|127\.0\.0\.1)(:|/|$)" bare-host)))
 
@@ -102,12 +91,8 @@
           enum-keys))
 
 (defn parse-body
-  "Parse a JSON string into Clojure data: keywordize keys and restore known
-   enum values to keywords (the symmetric counterpart to clojure.data.json's
-   keyword-as-string serialization on the daemon side). Returns nil on
-   nil/non-JSON input — the daemon's error middleware sometimes responds
-   with text/plain (e.g. when a 500 escapes from inside the auth path),
-   and the launcher should not propagate a JsonParseException to the user."
+  "Parse a JSON string into Clojure data; keywordize keys and restore known
+   enum values to keywords. Returns nil on nil/non-JSON input."
   [s]
   (when (and (string? s) (seq s))
     (try
@@ -144,10 +129,7 @@
 ;; --- API calls ---
 
 (defn- fallback-error
-  "Construct the launcher's standard `{:ok false :error ...}` shape from
-   an HTTP response whose body wasn't JSON-parseable. Truncates long
-   bodies so a 5MB error page doesn't dump the whole thing into the user
-   terminal."
+  "Standard error map for a non-JSON HTTP response (body truncated)."
   [resp]
   (let [status (:status resp)
         body   (str (:body resp))
@@ -158,12 +140,7 @@
                         (str "HTTP " status))}))
 
 (defn- network-error
-  "Turn a network-level exception (ConnectException, UnknownHostException,
-   SocketTimeoutException, …) into the launcher's standard error shape.
-   `:throw false` on the HTTP client only converts HTTP error responses
-   into result maps — exceptions raised before a response (refused
-   connection, DNS failure, timeout) still bubble, so we catch them
-   here and produce a clean message."
+  "Standard error map for a pre-response exception (ConnectException, etc.)."
   [host ^Throwable e]
   (let [class-name (.getSimpleName (class e))
         msg        (or (.getMessage e) "")]

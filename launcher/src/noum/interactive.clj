@@ -192,11 +192,6 @@
                                                    {:label "prompt" :value "prompt"}])]
     (if (= "rules" (:value atype))
       {:command "history" :flags {} :positional ["rules"]}
-      ;; Free-text prompt instead of a menu: the daemon's prompt files
-      ;; live in `resources/prompts/` inside `noumenon.jar`, which the
-      ;; launcher doesn't have on its classpath. There's no daemon
-      ;; endpoint to enumerate them either, so the previous
-      ;; `(io/resource "prompts/")` call returned nil and NPE'd.
       (when-let [pname (prompt/ask "Prompt name (e.g. analyze-file, introspect):")]
         (when-not (str/blank? pname)
           {:command "history" :flags {} :positional ["prompt" pname]})))))

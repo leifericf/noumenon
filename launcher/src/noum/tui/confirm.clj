@@ -5,10 +5,8 @@
             [noum.tui.style :as style]))
 
 (defn ask
-  "Prompt for y/n confirmation. Returns true/false.
-   Non-interactive: returns default-val and logs the auto-accept.
-   Garbage input re-prompts so a typo can't silently flip a default-yes
-   confirm into a yes."
+  "Prompt for y/n confirmation; re-prompt on garbage. Empty input → default-val.
+   Non-interactive: returns default-val."
   ([message] (ask message false))
   ([message default-val]
    (if-not (tui/interactive?)

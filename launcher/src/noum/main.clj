@@ -33,17 +33,9 @@
       (< h 24)  (str h "h " (mod m 60) "m")
       :else     (str d "d " (mod h 24) "h"))))
 
-(def ^:private max-listing-value-len
-  "Cap on a single value's stringified width in flat-map listings. The
-   daemon can return arbitrarily deep collections; printing them
-   verbatim wraps the terminal into noise. `noum settings <key>` still
-   shows the un-truncated value."
-  120)
+(def ^:private max-listing-value-len 120)
 
-(defn- truncate-display
-  "Stringify a value and clip to `max-listing-value-len` chars with an
-   ellipsis. Strings, numbers, and short colls pass through unchanged."
-  [v]
+(defn- truncate-display [v]
   (let [s (if (string? v) v (pr-str v))]
     (if (> (count s) max-listing-value-len)
       (str (subs s 0 (- max-listing-value-len 3)) "…")
@@ -111,8 +103,7 @@
                      :repo_path (canonicalize-path (second pos))})})
 
 (defn- parse-param-flag
-  "Convert a `--param` 'key=value' string into a single-entry map, or nil
-   for malformed input. Used internally by `params-map`."
+  "Convert a `--param` `key=value` string into a {key value} map, or nil if malformed."
   [s]
   (when (string? s)
     (let [idx (str/index-of s "=")]
@@ -120,9 +111,7 @@
         {(subs s 0 idx) (subs s (inc idx))}))))
 
 (defn- params-map
-  "Merge a vector of `--param k=v` strings (as accumulated by
-   `cli/extract-flags`) into a single {key value} map. Returns nil when
-   no usable params are present."
+  "Merge a vector of `key=value` strings into a single {key value} map, or nil."
   [vs]
   (let [merged (apply merge (keep parse-param-flag vs))]
     (when (seq merged) merged)))
@@ -269,10 +258,7 @@
     (do (tui/eprintln "Daemon not running.") 0)))
 
 (defn- ping-target
-  "Pick the connection to ping for `do-ping` / `do-version` without
-   spawning a local daemon. Order: explicit `--host`, then the saved
-   active named connection, then the local daemon (read-only check via
-   `daemon/connection`). Returns nil if local mode and no daemon is up."
+  "Connection to ping, in priority order: --host flags, active named connection, local daemon."
   [flags]
   (let [active (api/active-connection)]
     (cond
@@ -312,11 +298,6 @@
 
 (defn- do-serve [{:keys [flags]}]
   (if (:host flags)
-    ;; The MCP server runs colocated with a daemon (local or, via the
-    ;; saved active named connection, a remote one it proxies to).
-    ;; Routing `--host` directly through `serve` was silently dropped,
-    ;; which made the user think they were targeting a remote when in
-    ;; fact they were running against the local daemon.
     (do (tui/eprintln (str (style/red "Error: ")
                            "`noum serve` does not accept `--host`. To target a remote, "
                            "run `noum connect <url>` first; the MCP server then proxies "
@@ -334,20 +315,14 @@
       (:exit @(proc/process {:cmd args :extra-env env :inherit true})))))
 
 (defn- parse-watch-interval
-  "Interpret the --interval flag. Returns a positive integer (defaulting
-   to 30 when absent) or `{:error <message>}` on garbage / non-positive
-   input. Pulled out of `do-watch` so validation can run before any
-   `ensure-backend!` / HTTP call and so the gate is unit-testable."
+  "Returns a positive integer (default 30) or `{:error <msg>}`."
   [raw]
   (cond
     (nil? raw)             30
     (let [n (parse-long (str raw))] (and n (pos? n))) (parse-long (str raw))
     :else                  {:error (str "--interval must be a positive integer (got " raw ")")}))
 
-(defn- watch-loop!
-  "The actual polling loop. Extracted so do-watch can validate and fail
-   fast before reaching it."
-  [{:keys [conn repo-path body interval-s]}]
+(defn- watch-loop! [{:keys [conn repo-path body interval-s]}]
   (loop [failures 0]
     (let [resp (try (api/post! conn "/api/update" body)
                     (catch Exception e
@@ -554,8 +529,7 @@
                                          :branch    (:branch ctx)})))))))
 
 (defn- valid-sha?
-  "True for a 40-char lowercase hex string. Used by `--basis-sha`
-   validation in `query --federate` and `delta-ensure`."
+  "True for a 40-char lowercase hex string."
   [s]
   (and (string? s) (some? (re-matches #"[a-f0-9]{40}" s))))
 
@@ -646,17 +620,9 @@
 
 (defn- do-introspect [{:keys [flags] :as parsed}]
   (cond
-    ;; --status / --stop / --history target different sub-actions; pre-
-    ;; reject combinations so the cond order doesn't silently pick the
-    ;; first match. Same pattern do-query already uses for --raw vs
-    ;; --as-of.
     (> (count (filter #(some? (% flags)) [:status :stop :history])) 1)
     (do (tui/eprintln "Error: --status, --stop, and --history are mutually exclusive.") 1)
 
-    ;; --status / --stop with no following value booleanize to true via
-    ;; extract-flags. Without these explicit checks, the cond fell
-    ;; through to do-api-command which emitted a "Use `noum databases`"
-    ;; message — totally unrelated to the user's run-id intent.
     (true? (:status flags))
     (do (tui/eprintln "Error: --status requires a run-id.") 1)
 
@@ -700,10 +666,7 @@
         (print-api-result (api/post! conn (str "/api/ask/sessions/" (api/url-encode session-id) "/feedback") body))))))
 
 (defn- parse-setting-value
-  "Parse a setting value string into the most natural type. Falls back
-   to the raw string when the input looks like an integer but overflows
-   Long — the daemon's settings store accepts strings as-is, and a
-   silent `nil` would have made the user's value disappear."
+  "Coerce a setting value string to a natural type; long-overflow falls back to the raw string."
   [s]
   (cond
     (nil? s)                nil
@@ -717,14 +680,10 @@
         v       (second positional)
         n-args  (count positional)]
     (cond
-      ;; Reject extra positionals up front. The previous `case n-args`
-      ;; default branch silently dropped args 3+ and acted as if only
-      ;; (key, value) were passed.
       (>= n-args 3)
       (do (tui/eprintln "Error: Too many arguments. Usage: noum settings [<key> [<value>]]") 1)
 
-      ;; Launcher-local settings live in ~/.noumenon/config.edn — never
-      ;; round-tripped through the daemon.
+      ;; federation/* keys are launcher-local; never round-tripped through the daemon.
       (and (>= n-args 1) (api/launcher-setting-key? k))
       (case n-args
         1 (let [val (api/launcher-setting (keyword k))]
@@ -759,19 +718,13 @@
 
 ;; --- Connection management ---
 
-(defn- ip-literal?
-  "True for IPv4 literal hostnames and `localhost`. The dot-segment
-   heuristic that works for real hostnames (`api.example.com` → \"api\")
-   produces useless results here (`127.0.0.1` → \"127\")."
-  [host]
+(defn- ip-literal? [host]
   (or (some? (re-matches #"\d+\.\d+\.\d+\.\d+" host))
       (= host "localhost")))
 
 (defn- derive-connection-name
-  "Auto-derive a saved-connection name from the URL the user typed.
-   For IP literals / localhost, keep the host (and port, if any, joined
-   by `-` so the name is filesystem-safe). For real hostnames, take the
-   first dot-segment, which keeps `api.example.com` → \"api\"."
+  "Saved-connection name from a URL: first dot-segment for hostnames,
+   `host-port` for IP literals."
   [target]
   (let [host-and-port (-> target
                           (str/replace #"^https?://" "")
@@ -915,10 +868,8 @@
    "disconnect" do-disconnect})
 
 (defn run-handler!
-  "Invoke a command handler with the parsed input and return its exit
-   code. Any uncaught exception becomes exit 1 with a clean error
-   message — never a raw Clojure stack trace. Set NOUM_DEBUG=1 in the
-   environment for the full trace when diagnosing a launcher bug."
+  "Invoke a command handler. Uncaught exceptions become exit 1 with a clean error message;
+   set NOUM_DEBUG=1 for the full stack trace."
   [handler parsed]
   (try
     (handler parsed)

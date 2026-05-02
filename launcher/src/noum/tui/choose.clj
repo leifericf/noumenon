@@ -15,23 +15,15 @@
 (def ^:private ^:const arrow-down   66)
 
 (def ^:private ^:const esc-followup-grace-ms
-  "Wait this long after a bare ESC byte for follow-up bytes (a CSI
-   sequence arrives as `ESC [ <code>` — three bytes total). Local
-   terminals deliver in <5ms; SSH/WSL stays under 50ms. 20ms is the
-   sweet spot — long enough to avoid false positives, short enough that
-   bare ESC feels instant."
+  ;; Long enough to catch a real CSI sequence (ESC [ <code>); short enough that a bare ESC feels instant.
   20)
 
 (defn read-arrow!
-  "Peek for an arrow-key sequence after a bare ESC has already been
-   consumed. Returns `:up` / `:down` for arrows, nil for a bare ESC
-   (no follow-up bytes within the grace period). Public so the unit
-   test can exercise the bare-ESC behavior without wiring up a real
-   terminal."
+  "Returns `:up` / `:down` after a CSI sequence, or nil for a bare ESC."
   [^java.io.InputStream tty]
   (Thread/sleep esc-followup-grace-ms)
   (when (pos? (.available tty))
-    (.read tty)                ; consume the `[`
+    (.read tty)
     (let [arrow (.read tty)]
       (cond
         (= arrow arrow-up)   :up
@@ -101,8 +93,6 @@
                   (case (read-arrow! tty)
                     :up   (recur (mod (dec selected) n))
                     :down (recur (mod (inc selected) n))
-                    ;; Bare ESC (no follow-up bytes) — treat as cancel,
-                    ;; same as Q / Ctrl-C. Used to hang here forever.
                     nil   nil)
 
                   (= key-k ch) (recur (mod (dec selected) n))

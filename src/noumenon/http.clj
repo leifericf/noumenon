@@ -147,10 +147,7 @@
         (constant-time= bearer token)
         nil
 
-        ;; Check Datomic-stored tokens. Wrap the lookup so any internal
-        ;; failure (closed channel, transient Datomic error, etc.) surfaces
-        ;; as a clean 401 — never leak Datalog clauses or JVM exception
-        ;; classes to an unauthenticated caller.
+        ;; Catch lookup failures so an unauthenticated caller never sees daemon internals.
         :else
         (let [valid (try
                       (when meta-conn

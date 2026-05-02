@@ -38,16 +38,8 @@
     (is (= 200 (:status good-auth)))))
 
 (deftest auth-token-lookup-failure-returns-401-not-500
-  ;; Bug: when the meta-DB token query threw (e.g. a closed channel during
-  ;; a Datomic-Local query, or any transient backend failure), the
-  ;; exception bubbled to the generic 500 handler which echoed the
-  ;; Datalog clause back as text/plain — leaking schema details and
-  ;; producing a 500 to an unauthenticated caller. Wrap the lookup so
-  ;; any internal failure surfaces as a clean 401 with the standard JSON
-  ;; error shape.
   (let [db-dir   (str (System/getProperty "user.dir") "/data/datomic/")
         handler  (http/make-handler {:db-dir db-dir :token "secret"})
-        ;; Force the token-lookup path to throw exactly like the bug did.
         resp     (with-redefs [auth/validate-token
                                (fn [_ _] (throw (java.nio.channels.ClosedChannelException.)))]
                    (handler {:request-method :get

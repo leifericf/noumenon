@@ -292,15 +292,10 @@
     "--no-auto-federate" "--insecure"})
 
 (def ^:private repeatable-flags
-  "Flags whose values accumulate into a vector instead of overwriting.
-   The corresponding flag value is always a vector of strings, even
-   when only one occurrence was passed."
+  "Flag keys whose values accumulate into a vector across repetitions."
   #{:param})
 
-(defn- assoc-flag
-  "Set or accumulate a flag value into the flags map. Repeatable flags
-   collect into a vector; everything else overwrites prior values."
-  [flags k v]
+(defn- assoc-flag [flags k v]
   (if (repeatable-flags k)
     (update flags k (fnil conj []) v)
     (assoc flags k v)))
@@ -331,12 +326,7 @@
           (recur more flags (conj positional arg)))))))
 
 (defn- sanitize-positional
-  "Strip NUL bytes from a positional arg and treat blank/whitespace-only
-   results as missing. NUL bytes don't survive any serializer cleanly
-   and only appear from copy-paste / programmatic mistakes; blanks
-   silently resolve to the cwd via `path->db-name`, which causes the
-   wrong DB to be addressed. A literal `.` survives — it's a legitimate
-   current-directory shorthand."
+  "Strip NUL bytes; return nil for blank/whitespace-only results."
   [s]
   (let [stripped (str/replace s " " "")]
     (when-not (str/blank? stripped)
