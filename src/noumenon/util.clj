@@ -61,11 +61,15 @@
                       {:repo-path repo-path :basename raw :sanitized sanitized})))))
 
 (defn validate-string-length!
-  "Throw ex-info if s exceeds max-len characters."
+  "Throw ex-info with :status 400 if s exceeds max-len characters.
+   The :status + :message keys let HTTP handlers surface a clean 400
+   response instead of falling through to a generic 500."
   [field-name s max-len]
   (when (and (string? s) (> (count s) max-len))
-    (throw (ex-info (str field-name " exceeds maximum length of " max-len " characters")
-                    {:field field-name :length (count s) :max max-len}))))
+    (let [msg (str field-name " exceeds maximum length of " max-len " characters")]
+      (throw (ex-info msg
+                      {:status 400 :message msg
+                       :field field-name :length (count s) :max max-len})))))
 
 (defn env
   "Read an env var, with optional _FILE variant for Docker secrets.
