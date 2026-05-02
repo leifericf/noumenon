@@ -60,6 +60,28 @@
         ec  (binding [*err* buf] (f))]
     [ec (str buf)]))
 
+(deftest format-value-truncates-long-output
+  ;; Bug: `noum settings` (list mode) printed deeply-nested values
+  ;; verbatim on a single line — thousands of chars wide. Truncate
+  ;; long stringified values to keep the listing scannable.
+  (require 'noum.main)
+  (let [format-value (resolve 'noum.main/format-value)]
+    (testing "short values pass through (stringified)"
+      (is (= "hello" (format-value :anything "hello")))
+      (is (= "42" (format-value :anything 42))))
+    (testing "long string values are truncated"
+      (let [s (apply str (repeat 500 "x"))
+            out (str (format-value :anything s))]
+        (is (<= (count out) 130))
+        (is (re-find #"…" out))))
+    (testing "deeply nested collection values are truncated"
+      (let [nested (reduce (fn [acc _] [acc]) "leaf" (range 80))
+            out    (str (format-value :nest nested))]
+        (is (<= (count out) 130))
+        (is (re-find #"…" out))))
+    (testing "uptime-ms preserves its existing duration formatting"
+      (is (= "2s" (format-value :uptime-ms 2000))))))
+
 (deftest insecure-is-always-boolean
   ;; Bug: --insecure was missing from `boolean-flags`, so it only
   ;; happened to work when followed by another --flag or end-of-args.

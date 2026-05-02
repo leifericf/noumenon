@@ -33,11 +33,27 @@
       (< h 24)  (str h "h " (mod m 60) "m")
       :else     (str d "d " (mod h 24) "h"))))
 
+(def ^:private max-listing-value-len
+  "Cap on a single value's stringified width in flat-map listings. The
+   daemon can return arbitrarily deep collections; printing them
+   verbatim wraps the terminal into noise. `noum settings <key>` still
+   shows the un-truncated value."
+  120)
+
+(defn- truncate-display
+  "Stringify a value and clip to `max-listing-value-len` chars with an
+   ellipsis. Strings, numbers, and short colls pass through unchanged."
+  [v]
+  (let [s (if (string? v) v (pr-str v))]
+    (if (> (count s) max-listing-value-len)
+      (str (subs s 0 (- max-listing-value-len 3)) "…")
+      s)))
+
 (defn- format-value [k v]
   (cond
     (= k :uptime-ms) (format-duration v)
     (float? v)       (format "%.2f" (double v))
-    :else            v))
+    :else            (truncate-display v)))
 
 (defn- print-flat-map
   "Print a flat map indented by prefix. Skips nil/empty values."

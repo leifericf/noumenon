@@ -23,6 +23,7 @@
 
 ### Fixes
 
+- **`noum settings` listing truncates long values** — a deeply nested or very long single-line value (>120 chars) used to wrap the terminal into noise. Listings now clip to 120 chars with a trailing `…`; `noum settings <key>` still shows the un-truncated value.
 - **`--insecure` always parses as boolean** — the flag was missing from `cli/boolean-flags`, so `--insecure foo` (with a non-flag value following) used to swallow `foo` as the flag's value (`{:insecure "foo"}`). Always boolean now, regardless of what follows.
 - **`noum connect` rejects non-http(s) URL schemes up front** — `noum connect ftp://example.com`, `file:///tmp/foo`, `ssh://host:22` used to flow through the SSRF check (which gave a misleading "private/internal address" message) or surface as a generic "invalid URI scheme" wrapped in the network catch. Now produces a clean `Error: --host scheme must be http or https. Got: <scheme>://` (exit 1) before any network call.
 - **`ask-secret` no longer echoes any prefix of the secret** — the previous mask wrote `(subs input 0 (min 4 (count input))) "****"`, so short tokens (≤ 4 chars) were displayed in clear and longer ones leaked the first 4 characters. Always shows a fixed `********` mask now.
