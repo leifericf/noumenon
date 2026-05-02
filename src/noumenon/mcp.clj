@@ -463,11 +463,17 @@
       (throw (ex-info "Invalid basis_sha"
                       {:user-message "basis_sha must be a 40-char lowercase hex SHA"})))
     (with-conn args defaults
-      (fn [{:keys [db meta-db repo-path]}]
+      (fn [{:keys [db meta-db repo-path db-name]}]
         (let [raw-params (args "params")
               _          (util/validate-params! raw-params)
               params     (into {} (map (fn [[k v]] [(keyword k) v])) raw-params)
-              delta-opts (cond-> {} branch (assoc :branch-name branch))
+              ;; Auto-derive parent metadata so the delta's branch entity
+              ;; carries the lineage breadcrumb. parent-host is "local"
+              ;; because MCP runs in-process — no over-the-wire host to
+              ;; record. Mirrors the http.clj/federated-delta-opts shape.
+              delta-opts (cond-> {:parent-db-name db-name
+                                  :parent-host    "local"}
+                           branch (assoc :branch-name branch))
               delta-conn (delta/ensure-delta-db! repo-path basis-sha delta-opts)
               _          (delta/update-delta! delta-conn repo-path basis-sha delta-opts)
               delta-db   (d/db delta-conn)

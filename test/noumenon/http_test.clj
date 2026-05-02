@@ -67,3 +67,21 @@
     (let [body (json/read-str (:body resp) :key-fn keyword)]
       (is (:ok body))
       (is (= [] (:data body))))))
+
+(deftest federated-delta-opts-derives-parent-metadata
+  (let [opts-fn @#'http/federated-delta-opts]
+    (is (= {:parent-db-name "myrepo"
+            :branch-name    "feat"
+            :parent-host    "noum.example.com:8765"}
+           (opts-fn {:headers {"host" "noum.example.com:8765"}}
+                    "myrepo"
+                    "feat"))
+        "auto-derives parent-db-name from the resolved trunk repo and
+         parent-host from the request's Host header, so federated query
+         calls leave a breadcrumb on the delta's branch entity even when
+         the caller didn't pass them explicitly")
+    (is (= {:parent-db-name "myrepo"}
+           (opts-fn {:headers {}} "myrepo" nil))
+        "missing Host header (unusual proxy setup) and missing branch —
+         parent-host is omitted, parent-db-name is still set; the
+         breadcrumb is informational and partial is acceptable")))

@@ -585,6 +585,20 @@
                      :results          (take limit rows)}))
               (error-response 400 (:error result)))))))))
 
+(defn- federated-delta-opts
+  "Build opts for `delta/update-delta!` from a federated-query request.
+   Auto-derives :parent-host from the request's Host header and
+   :parent-db-name from the resolved trunk DB so the delta's branch
+   entity carries the lineage breadcrumb without the caller having to
+   pass them explicitly. Without this, only `delta-ensure` callers got
+   parent metadata; auto-federated callers (the launcher's plain
+   `noum query` rewrite) silently lost it."
+  [request trunk-db-name branch]
+  (cond-> {:parent-db-name trunk-db-name}
+    branch                              (assoc :branch-name branch)
+    (get-in request [:headers "host"])  (assoc :parent-host
+                                               (get-in request [:headers "host"]))))
+
 (defn- handle-query-federated
   "Run a named query over both trunk and a local delta DB, then concatenate
    delta rows on top of trunk rows. Trunk is queried with :exclude-paths
@@ -613,23 +627,23 @@
     (validate-string-length! "query_name" query-name 256)
     (validate-string-length! "branch" branch max-branch-name-len)
     (validate-query-params! kw-params)
-    (let [delta-opts (cond-> {} branch (assoc :branch-name branch))
-          delta-conn (delta/ensure-delta-db! repo-path basis-sha delta-opts)
-          _          (delta/update-delta! delta-conn repo-path basis-sha delta-opts)
-          delta-db   (d/db delta-conn)
-          limit      (min (or (some-> (:limit params) str parse-long) 500) 10000)]
-      (with-repo {:repo_path repo-path} (:db-dir config)
-        (fn [{:keys [db meta-db]}]
-          (let [result (query/run-federated-query meta-db db delta-db query-name kw-params)]
-            (if (:error result)
-              (error-response 400 (:error result))
-              (ok {:query            query-name
-                   :total            (count (:ok result))
-                   :trunk-count      (:trunk-count result)
-                   :delta-count      (:delta-count result)
-                   :basis-sha        basis-sha
-                   :federation-safe? (:federation-safe? result)
-                   :results          (take limit (:ok result))}))))))))
+    (with-repo {:repo_path repo-path} (:db-dir config)
+      (fn [{:keys [db meta-db db-name]}]
+        (let [delta-opts (federated-delta-opts request db-name branch)
+              delta-conn (delta/ensure-delta-db! repo-path basis-sha delta-opts)
+              _          (delta/update-delta! delta-conn repo-path basis-sha delta-opts)
+              delta-db   (d/db delta-conn)
+              limit      (min (or (some-> (:limit params) str parse-long) 500) 10000)
+              result     (query/run-federated-query meta-db db delta-db query-name kw-params)]
+          (if (:error result)
+            (error-response 400 (:error result))
+            (ok {:query            query-name
+                 :total            (count (:ok result))
+                 :trunk-count      (:trunk-count result)
+                 :delta-count      (:delta-count result)
+                 :basis-sha        basis-sha
+                 :federation-safe? (:federation-safe? result)
+                 :results          (take limit (:ok result))})))))))
 
 (defn- handle-queries [_request config]
   (let [meta-conn (db/ensure-meta-db (:db-dir config))
