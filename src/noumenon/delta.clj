@@ -45,13 +45,29 @@
       "detached"
       cleaned)))
 
+(defn- branch-disambiguator
+  "First 6 chars of sha256(branch-name) — appended to the sanitized name
+   so two real branches that sanitize to the same string (e.g. `feat/foo`
+   and `feat-foo` both → `feat-foo`) get DIFFERENT delta DBs.
+
+   Without this, branch-switching between the two would silently
+   overwrite each other's diff in the same shared delta DB."
+  [branch-name]
+  (subs (util/sha256-hex (or branch-name "")) 0 6))
+
 (defn delta-db-name
   "Compose a Datomic db-name encoding repo + branch + basis short-SHA.
+   Format: `<repo>__<safe-branch>-<branch-hash6>__<basis7>`.
+
    Branch separators (e.g. '/') are replaced with '-'; blank or dot-only
-   branch names fall back to `detached` so the db-name is filesystem-safe."
+   branch names fall back to `detached` so the db-name is filesystem-safe.
+   The 6-char hash of the original branch name disambiguates branches that
+   would otherwise sanitize to the same label."
   [repo-name branch-name basis-sha]
   (let [short-basis (subs basis-sha 0 (min 7 (count basis-sha)))]
-    (str repo-name "__" (sanitize-branch branch-name) "__" short-basis)))
+    (str repo-name "__"
+         (sanitize-branch branch-name) "-" (branch-disambiguator branch-name)
+         "__" short-basis)))
 
 (defn ensure-delta-db!
   "Ensure a delta DB exists for the given repo + current branch + basis-sha.

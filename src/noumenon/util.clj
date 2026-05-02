@@ -97,7 +97,7 @@
       (let [msg (str "params: max " max-params-count " entries")]
         (throw (ex-info msg {:status 400 :message msg :user-message msg}))))
     (doseq [[k v] params]
-      (validate-string-length! (str "params key " (str k)) (name (keyword k)) max-param-key-len)
+      (validate-string-length! (str "params key " k) (name (keyword k)) max-param-key-len)
       (validate-string-length! (str "params." (name (keyword k))) (str v) max-param-value-len))))
 
 (defn env

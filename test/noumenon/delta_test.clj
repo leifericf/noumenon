@@ -4,37 +4,44 @@
             [clojure.test :refer [deftest is testing]]
             [datomic.client.api :as d]
             [noumenon.delta :as delta]
-            [noumenon.test-helpers :as th]))
+            [noumenon.test-helpers :as th]
+            [noumenon.util :as util]))
 
 ;; --- Pure helpers ---
 
+(defn- hash6 [s]
+  (subs (util/sha256-hex (or s "")) 0 6))
+
 (deftest delta-db-name-test
-  (testing "encodes repo + branch + short basis"
-    (is (= "myrepo__main__abcdef0"
+  (testing "encodes repo + sanitized-branch-with-hash + short basis"
+    (is (= (str "myrepo__main-" (hash6 "main") "__abcdef0")
            (delta/delta-db-name "myrepo" "main" "abcdef0123456789"))))
   (testing "sanitizes branch separators for filesystem-safe db-name"
-    (is (= "myrepo__feat-branch-aware-graph__1234567"
+    (is (= (str "myrepo__feat-branch-aware-graph-" (hash6 "feat/branch-aware-graph") "__1234567")
            (delta/delta-db-name "myrepo" "feat/branch-aware-graph"
                                 "1234567abcdef"))))
   (testing "nil branch becomes 'detached'"
-    (is (= "r__detached__1234567"
+    (is (= (str "r__detached-" (hash6 "") "__1234567")
            (delta/delta-db-name "r" nil "1234567abc"))))
-  (testing "empty / blank branch becomes 'detached' (would otherwise produce
-            an empty path component like 'r____abc1234')"
-    (is (= "r__detached__1234567" (delta/delta-db-name "r" "" "1234567abc")))
-    (is (= "r__detached__1234567" (delta/delta-db-name "r" "   " "1234567abc"))))
-  (testing "dot-only branch becomes 'detached' (would otherwise produce
-            literal '.' or '..' dir names that confuse fs tooling)"
-    (is (= "r__detached__1234567" (delta/delta-db-name "r" "." "1234567abc")))
-    (is (= "r__detached__1234567" (delta/delta-db-name "r" ".." "1234567abc"))))
-  (testing "path-escape sequences sanitize to single-component name; chars
-            other than dots/separators (e.g. 'etc') stay so the result is
-            informative, not 'detached'. Path traversal can't escape because
-            the result is a single dir component, not a multi-segment path."
-    (is (= "r__..-..-..-etc__1234567"
+  (testing "empty / blank branch becomes 'detached'"
+    (is (= (str "r__detached-" (hash6 "") "__1234567")
+           (delta/delta-db-name "r" "" "1234567abc"))))
+  (testing "dot-only branch becomes 'detached'"
+    (is (= (str "r__detached-" (hash6 ".") "__1234567")
+           (delta/delta-db-name "r" "." "1234567abc")))
+    (is (= (str "r__detached-" (hash6 "..") "__1234567")
+           (delta/delta-db-name "r" ".." "1234567abc"))))
+  (testing "path-escape sequences keep informative single-component name + hash"
+    (is (= (str "r__..-..-..-etc-" (hash6 "../../../etc") "__1234567")
            (delta/delta-db-name "r" "../../../etc" "1234567abc"))))
-  (testing "branch with only separator chars becomes 'detached'"
-    (is (= "r__detached__1234567" (delta/delta-db-name "r" "///" "1234567abc")))))
+  (testing "DISAMBIGUATION: branches that sanitize to the same label still
+            get DIFFERENT db-names (e.g. feat/foo vs feat-foo). Without this,
+            switching branches would silently overwrite the same delta DB."
+    (let [a (delta/delta-db-name "r" "feat/foo" "1234567")
+          b (delta/delta-db-name "r" "feat-foo" "1234567")]
+      (is (not= a b))
+      (is (clojure.string/starts-with? a "r__feat-foo-"))
+      (is (clojure.string/starts-with? b "r__feat-foo-")))))
 
 (deftest delta-storage-dir-test
   (testing "default is ~/.noumenon/deltas"
