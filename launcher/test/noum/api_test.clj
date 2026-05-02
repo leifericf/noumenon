@@ -42,6 +42,24 @@
     (testing "public IPv6 2001:4860:4860::8888 is not private (used to crash with MissingReflectionRegistrationError)"
       (is (false? (boolean (blocked? (java.net.InetAddress/getByName "2001:4860:4860::8888"))))))))
 
+(deftest ping-target-respects-host-flag
+  ;; Bug: do-ping called daemon/connection directly, ignoring --host /
+  ;; --token / --insecure entirely. The new ping-target helper resolves
+  ;; the connection to ping based on flags first, then active named
+  ;; connection, then local daemon — without spawning anything.
+  (require 'noum.main)
+  (let [ping-target (resolve 'noum.main/ping-target)]
+    (testing "explicit --host wins"
+      (is (= {:host "203.0.113.5:9000" :token "abc" :insecure true}
+             (ping-target {:host "203.0.113.5:9000" :token "abc" :insecure true}))))
+    (testing "no flags, no active connection, no local daemon → nil"
+      ;; with-redefs on api/active-connection + daemon/connection so the
+      ;; helper has nothing to fall back to
+      (require 'noum.api 'noum.daemon)
+      (is (nil? (with-redefs [noum.api/active-connection (constantly nil)
+                              noum.daemon/connection      (constantly nil)]
+                  (ping-target {})))))))
+
 (deftest read-arrow!-returns-nil-on-bare-esc
   ;; Bug: choose/select unconditionally read two more bytes after ESC,
   ;; which blocked indefinitely if the user pressed ESC alone (no

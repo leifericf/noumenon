@@ -252,12 +252,31 @@
     (do (daemon/stop!) 0)
     (do (tui/eprintln "Daemon not running.") 0)))
 
-(defn- do-ping [_]
-  (if-let [conn (daemon/connection)]
+(defn- ping-target
+  "Pick the connection to ping for `do-ping` / `do-version` without
+   spawning a local daemon. Order: explicit `--host`, then the saved
+   active named connection, then the local daemon (read-only check via
+   `daemon/connection`). Returns nil if local mode and no daemon is up."
+  [flags]
+  (let [active (api/active-connection)]
+    (cond
+      (:host flags) {:host     (:host flags)
+                     :token    (:token flags)
+                     :insecure (:insecure flags)}
+      (:host active) active
+      :else          (daemon/connection))))
+
+(defn- do-ping [{:keys [flags]}]
+  (if-let [conn (ping-target flags)]
     (let [resp (api/get! conn "/health")]
-      (tui/eprintln (str (style/green "✓") " Daemon running on port " (:port conn)))
-      (print-result (:data resp))
-      0)
+      (if (:ok resp)
+        (do (tui/eprintln (str (style/green "✓") " Daemon healthy"
+                               (cond
+                                 (:host conn) (str " at " (:host conn))
+                                 (:port conn) (str " on port " (:port conn)))))
+            (print-result (:data resp))
+            0)
+        (do (tui/eprintln (str (style/red "✗ ") (:error resp))) 1)))
     (do (tui/eprintln (str (style/red "✗") " Daemon not running. Run 'noum start' to start it.")) 1)))
 
 (defn- do-upgrade [_]
@@ -417,12 +436,12 @@
     (tui/eprintln (cli/format-help)))
   0)
 
-(defn- do-version [_]
+(defn- do-version [{:keys [flags]}]
   (tui/eprintln (str "noum " version))
   (if-not (jar/installed?)
     (tui/eprintln "Daemon: not installed")
     (try
-      (if-let [conn (daemon/connection)]
+      (if-let [conn (ping-target (or flags {}))]
         (let [resp (api/get! conn "/health")]
           (if (:ok resp)
             (tui/eprintln (str "noumenon " (get-in resp [:data :version])))
