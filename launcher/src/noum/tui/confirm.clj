@@ -6,7 +6,9 @@
 
 (defn ask
   "Prompt for y/n confirmation. Returns true/false.
-   Non-interactive: returns default-val and logs the auto-accept."
+   Non-interactive: returns default-val and logs the auto-accept.
+   Garbage input re-prompts so a typo can't silently flip a default-yes
+   confirm into a yes."
   ([message] (ask message false))
   ([message default-val]
    (if-not (tui/interactive?)
@@ -14,9 +16,13 @@
          default-val)
      (let [hint (if default-val "[Y/n]" "[y/N]")]
        (tui/eprint (str (style/bold "? ") message " " (style/dim hint) " "))
-       (let [input (str/trim (or (read-line) ""))]
-         (cond
-           (= "" input) default-val
-           (#{"y" "yes"} (str/lower-case input)) true
-           (#{"n" "no"} (str/lower-case input)) false
-           :else default-val))))))
+       (loop []
+         (let [input (str/trim (or (read-line) ""))]
+           (cond
+             (= "" input)                          default-val
+             (#{"y" "yes"} (str/lower-case input)) true
+             (#{"n" "no"}  (str/lower-case input)) false
+             :else
+             (do (tui/eprint (str (style/dim "Please answer y/n. ")
+                                  (style/bold "? ") message " " (style/dim hint) " "))
+                 (recur)))))))))

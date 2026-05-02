@@ -60,6 +60,40 @@
         ec  (binding [*err* buf] (f))]
     [ec (str buf)]))
 
+(deftest confirm-ask-reprompts-on-garbage-input
+  ;; Bug: confirm/ask returned default-val on any non-y/n input. With
+  ;; default-val=true (currently no caller, but future ones), typos
+  ;; would silently confirm a destructive action.
+  (require 'noum.tui.confirm 'noum.tui.core)
+  (let [ask    (resolve 'noum.tui.confirm/ask)
+        ;; Fake interactive? so the prompt branch runs even though
+        ;; tests aren't on a TTY.
+        run    (fn [stdin default-val]
+                 (with-redefs [noum.tui.core/interactive? (constantly true)]
+                   (with-in-str stdin
+                     (binding [*err* (java.io.StringWriter.)]
+                       (ask "Proceed?" default-val)))))]
+    (testing "y → true (regardless of default)"
+      (is (true? (run "y\n" false)))
+      (is (true? (run "y\n" true))))
+    (testing "n → false"
+      (is (false? (run "n\n" true))))
+    (testing "empty input → default-val"
+      (is (true? (run "\n" true)))
+      (is (false? (run "\n" false))))
+    (testing "garbage re-prompts; second valid answer wins"
+      (is (true? (run "maybe\ny\n" false)))
+      (is (false? (run "?\n?\nn\n" true))))
+    (testing "garbage then EOF (no more input) falls back to default"
+      ;; After the re-prompt, read-line returns nil → empty → default-val.
+      ;; Critical: with default-val=true and garbage typed, we must NOT
+      ;; treat the typo as a yes. Empty falls back to default deliberately.
+      (is (false? (run "garbage\n" false)))
+      ;; And with default=true, the user's intent was probably "yes" —
+      ;; falling back to default is acceptable. The point is that
+      ;; the literal garbage doesn't silently flip to yes.
+      (is (true? (run "garbage\n" true))))))
+
 (deftest do-settings-rejects-extra-positionals
   ;; Bug: do-settings used `case n-args` with 0/1 branches and a default
   ;; that handled 2+. So 3+ args silently dropped extras and POSTed

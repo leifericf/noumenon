@@ -23,6 +23,7 @@
 
 ### Fixes
 
+- **Confirm prompts re-prompt on garbage input** — `tui.confirm/ask` returned `default-val` on any non-y/n input. With `default-val=true` (no current caller, but future ones) a typo would silently confirm a destructive action. Garbage now triggers a re-prompt with a "Please answer y/n." hint; empty input still falls back to the default as before.
 - **`noum settings` rejects extra positionals** — `noum settings retry/limit 5 typo-extra` used to silently discard the third positional and POST `(key, value)` as if only two args were passed. Now produces `Error: Too many arguments.` (exit 1).
 - **`noum help <unknown>` exits 1** — previously printed "Unknown command: …" but exited 0, inconsistent with `noum <unknown>` which correctly exits 1.
 - **`noum connect <ip-literal>` derives a useful saved-connection name** — `noum connect 127.0.0.1:7895` used to save the connection as `'127'` (the first dot-segment), so `127.0.0.1` and `127.0.0.2` collided. The auto-naming now detects IP literals (and `localhost`) and keeps `host:port` joined by `-` (e.g. `127.0.0.1-7895`, `localhost-7895`); real hostnames still use the first dot-segment (`api.example.com` → `api`).
