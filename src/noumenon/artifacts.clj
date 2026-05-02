@@ -59,9 +59,26 @@
    on them."
   #{"db" "fressian"})
 
+(defn- find-clause-first
+  "First element of the `:find` clause for a vector-form Datalog query.
+   Returns the literal element (symbol, list, vector) or nil if `:find`
+   is missing or the query isn't a vector. Used to enforce the merge
+   contract — `:added-files-merge` rows are filtered by `(first row)`
+   matched against added paths, so the first column must bind
+   :file/path."
+  [query-edn]
+  (when (vector? query-edn)
+    (let [stop-kws #{:in :where :keys :syms :strs}]
+      (->> query-edn
+           (drop-while (complement #{:find}))
+           (drop 1)
+           (take-while (complement stop-kws))
+           first))))
+
 (defn validate-federation-mode!
   "Throw ex-info if a query in `:added-files-merge` mode touches any attr
-   that isn't tagged `:noumenon/scope :stable`, or if it uses Datalog rules.
+   that isn't tagged `:noumenon/scope :stable`, uses Datalog rules, or
+   doesn't bind :file/path as its first :find element.
 
    No-op for `:tombstone-only` or absent mode — those are always safe.
 
@@ -77,6 +94,15 @@
                            "stable-only joins. Either rewrite without rules "
                            "or change the mode to :tombstone-only.")
                       {:query query-name})))
+    (when-not (= '?path (find-clause-first query))
+      (throw (ex-info (str "Query '" query-name "' is :federation-mode "
+                           ":added-files-merge but its :find clause does "
+                           "not start with `?path`. The merge code filters "
+                           "delta rows by `(first row)` matched against "
+                           "added paths, so the first column must bind "
+                           ":file/path. Put `?path` first in :find or "
+                           "change the mode to :tombstone-only.")
+                      {:query query-name :first (find-clause-first query)})))
     (let [stable     (stable-attrs meta-db)
           violations (->> (query-attrs query)
                           (remove stable)

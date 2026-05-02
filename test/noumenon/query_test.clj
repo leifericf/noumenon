@@ -352,6 +352,49 @@
       (is (some? err))
       (is (re-find #"rules" (.getMessage err))))))
 
+(deftest validate-federation-mode-rejects-non-path-first-find
+  (testing "the :added-files-merge merge code matches `(first row)` against
+            tombstone/added paths, so the contract is that the FIRST :find
+            element binds :file/path. A query whose :find starts with any
+            other symbol (or a pull/aggregate form) would silently lose
+            every delta row to the merge filter; the validator rejects
+            those at seed time so the contract is explicit at the
+            boundary, not implicit in the merge code."
+    (let [mdb (meta-db)
+          q   {:federation-mode :added-files-merge
+               :query '[:find ?lang ?path
+                        :where [?file :file/lang ?lang] [?file :file/path ?path]]}
+          err (try (artifacts/validate-federation-mode! mdb "lang-first" q)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+      (is (some? err))
+      (is (re-find #"\?path" (.getMessage err))
+          "error message names the required first :find element")))
+  (testing "pull / aggregate / collection forms in the first :find slot
+            are also rejected — even though they may transitively bind
+            ?path, the row's first column won't be a path string and
+            the merge filter would see something else"
+    (let [mdb (meta-db)
+          pull-q {:federation-mode :added-files-merge
+                  :query '[:find (pull ?file [:file/path :file/lang])
+                           :where [?file :file/path _]]}
+          err (try (artifacts/validate-federation-mode! mdb "pull-first" pull-q)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+      (is (some? err)))))
+
+(deftest validate-federation-mode-accepts-path-first-find
+  (testing "the existing convention — :find ?path as the first element —
+            stays accepted; the new check only rejects the bad cases"
+    (let [mdb (meta-db)
+          q   {:federation-mode :added-files-merge
+               :query '[:find ?path :where [?file :file/path ?path] [?file :file/lang _]]}
+          q2  {:federation-mode :added-files-merge
+               :query '[:find ?path ?lang
+                        :where [?file :file/path ?path] [?file :file/lang ?lang]]}]
+      (is (nil? (artifacts/validate-federation-mode! mdb "ok-1" q)))
+      (is (nil? (artifacts/validate-federation-mode! mdb "ok-2" q2))))))
+
 (deftest validate-federation-mode-skips-tombstone-only-and-absent
   (testing "no validation runs when mode is :tombstone-only or absent —
             the validator only enforces the stable-only rule for the opt-in"
