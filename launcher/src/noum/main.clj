@@ -631,6 +631,16 @@
 
 (defn- do-introspect [{:keys [flags] :as parsed}]
   (cond
+    ;; --status / --stop with no following value booleanize to true via
+    ;; extract-flags. Without these explicit checks, the cond fell
+    ;; through to do-api-command which emitted a "Use `noum databases`"
+    ;; message — totally unrelated to the user's run-id intent.
+    (true? (:status flags))
+    (do (tui/eprintln "Error: --status requires a run-id.") 1)
+
+    (true? (:stop flags))
+    (do (tui/eprintln "Error: --stop requires a run-id.") 1)
+
     (string? (:status flags))
     (let [conn (api/ensure-backend! flags)]
       (print-api-result (api/get! conn (str "/api/introspect/status?run_id=" (api/url-encode (:status flags))))))

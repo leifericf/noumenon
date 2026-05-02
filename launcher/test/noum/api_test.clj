@@ -53,6 +53,35 @@
                 noum.api/ensure-backend! (fn [& _] (throw (ex-info "ensure-backend! must not be called" {})))]
     (f)))
 
+(defn- with-stderr
+  "Run f with *err* redirected to a string buffer; return [exit captured-stderr]."
+  [f]
+  (let [buf (java.io.StringWriter.)
+        ec  (binding [*err* buf] (f))]
+    [ec (str buf)]))
+
+(deftest do-introspect-handles-valueless-flags
+  ;; Bug: --status / --stop with no following value booleanized to true.
+  ;; (string? true) was false, so the cond fell through to do-api-command
+  ;; which emitted "Use `noum databases`…" — totally unrelated to the
+  ;; user's actual intent of checking a run-id.
+  (require 'noum.main)
+  (let [do-introspect (resolve 'noum.main/do-introspect)]
+    (testing "--status with no value: exit 1, message names --status (not databases)"
+      (let [[ec err] (with-stderr
+                       #(assert-no-http-call
+                         (fn [] (do-introspect {:command "introspect" :flags {:status true} :positional []}))))]
+        (is (= 1 ec))
+        (is (re-find #"--status" err))
+        (is (not (re-find #"noum databases" err)))))
+    (testing "--stop with no value: exit 1, message names --stop"
+      (let [[ec err] (with-stderr
+                       #(assert-no-http-call
+                         (fn [] (do-introspect {:command "introspect" :flags {:stop true} :positional []}))))]
+        (is (= 1 ec))
+        (is (re-find #"--stop" err))
+        (is (not (re-find #"noum databases" err)))))))
+
 (deftest do-query-rejects-blank-as-of-and-raw
   ;; Bug: --as-of "" and --raw "" passed launcher's truthy / string?
   ;; checks because empty string is truthy. The launcher then made an
