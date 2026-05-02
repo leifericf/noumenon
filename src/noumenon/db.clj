@@ -13,11 +13,39 @@
              :storage-dir storage-dir
              :system      "noumenon"}))
 
+(defn- not-found-anomaly?
+  "True if `e` is a Datomic ex-info carrying a `:not-found` anomaly —
+   what Datomic throws when the system catalog references a db whose
+   on-disk directory is missing."
+  [e]
+  (and (instance? clojure.lang.ExceptionInfo e)
+       (= :cognitect.anomalies/not-found
+          (:cognitect.anomalies/category (ex-data e)))))
+
 (defn create-db
-  "Create a database and return a connection. Creates the DB if it doesn't exist."
+  "Create a database and return a connection. Creates the DB if it doesn't
+   exist.
+
+   Recovers from a stale-catalog state: when Datomic-Local's system
+   catalog still references a db whose on-disk directory has been
+   removed externally (e.g. `bb prune-deltas` deleted a delta dir, or
+   the user wiped one manually), `create-database` is a no-op against
+   the catalog and `connect` throws `:cognitect.anomalies/not-found`.
+   We catch that exact anomaly, drop the stale catalog entry, and
+   recreate cleanly. Done in one place rather than at every caller —
+   `connect` is wrapped here so cache misses, fresh connects, and
+   schema-ensure paths all share the same recovery."
   [client db-name]
   (d/create-database client {:db-name db-name})
-  (d/connect client {:db-name db-name}))
+  (try
+    (d/connect client {:db-name db-name})
+    (catch clojure.lang.ExceptionInfo e
+      (if (not-found-anomaly? e)
+        (do
+          (d/delete-database client {:db-name db-name})
+          (d/create-database client {:db-name db-name})
+          (d/connect client {:db-name db-name}))
+        (throw e)))))
 
 (defn connect-and-ensure-schema
   "Create a database, connect, and transact all schema. Returns the connection.
