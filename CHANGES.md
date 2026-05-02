@@ -23,6 +23,7 @@
 
 ### Fixes
 
+- **`ask-secret` no longer echoes any prefix of the secret** — the previous mask wrote `(subs input 0 (min 4 (count input))) "****"`, so short tokens (≤ 4 chars) were displayed in clear and longer ones leaked the first 4 characters. Always shows a fixed `********` mask now.
 - **Confirm prompts re-prompt on garbage input** — `tui.confirm/ask` returned `default-val` on any non-y/n input. With `default-val=true` (no current caller, but future ones) a typo would silently confirm a destructive action. Garbage now triggers a re-prompt with a "Please answer y/n." hint; empty input still falls back to the default as before.
 - **`noum settings` rejects extra positionals** — `noum settings retry/limit 5 typo-extra` used to silently discard the third positional and POST `(key, value)` as if only two args were passed. Now produces `Error: Too many arguments.` (exit 1).
 - **`noum help <unknown>` exits 1** — previously printed "Unknown command: …" but exited 0, inconsistent with `noum <unknown>` which correctly exits 1.

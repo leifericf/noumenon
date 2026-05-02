@@ -60,6 +60,27 @@
         ec  (binding [*err* buf] (f))]
     [ec (str buf)]))
 
+(deftest ask-secret-never-shows-token-prefix
+  ;; Bug: ask-secret echoed the first 4 chars of the secret before
+  ;; masking, so short secrets (≤4 chars) were displayed in clear.
+  (require 'noum.tui.prompt 'noum.tui.core)
+  (let [ask-secret (resolve 'noum.tui.prompt/ask-secret)
+        run        (fn [secret]
+                     (let [buf (java.io.StringWriter.)]
+                       (with-redefs [noum.tui.core/interactive? (constantly true)]
+                         (with-in-str (str secret "\n")
+                           (binding [*err* buf]
+                             (let [returned (ask-secret "Token:")]
+                               [returned (str buf)]))))))]
+    (testing "short secret is never echoed back"
+      (let [[returned err] (run "abc")]
+        (is (= "abc" returned))
+        (is (not (re-find #"abc" err)))))
+    (testing "long secret is never echoed back (no recognizable prefix)"
+      (let [[returned err] (run "noum_supersecrettokenvalue123")]
+        (is (= "noum_supersecrettokenvalue123" returned))
+        (is (not (re-find #"noum_" err)))))))
+
 (deftest confirm-ask-reprompts-on-garbage-input
   ;; Bug: confirm/ask returned default-val on any non-y/n input. With
   ;; default-val=true (currently no caller, but future ones), typos

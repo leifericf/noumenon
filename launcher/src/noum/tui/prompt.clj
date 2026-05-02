@@ -25,8 +25,11 @@
     (tui/eprint (str (style/bold "? ") message " " (style/dim "(paste, then Enter — blank to skip) ")))
     (let [input (str/trim (or (read-line) ""))]
       (when-not (str/blank? input)
-        ;; Overwrite the line to mask the token
+        ;; Overwrite the line to mask the token. Never echo any prefix
+        ;; of the secret — short tokens used to be displayed in clear
+        ;; because the previous mask copied (min 4 (count input)) chars
+        ;; before the asterisks.
         (tui/eprint (str "\r" (style/clear-line)
                          (style/green "✓ ") message " "
-                         (style/dim (str (subs input 0 (min 4 (count input))) "****")) "\n"))
+                         (style/dim "********") "\n"))
         input))))
