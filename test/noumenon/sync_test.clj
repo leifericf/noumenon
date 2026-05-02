@@ -44,7 +44,15 @@
         (is (= [] (:deleted result)))
         (is (= [] (:modified result))))))
   (testing "invalid SHA returns nil"
-    (is (nil? (sync/changed-files "/tmp" "not-a-sha")))))
+    (is (nil? (sync/changed-files "/tmp" "not-a-sha"))))
+  (testing "well-formed SHA that does not resolve in the repo throws — guards
+            against a typo'd basis_sha producing a silent empty diff"
+    (with-redefs [shell/sh (constantly {:exit 128 :out "" :err "fatal: bad object"})]
+      (let [thrown (try (sync/changed-files "/tmp" test-sha)
+                        (catch clojure.lang.ExceptionInfo e e))]
+        (is (instance? clojure.lang.ExceptionInfo thrown))
+        (is (= 400 (:status (ex-data thrown))))
+        (is (re-find #"does not resolve" (.getMessage thrown)))))))
 
 (deftest deleted-file-tx-test
   (testing "produces tombstone upsert keyed on :file/path identity"

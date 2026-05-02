@@ -37,15 +37,23 @@
 (defn changed-files
   "Return {:added [...] :modified [...] :deleted [...]} between old-sha and HEAD.
    Each value is a vector of repo-relative file paths.
-   Returns nil if old-sha is not a valid 40-char hex SHA."
+   Returns nil if old-sha is not a valid 40-char hex SHA. Throws ex-info
+   with :status 400 when the SHA is well-formed but does not resolve in
+   the repository — otherwise a typo'd basis_sha would silently produce
+   an empty diff and the caller would think the operation succeeded."
   [repo-path old-sha]
   (if-not (valid-sha? old-sha)
     (do (log! (str "WARNING: Invalid SHA format, skipping diff: " (pr-str old-sha)))
         nil)
     (let [args (into ["git"] (concat (git/git-dir-args repo-path)
                                      ["diff" "--name-status" "--end-of-options" old-sha "HEAD"]))
-          {:keys [exit out]} (apply shell/sh args)]
-      (when (zero? exit)
+          {:keys [exit out err]} (apply shell/sh args)]
+      (if-not (zero? exit)
+        (let [msg (str "basis SHA " old-sha " does not resolve to a commit in "
+                       (str repo-path)
+                       (when (seq (str/trim (or err ""))) (str " — " (str/trim err))))]
+          (throw (ex-info msg {:status 400 :message msg :user-message msg
+                               :sha old-sha :exit exit})))
         (->> (str/split-lines out)
              (remove str/blank?)
              (reduce (fn [acc line]
@@ -371,7 +379,18 @@
             (log! "Already up to date" (str "(HEAD " (subs current 0 7) ")")))
           {:status :up-to-date :head-sha current :elapsed-ms 0})
       (let [fresh?  (or (nil? stored) (not (valid-sha? stored)))
-            changes (when-not fresh? (changed-files repo-path stored))]
+            ;; If the stored SHA was orphaned (force-push, history rewrite),
+            ;; `changed-files` now throws. Catch and fall back to a fresh sync
+            ;; rather than erroring the whole update — `update-delta!` keeps
+            ;; the throw-bubble behavior since the basis is user-supplied there.
+            changes (when-not fresh?
+                      (try (changed-files repo-path stored)
+                           (catch clojure.lang.ExceptionInfo e
+                             (log! (str "WARNING: stored HEAD " stored
+                                        " no longer resolves; treating as fresh sync ("
+                                        (.getMessage e) ")"))
+                             nil)))
+            fresh?  (or fresh? (nil? changes))]
         (when (seq (:modified changes))
           (retract-stale! conn (:modified changes)))
         (when (seq (:deleted changes))
