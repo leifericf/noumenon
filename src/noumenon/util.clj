@@ -61,11 +61,22 @@
                       {:repo-path repo-path :basename raw :sanitized sanitized})))))
 
 (defn validate-string-length!
-  "Throw ex-info with :status 400 if s exceeds max-len characters.
-   The :status + :message keys let HTTP handlers surface a clean 400
-   response instead of falling through to a generic 500."
+  "Throw ex-info with :status 400 if `s` is supplied but isn't a string,
+   or is a string longer than `max-len`. nil passes silently so optional
+   fields stay optional. The earlier guard `(when (and (string? s) ...))`
+   silently let non-strings through, which meant a JSON request like
+   `{\"branch\": [\"a\"]}` flowed past every validator (HTTP and MCP) and
+   crashed downstream as a 500 — every caller relied on this function
+   as a type-AND-length boundary even though it only enforced length."
   [field-name s max-len]
-  (when (and (string? s) (> (count s) max-len))
+  (cond
+    (nil? s) nil
+    (not (string? s))
+    (let [msg (str field-name " must be a string")]
+      (throw (ex-info msg
+                      {:status 400 :message msg :user-message msg
+                       :field field-name :type (some-> s class .getName)})))
+    (> (count s) max-len)
     (let [msg (str field-name " exceeds maximum length of " max-len " characters")]
       (throw (ex-info msg
                       {:status 400 :message msg :user-message msg
