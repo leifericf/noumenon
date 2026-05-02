@@ -60,6 +60,19 @@
         ec  (binding [*err* buf] (f))]
     [ec (str buf)]))
 
+(deftest do-help-exit-codes
+  ;; Bug: do-help returned 0 even for unknown commands. `noum help foo`
+  ;; printed "Unknown command: foo" but exited 0 — inconsistent with
+  ;; `noum foo` which correctly exits 1.
+  (require 'noum.main)
+  (let [do-help (resolve 'noum.main/do-help)]
+    (testing "no positional → exit 0 (general help)"
+      (is (= 0 (do-help {:positional []}))))
+    (testing "known command → exit 0"
+      (is (= 0 (do-help {:positional ["status"]}))))
+    (testing "unknown command → exit 1"
+      (is (= 1 (do-help {:positional ["nosuchcommand"]}))))))
+
 (deftest derive-connection-name
   ;; Bug: derive-connection-name took the first dot-segment of the host,
   ;; which works for hostnames (`api.example.com` → "api") but produces

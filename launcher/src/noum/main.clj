@@ -442,10 +442,9 @@
 (defn- do-help [{:keys [positional]}]
   (if-let [cmd (first positional)]
     (if-let [help (cli/format-command-help cmd)]
-      (tui/eprintln help)
-      (tui/eprintln (str "Unknown command: " cmd)))
-    (tui/eprintln (cli/format-help)))
-  0)
+      (do (tui/eprintln help) 0)
+      (do (tui/eprintln (str "Unknown command: " cmd)) 1))
+    (do (tui/eprintln (cli/format-help)) 0)))
 
 (defn- do-version [{:keys [flags]}]
   (tui/eprintln (str "noum " version))

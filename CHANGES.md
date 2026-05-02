@@ -23,6 +23,7 @@
 
 ### Fixes
 
+- **`noum help <unknown>` exits 1** — previously printed "Unknown command: …" but exited 0, inconsistent with `noum <unknown>` which correctly exits 1.
 - **`noum connect <ip-literal>` derives a useful saved-connection name** — `noum connect 127.0.0.1:7895` used to save the connection as `'127'` (the first dot-segment), so `127.0.0.1` and `127.0.0.2` collided. The auto-naming now detects IP literals (and `localhost`) and keeps `host:port` joined by `-` (e.g. `127.0.0.1-7895`, `localhost-7895`); real hostnames still use the first dot-segment (`api.example.com` → `api`).
 - **`noum introspect` rejects mutually exclusive flag combinations** — `--status`, `--stop`, and `--history` target different sub-actions, but the cond order silently picked the first match. `noum introspect --status run-a --stop run-b` acted on `--status run-a` only without warning. Two or more of the three flags now produce `Error: --status, --stop, and --history are mutually exclusive.` (exit 1).
 - **`noum introspect --status` (no value) gives a clean error instead of a misleading databases hint** — `--status` / `--stop` without a following value booleanized to `true`, fell through `(string? …)` checks to `do-api-command`, and emitted "Use `noum databases` to see imported repositories" — the user wanted a run-id, not a repo. Both flags now produce `Error: --status requires a run-id.` / `Error: --stop requires a run-id.` (exit 1) at the boundary.
