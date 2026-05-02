@@ -622,14 +622,17 @@
         (print-api-result (api/post! conn (str "/api/ask/sessions/" (api/url-encode session-id) "/feedback") body))))))
 
 (defn- parse-setting-value
-  "Parse a setting value string into the most natural type."
+  "Parse a setting value string into the most natural type. Falls back
+   to the raw string when the input looks like an integer but overflows
+   Long — the daemon's settings store accepts strings as-is, and a
+   silent `nil` would have made the user's value disappear."
   [s]
   (cond
-    (nil? s)               nil
-    (= "true" s)           true
-    (= "false" s)          false
-    (re-matches #"-?\d+" s) (parse-long s)
-    :else                  s))
+    (nil? s)                nil
+    (= "true" s)            true
+    (= "false" s)           false
+    (re-matches #"-?\d+" s) (or (parse-long s) s)
+    :else                   s))
 
 (defn- do-settings [{:keys [flags positional]}]
   (let [k       (first positional)
