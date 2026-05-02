@@ -30,14 +30,28 @@
   (or (:delta-storage-dir opts)
       (str (System/getProperty "user.home") "/" default-deltas-subdir)))
 
+(defn- sanitize-branch
+  "Filesystem-safe branch label. Replaces non-`[a-zA-Z0-9._-]` chars with
+   `-`. Falls back to `detached` for nil, blank, or dot-only inputs (which
+   would otherwise produce empty / `.` / `..` directory names — the latter
+   resolve to parent dirs in tools that aren't expecting them as literal
+   path components)."
+  [branch-name]
+  (let [trimmed (some-> branch-name str/trim)
+        cleaned (when trimmed (str/replace trimmed #"[^a-zA-Z0-9._-]" "-"))]
+    (if (or (str/blank? cleaned)
+            (re-matches #"\.+" cleaned)
+            (re-matches #"-+" cleaned))
+      "detached"
+      cleaned)))
+
 (defn delta-db-name
   "Compose a Datomic db-name encoding repo + branch + basis short-SHA.
-   Branch separators (e.g. '/') are replaced with '-' so the db-name is
-   filesystem-safe."
+   Branch separators (e.g. '/') are replaced with '-'; blank or dot-only
+   branch names fall back to `detached` so the db-name is filesystem-safe."
   [repo-name branch-name basis-sha]
-  (let [safe-branch (str/replace (or branch-name "detached") #"[^a-zA-Z0-9._-]" "-")
-        short-basis (subs basis-sha 0 (min 7 (count basis-sha)))]
-    (str repo-name "__" safe-branch "__" short-basis)))
+  (let [short-basis (subs basis-sha 0 (min 7 (count basis-sha)))]
+    (str repo-name "__" (sanitize-branch branch-name) "__" short-basis)))
 
 (defn ensure-delta-db!
   "Ensure a delta DB exists for the given repo + current branch + basis-sha.

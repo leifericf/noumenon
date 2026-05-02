@@ -18,7 +18,23 @@
                                 "1234567abcdef"))))
   (testing "nil branch becomes 'detached'"
     (is (= "r__detached__1234567"
-           (delta/delta-db-name "r" nil "1234567abc")))))
+           (delta/delta-db-name "r" nil "1234567abc"))))
+  (testing "empty / blank branch becomes 'detached' (would otherwise produce
+            an empty path component like 'r____abc1234')"
+    (is (= "r__detached__1234567" (delta/delta-db-name "r" "" "1234567abc")))
+    (is (= "r__detached__1234567" (delta/delta-db-name "r" "   " "1234567abc"))))
+  (testing "dot-only branch becomes 'detached' (would otherwise produce
+            literal '.' or '..' dir names that confuse fs tooling)"
+    (is (= "r__detached__1234567" (delta/delta-db-name "r" "." "1234567abc")))
+    (is (= "r__detached__1234567" (delta/delta-db-name "r" ".." "1234567abc"))))
+  (testing "path-escape sequences sanitize to single-component name; chars
+            other than dots/separators (e.g. 'etc') stay so the result is
+            informative, not 'detached'. Path traversal can't escape because
+            the result is a single dir component, not a multi-segment path."
+    (is (= "r__..-..-..-etc__1234567"
+           (delta/delta-db-name "r" "../../../etc" "1234567abc"))))
+  (testing "branch with only separator chars becomes 'detached'"
+    (is (= "r__detached__1234567" (delta/delta-db-name "r" "///" "1234567abc")))))
 
 (deftest delta-storage-dir-test
   (testing "default is ~/.noumenon/deltas"
