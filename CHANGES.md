@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0
+
 ### Added
 
 - **Branch-aware graph foundation** — every database now records which branch it represents. New `:branch/name`, `:branch/kind` (`:trunk` / `:feature` / `:release` / `:unknown`), `:branch/vcs`, and a tuple identity `:branch/repo+name` are populated automatically on every `update`. Repos point to their current branch via `:repo/branch`.

@@ -16,7 +16,7 @@ info:
 
     SSE events use the ProgressEvent schema: `event: progress`, `event: result`,
     `event: done`, `event: error`.
-  version: 0.7.0
+  version: 0.8.0
   license:
     name: MIT
     url: https://github.com/leifericf/noumenon/blob/main/LICENSE
