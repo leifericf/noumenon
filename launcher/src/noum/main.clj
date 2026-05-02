@@ -287,37 +287,56 @@
                    (:token flags) (assoc "NOUMENON_TOKEN" (:token flags)))]
     (:exit @(proc/process {:cmd args :extra-env env :inherit true}))))
 
+(defn- parse-watch-interval
+  "Interpret the --interval flag. Returns a positive integer (defaulting
+   to 30 when absent) or `{:error <message>}` on garbage / non-positive
+   input. Pulled out of `do-watch` so validation can run before any
+   `ensure-backend!` / HTTP call and so the gate is unit-testable."
+  [raw]
+  (cond
+    (nil? raw)             30
+    (let [n (parse-long (str raw))] (and n (pos? n))) (parse-long (str raw))
+    :else                  {:error (str "--interval must be a positive integer (got " raw ")")}))
+
+(defn- watch-loop!
+  "The actual polling loop. Extracted so do-watch can validate and fail
+   fast before reaching it."
+  [{:keys [conn repo-path body interval-s]}]
+  (loop [failures 0]
+    (let [resp (try (api/post! conn "/api/update" body)
+                    (catch Exception e
+                      {:ok false :error (or (.getMessage e) (str (class e)))}))]
+      (if (:ok resp)
+        (do (when (not= :up-to-date (get-in resp [:data :status]))
+              (tui/eprintln (str "  Updated: " (get-in resp [:data :added] 0) " added, "
+                                 (get-in resp [:data :modified] 0) " modified, "
+                                 (get-in resp [:data :deleted] 0) " deleted")))
+            (Thread/sleep (* interval-s 1000))
+            (recur 0))
+        (let [n       (inc failures)
+              err-msg (str/replace (or (:error resp) "unknown error")
+                                   #"(?:java\.\w+\.)*(\w+Exception): " "$1: ")]
+          (tui/eprintln (str (style/yellow "  Warning: ") repo-path ": update failed (" n "/3): " err-msg))
+          (if (>= n 3)
+            (do (tui/eprintln (str (style/red "Error: ") repo-path ": 3 consecutive failures, stopping watch."))
+                (tui/eprintln (str "  Last error: " err-msg))
+                (tui/eprintln "  Try `noum status` to check daemon health, or restart with `noum stop && noum start`.")
+                1)
+            (do (Thread/sleep (* interval-s 1000))
+                (recur n))))))))
+
 (defn- do-watch [{:keys [flags positional]}]
   (if-not (seq positional)
     (do (tui/eprintln "Usage: noum watch <repo> [--interval N] [--analyze]") 1)
-    (let [conn       (api/ensure-backend! flags)
-          repo-path  (first positional)
-          interval-s (or (some-> (:interval flags) parse-long) 30)
-          body       (cond-> {:repo_path (canonicalize-path repo-path)}
-                       (:analyze flags) (assoc :analyze true))]
-      (tui/eprintln (str "Watching " repo-path " (polling every " interval-s "s). Ctrl+C to stop."))
-      (loop [failures 0]
-        (let [resp (try (api/post! conn "/api/update" body)
-                        (catch Exception e
-                          {:ok false :error (or (.getMessage e) (str (class e)))}))]
-          (if (:ok resp)
-            (do (when (not= :up-to-date (get-in resp [:data :status]))
-                  (tui/eprintln (str "  Updated: " (get-in resp [:data :added] 0) " added, "
-                                     (get-in resp [:data :modified] 0) " modified, "
-                                     (get-in resp [:data :deleted] 0) " deleted")))
-                (Thread/sleep (* interval-s 1000))
-                (recur 0))
-            (let [n       (inc failures)
-                  err-msg (str/replace (or (:error resp) "unknown error")
-                                       #"(?:java\.\w+\.)*(\w+Exception): " "$1: ")]
-              (tui/eprintln (str (style/yellow "  Warning: ") repo-path ": update failed (" n "/3): " err-msg))
-              (if (>= n 3)
-                (do (tui/eprintln (str (style/red "Error: ") repo-path ": 3 consecutive failures, stopping watch."))
-                    (tui/eprintln (str "  Last error: " err-msg))
-                    (tui/eprintln "  Try `noum status` to check daemon health, or restart with `noum stop && noum start`.")
-                    1)
-                (do (Thread/sleep (* interval-s 1000))
-                    (recur n))))))))))
+    (let [interval-or-err (parse-watch-interval (:interval flags))]
+      (if (map? interval-or-err)
+        (do (tui/eprintln (str (style/red "Error: ") (:error interval-or-err))) 1)
+        (let [conn      (api/ensure-backend! flags)
+              repo-path (first positional)
+              body      (cond-> {:repo_path (canonicalize-path repo-path)}
+                          (:analyze flags) (assoc :analyze true))]
+          (tui/eprintln (str "Watching " repo-path " (polling every " interval-or-err "s). Ctrl+C to stop."))
+          (watch-loop! {:conn conn :repo-path repo-path :body body :interval-s interval-or-err}))))))
 
 (defn- do-delete [{:keys [flags positional]}]
   (if-not (seq positional)
