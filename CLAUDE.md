@@ -29,10 +29,11 @@ This project has its own MCP server (`noumenon`) that provides a pre-compiled kn
 | `noumenon_get_schema` | See all attributes and types in the knowledge graph |
 | `noumenon_list_queries` | List available named Datalog queries |
 | `noumenon_query` | Run a named Datalog query (some require params — check `list_queries` first) |
+| `noumenon_query_federated` | Run a federation-safe named query merged across the trunk DB and a local delta DB for a developer's branch (requires `basis_sha`) |
 | `noumenon_ask` | Ask a natural-language question — AI-powered iterative querying |
 | `noumenon_import` | Import git history and file structure (idempotent — safe to re-run) |
 | `noumenon_update` | Sync knowledge graph with latest git state (import + enrich; pass `analyze=true` for LLM analysis) |
-| `noumenon_analyze` | Run LLM analysis on files — by default only unanalyzed; pass `reanalyze` for re-analysis (all, prompt-changed, model-changed, stale) |
+| `noumenon_analyze` | Run LLM analysis on files — by default only unanalyzed; pass `reanalyze` for re-analysis (all, prompt-changed, model-changed, stale). Hits the content-addressed promotion cache before the LLM; pass `no_promote=true` to bypass |
 | `noumenon_enrich` | Extract cross-file import/dependency graph deterministically (no LLM calls) |
 | `noumenon_synthesize` | Identify architectural components from analyzed codebase data (macro analysis) |
 | `noumenon_list_databases` | List all noumenon databases with entity counts, pipeline stages, and cost |

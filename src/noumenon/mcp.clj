@@ -9,6 +9,7 @@
             [noumenon.analyze :as analyze]
             [noumenon.artifacts :as artifacts]
             [noumenon.db :as db]
+            [noumenon.delta :as delta]
             [noumenon.embed :as embed]
             [noumenon.files :as files]
             [noumenon.git :as git]
@@ -113,6 +114,22 @@
    {:name "noumenon_list_queries"
     :description "List all available named Datalog queries with descriptions and required parameters. Use this to discover what structured questions you can ask the knowledge graph via noumenon_query."
     :inputSchema {:type "object" :properties {}}}
+   {:name "noumenon_query_federated"
+    :description "Run a named Datalog query merged across the trunk database and a local delta database for a developer's branch. Materializes the delta DB on demand from (repo_path, basis_sha), then returns trunk rows minus delta paths concatenated with delta's own rows so the result reflects the working branch. The query must be flagged :federation-safe? in its EDN — non-safe queries return trunk-only with federation_safe=false. Use this when a developer's HEAD diverges from the hosted trunk basis."
+    :inputSchema {:type "object"
+                  :properties (merge repo-path-prop
+                                     {"query_name" {:type "string"
+                                                    :description "Named query — must be federation-safe (see noumenon_list_queries)"}
+                                      "basis_sha" {:type "string"
+                                                   :description "40-char lowercase hex SHA — the trunk basis the delta is based on"}
+                                      "branch" {:type "string"
+                                                :description "Branch name (defaults to current local HEAD branch)"}
+                                      "params" {:type "object"
+                                                :description "Optional parameters for parameterized queries (string keys and values)"
+                                                :additionalProperties {:type "string"}}
+                                      "limit" {:type "integer"
+                                               :description "Maximum number of result rows (default 500, max 10000)"}})
+                  :required ["query_name" "repo_path" "basis_sha"]}}
    {:name "noumenon_get_schema"
     :description "Get the database schema showing all attributes and their types. Requires a repo to have been imported first."
     :inputSchema {:type "object"
@@ -147,7 +164,7 @@
                                       "limit" {:type "integer" :description "Max results to return (default: 8, max: 50)"}})
                   :required ["query" "repo_path"]}}
    {:name "noumenon_analyze"
-    :description "Run LLM analysis on repository files to enrich the knowledge graph with semantic metadata. By default only analyzes files not yet analyzed. Pass reanalyze to re-analyze files: all, prompt-changed, model-changed, or stale. Requires a prior import."
+    :description "Run LLM analysis on repository files to enrich the knowledge graph with semantic metadata. By default only analyzes files not yet analyzed. Pass reanalyze to re-analyze files: all, prompt-changed, model-changed, or stale. Each file is checked against the content-addressed promotion cache before any LLM call: if a previously-analyzed file held the same blob-sha under the current prompt+model, its analysis is copied across with :prov/promoted-from lineage. The result reports files_analyzed, files_promoted, files_skipped. Pass no_promote=true to bypass the cache and always call the LLM. Requires a prior import."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"provider" {:type "string"
@@ -160,6 +177,8 @@
                                                    :description "Stop after analyzing N files (useful for sampling)"}
                                       "reanalyze" {:type "string"
                                                    :description "Re-analyze scope: all, prompt-changed, model-changed, stale (default: only unanalyzed files)"}
+                                      "no_promote" {:type "boolean"
+                                                    :description "Bypass the content-addressed promotion cache; always invoke the LLM"}
                                       "path" {:type "string" :description "File/dir selector (comma-separated)"}
                                       "include" {:type "string" :description "Glob include selector (comma-separated)"}
                                       "exclude" {:type "string" :description "Glob exclude selector (comma-separated)"}
@@ -436,6 +455,52 @@
                                      "Pass a higher `limit` to see more.")))))
           (tool-error (:error result)))))))
 
+(defn- handle-query-federated [args defaults]
+  (util/validate-string-length! "query_name" (args "query_name") 256)
+  (let [basis-sha (args "basis_sha")
+        branch    (args "branch")]
+    (when-not (sync/valid-sha? basis-sha)
+      (throw (ex-info "Invalid basis_sha"
+                      {:user-message "basis_sha must be a 40-char lowercase hex SHA"})))
+    (with-conn args defaults
+      (fn [{:keys [db meta-db repo-path]}]
+        (let [raw-params (args "params")
+              _          (when (> (count raw-params) 20)
+                           (throw (ex-info "Too many params"
+                                           {:user-message "params: max 20 entries"})))
+              _          (doseq [[k v] raw-params]
+                           (util/validate-string-length! (str "params." k) (str v) 1024))
+              params     (into {} (map (fn [[k v]] [(keyword k) v])) raw-params)
+              delta-opts (cond-> {} branch (assoc :branch-name branch))
+              delta-conn (delta/ensure-delta-db! repo-path basis-sha delta-opts)
+              _          (delta/update-delta! delta-conn repo-path basis-sha delta-opts)
+              delta-db   (d/db delta-conn)
+              query-name (args "query_name")
+              result     (query/run-federated-query meta-db db delta-db query-name params)]
+          (if (:error result)
+            (tool-error (:error result))
+            (let [all-rows   (:ok result)
+                  total      (count all-rows)
+                  limit      (min (or (some-> (args "limit") long) 500) 10000)
+                  rows       (take limit all-rows)
+                  truncated? (> total limit)
+                  query-def  (artifacts/load-named-query meta-db query-name)
+                  header     (when-let [cols (:columns query-def)]
+                               (str "Columns: " (str/join ", " cols) "\n"))
+                  fsafe?     (:federation-safe? result)
+                  summary    (str "Federated '" query-name "' "
+                                  "(trunk: " (:trunk-count result) ", "
+                                  "delta: " (:delta-count result)
+                                  (when-not fsafe? ", NOT federation-safe — trunk-only")
+                                  "): " (count rows)
+                                  (when truncated? (str " of " total))
+                                  " results\n")]
+              (tool-result (str summary header
+                                (str/join "\n" (map pr-str rows))
+                                (when truncated?
+                                  (str "\n... truncated (" (- total limit) " more rows). "
+                                       "Pass a higher `limit` to see more.")))))))))))
+
 (defn- handle-list-queries [_args defaults]
   (let [db-dir    (util/resolve-db-dir defaults)
         meta-conn (db/ensure-meta-db db-dir)
@@ -576,10 +641,13 @@
                                                                   :model-id model-id
                                                                   :provider (name provider-kw)
                                                                   :concurrency concurrency
+                                                                  :no-promote? (boolean (args "no_promote"))
                                                                   :progress-fn (:progress-fn defaults))
                                                      max-files (assoc :max-files max-files)))]
             (tool-result (str "Analysis complete. "
                               (:files-analyzed result 0) " files analyzed"
+                              (when (pos? (:files-promoted result 0))
+                                (str ", " (:files-promoted result 0) " promoted (cache hit)"))
                               (when (pos? (:files-parse-errored result 0))
                                 (str ", " (:files-parse-errored result 0) " parse errors"))
                               (when (pos? (:files-errored result 0))
@@ -1054,6 +1122,7 @@
   {"noumenon_import"            handle-import
    "noumenon_status"            handle-status
    "noumenon_query"             handle-query
+   "noumenon_query_federated"   handle-query-federated
    "noumenon_list_queries"      handle-list-queries
    "noumenon_get_schema"        handle-get-schema
    "noumenon_update"            handle-update
@@ -1203,6 +1272,7 @@
   {"noumenon_import"            {:path "/api/import" :method :post}
    "noumenon_status"            {:path "/api/status/:repo" :method :get}
    "noumenon_query"             {:path "/api/query" :method :post}
+   "noumenon_query_federated"   {:path "/api/query-federated" :method :post}
    "noumenon_list_queries"      {:path "/api/queries" :method :get}
    "noumenon_get_schema"        {:path "/api/schema/:repo" :method :get}
    "noumenon_update"            {:path "/api/update" :method :post}
@@ -1226,7 +1296,7 @@
 
 (def ^:private read-only-proxy-tools
   "Tools safe to proxy without admin privileges."
-  #{"noumenon_status" "noumenon_query" "noumenon_list_queries"
+  #{"noumenon_status" "noumenon_query" "noumenon_query_federated" "noumenon_list_queries"
     "noumenon_get_schema" "noumenon_list_databases" "noumenon_ask"
     "noumenon_search" "noumenon_benchmark_results" "noumenon_benchmark_compare"
     "noumenon_introspect_status" "noumenon_introspect_history"
