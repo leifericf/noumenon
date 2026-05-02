@@ -42,6 +42,53 @@
     (testing "public IPv6 2001:4860:4860::8888 is not private (used to crash with MissingReflectionRegistrationError)"
       (is (false? (boolean (blocked? (java.net.InetAddress/getByName "2001:4860:4860::8888"))))))))
 
+(defn- assert-no-http-call
+  "Run f with api/post! / api/get! / api/ensure-backend! redefined to
+   throw — proves the launcher rejected without trying to talk to the
+   daemon."
+  [f]
+  (require 'noum.api)
+  (with-redefs [noum.api/post!           (fn [& _] (throw (ex-info "post! must not be called" {})))
+                noum.api/get!            (fn [& _] (throw (ex-info "get! must not be called" {})))
+                noum.api/ensure-backend! (fn [& _] (throw (ex-info "ensure-backend! must not be called" {})))]
+    (f)))
+
+(deftest do-query-rejects-blank-as-of-and-raw
+  ;; Bug: --as-of "" and --raw "" passed launcher's truthy / string?
+  ;; checks because empty string is truthy. The launcher then made an
+  ;; HTTP call so the user could see a server-side blank-rejection.
+  (require 'noum.main)
+  (let [do-query (resolve 'noum.main/do-query)]
+    (testing "--as-of blank rejected with no API call"
+      (is (= 1 (assert-no-http-call
+                #(do-query {:flags {:as-of ""} :positional ["q" "/tmp"]})))))
+    (testing "--as-of whitespace rejected with no API call"
+      (is (= 1 (assert-no-http-call
+                #(do-query {:flags {:as-of "   "} :positional ["q" "/tmp"]})))))
+    (testing "--raw blank rejected with no API call"
+      (is (= 1 (assert-no-http-call
+                #(do-query {:flags {:raw ""} :positional ["/tmp"]})))))
+    (testing "--raw whitespace rejected with no API call"
+      (is (= 1 (assert-no-http-call
+                #(do-query {:flags {:raw "  "} :positional ["/tmp"]})))))))
+
+(deftest do-delta-ensure-validates-basis-sha
+  ;; Bug: `noum delta-ensure /tmp --basis-sha` (flag with no value) made
+  ;; the launcher pass the boolean `true` through to the server, which
+  ;; validated and rejected with a 400 — wasted round-trip. Same for an
+  ;; obviously bogus SHA shape.
+  (require 'noum.main)
+  (let [do-delta-ensure (resolve 'noum.main/do-delta-ensure)]
+    (testing "boolean-true basis-sha rejected with no API call"
+      (is (= 1 (assert-no-http-call
+                #(do-delta-ensure {:flags {:basis-sha true} :positional ["/tmp"]})))))
+    (testing "non-hex SHA rejected with no API call"
+      (is (= 1 (assert-no-http-call
+                #(do-delta-ensure {:flags {:basis-sha "not-hex"} :positional ["/tmp"]})))))
+    (testing "uppercase-hex SHA rejected with no API call"
+      (is (= 1 (assert-no-http-call
+                #(do-delta-ensure {:flags {:basis-sha "A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4"} :positional ["/tmp"]})))))))
+
 (deftest serve-rejects-host-flag
   ;; Bug: `noum serve --host X` silently dropped --host and ran the MCP
   ;; server colocated with the local daemon. Reject the combination

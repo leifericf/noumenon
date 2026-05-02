@@ -538,6 +538,12 @@
                                          :basis-sha (:basis-sha ctx)
                                          :branch    (:branch ctx)})))))))
 
+(defn- valid-sha?
+  "True for a 40-char lowercase hex string. Used by `--basis-sha`
+   validation in `query --federate` and `delta-ensure`."
+  [s]
+  (and (string? s) (some? (re-matches #"[a-f0-9]{40}" s))))
+
 (defn- do-query [parsed]
   (let [{:keys [flags positional] :as parsed} (maybe-auto-federate parsed)]
     (cond
@@ -548,8 +554,12 @@
       (do (tui/eprintln "Error: --federate cannot be combined with --raw or --as-of.") 1)
 
       (:raw flags)
-      (if-not (string? (:raw flags))
+      (cond
+        (not (string? (:raw flags)))
         (do (tui/eprintln "Usage: noum query --raw '<datalog>' <repo> [--limit N]") 1)
+        (str/blank? (:raw flags))
+        (do (tui/eprintln "Error: --raw cannot be blank.") 1)
+        :else
         (let [conn (api/ensure-backend! flags)
               body (cond-> {:query     (:raw flags)
                             :repo_path (canonicalize-path (or (first positional) "."))}
@@ -557,8 +567,12 @@
           (print-api-result (api/post! conn "/api/query-raw" body))))
 
       (:as-of flags)
-      (if (< (count positional) 2)
+      (cond
+        (< (count positional) 2)
         (do (tui/eprintln "Usage: noum query <name> <repo> --as-of <date> [--param key=value]") 1)
+        (or (not (string? (:as-of flags))) (str/blank? (:as-of flags)))
+        (do (tui/eprintln "Error: --as-of cannot be blank.") 1)
+        :else
         (let [conn (api/ensure-backend! flags)
               body (cond-> {:query_name (first positional)
                             :repo_path  (canonicalize-path (second positional))
@@ -573,6 +587,8 @@
         (do (tui/eprintln "Usage: noum query <name> <repo> --federate --basis-sha <sha>") 1)
         (not (:basis-sha flags))
         (do (tui/eprintln "Error: --federate requires --basis-sha <sha>") 1)
+        (not (valid-sha? (:basis-sha flags)))
+        (do (tui/eprintln "Error: --basis-sha must be a 40-char lowercase hex SHA.") 1)
         :else
         (let [conn (api/ensure-backend! flags)
               body (cond-> {:query_name (first positional)
@@ -796,9 +812,14 @@
             1)))))
 
 (defn- do-delta-ensure [{:keys [flags] :as parsed}]
-  (if-not (or (:basis-sha flags) (:basis_sha flags))
-    (do (tui/eprintln "Usage: noum delta-ensure <repo> --basis-sha <sha>") 1)
-    (do-api-command (assoc parsed :command "delta-ensure"))))
+  (let [sha (or (:basis-sha flags) (:basis_sha flags))]
+    (cond
+      (not sha)
+      (do (tui/eprintln "Usage: noum delta-ensure <repo> --basis-sha <sha>") 1)
+      (not (valid-sha? sha))
+      (do (tui/eprintln "Error: --basis-sha must be a 40-char lowercase hex SHA.") 1)
+      :else
+      (do-api-command (assoc parsed :command "delta-ensure")))))
 
 (def dispatch
   {"help"       do-help
