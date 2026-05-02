@@ -21,6 +21,77 @@
 (def ^:private valid-federation-modes
   #{:tombstone-only :added-files-merge})
 
+(defn- query-attrs
+  "Extract namespaced-keyword attrs that appear anywhere in the query EDN.
+   Over-broad on purpose: catches keywords in value position too. For an
+   allowlist check that's harmless — a value-position keyword can only
+   trigger a false reject if it happens to be a real attribute name, which
+   is the case the validator wants to flag anyway."
+  [query-edn]
+  (->> query-edn
+       (tree-seq coll? seq)
+       (filter keyword?)
+       (filter namespace)
+       set))
+
+(defn- query-uses-rules?
+  "True if the query references the `%` rules placeholder anywhere."
+  [query-edn]
+  (let [rules-marker (symbol "%")]
+    (boolean (some (partial = rules-marker)
+                   (tree-seq coll? seq query-edn)))))
+
+(defn- stable-attrs
+  "Set of attribute idents tagged `:noumenon/scope :stable` in the meta-db."
+  [meta-db]
+  (->> (d/q '[:find ?ident
+              :where
+              [?e :db/ident ?ident]
+              [?e :noumenon/scope :stable]]
+            meta-db)
+       (map first)
+       set))
+
+(def ^:private always-allowed-namespaces
+  "Namespaces of keywords that show up in queries but aren't user attrs:
+   `:db/*` (Datomic-internal idents like :db/id) and `:fressian/*` (Datomic
+   serialization). Treat as stable so the validator doesn't false-positive
+   on them."
+  #{"db" "fressian"})
+
+(defn validate-federation-mode!
+  "Throw ex-info if a query in `:added-files-merge` mode touches any attr
+   that isn't tagged `:noumenon/scope :stable`, or if it uses Datalog rules.
+
+   No-op for `:tombstone-only` or absent mode — those are always safe.
+
+   Called at seed time so a misclassified query is rejected before its
+   merge behavior surprises a runtime caller."
+  [meta-db query-name {:keys [federation-mode query]}]
+  (when (= federation-mode :added-files-merge)
+    (when (query-uses-rules? query)
+      (throw (ex-info (str "Query '" query-name "' uses Datalog rules but is "
+                           ":federation-mode :added-files-merge. Rules can "
+                           "indirectly touch trunk-only attrs through their "
+                           "bodies; :added-files-merge requires direct "
+                           "stable-only joins. Either rewrite without rules "
+                           "or change the mode to :tombstone-only.")
+                      {:query query-name})))
+    (let [stable     (stable-attrs meta-db)
+          violations (->> (query-attrs query)
+                          (remove stable)
+                          (remove #(always-allowed-namespaces (namespace %)))
+                          set)]
+      (when (seq violations)
+        (throw (ex-info (str "Query '" query-name "' is :federation-mode "
+                             ":added-files-merge but references trunk-only or "
+                             "untagged attrs: " (pr-str violations)
+                             ". Only attrs explicitly tagged "
+                             ":noumenon/scope :stable in the schema may be "
+                             "joined on under :added-files-merge.")
+                        {:query query-name :violations violations}))))
+    nil))
+
 (defn- query-seed-tx
   "Build a transaction map for a single named query from its classpath EDN.
    :federation-mode (when present) populates the new attribute and also
@@ -162,6 +233,14 @@
   [conn source]
   (let [index     (load-edn-resource "queries/index.edn")
         active    (set index)
+        meta-db   (d/db conn)
+        ;; Validate :federation-mode declarations BEFORE producing any
+        ;; tx-data: a misclassified query (e.g. :added-files-merge that
+        ;; touches :file/imports) gets rejected at seed time so it can't
+        ;; ship a silent false-positive merge.
+        _         (doseq [qname index]
+                    (when-let [qdef (load-edn-resource (str "queries/" qname ".edn"))]
+                      (validate-federation-mode! meta-db qname qdef)))
         query-txs (->> index
                        (keep #(query-seed-tx % active))
                        vec)

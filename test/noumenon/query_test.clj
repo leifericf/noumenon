@@ -314,6 +314,54 @@
         (is (contains? paths "src/c.clj") "delta-added c.clj included via :added-files-merge")
         (is (= 1 (:delta-count result)) "delta contributed exactly one row")))))
 
+(deftest validate-federation-mode-allows-stable-only-joins
+  (testing "validate-federation-mode! accepts an :added-files-merge query
+            whose :where touches only :stable attrs"
+    (let [mdb (meta-db)
+          q   {:federation-mode :added-files-merge
+               :query '[:find ?path :where [?file :file/path ?path] [?file :file/lang _]]}]
+      (is (nil? (artifacts/validate-federation-mode! mdb "stable-by-lang" q))
+          "all attrs are :stable — no throw, returns nil"))))
+
+(deftest validate-federation-mode-rejects-trunk-only-joins
+  (testing "an :added-files-merge query that touches a non-:stable attr
+            (e.g. :file/imports) is rejected at seed time — without this
+            guard a contributor could re-introduce the orphan-files-style
+            false positive"
+    (let [mdb (meta-db)
+          q   {:federation-mode :added-files-merge
+               :query '[:find ?path :where [?file :file/path ?path] [?file :file/imports _]]}
+          err (try (artifacts/validate-federation-mode! mdb "imports-merge" q)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+      (is (some? err))
+      (is (re-find #":file/imports" (.getMessage err))
+          "error message names the offending attr"))))
+
+(deftest validate-federation-mode-rejects-rule-using-added-files-merge
+  (testing "queries that use rules (`%`) cannot opt into :added-files-merge —
+            rules can indirectly touch trunk-only attrs and walking them is
+            out of scope for v1"
+    (let [mdb (meta-db)
+          q   {:federation-mode :added-files-merge
+               :uses-rules      true
+               :query '[:find ?path :in $ % :where (some-rule ?file ?path)]}
+          err (try (artifacts/validate-federation-mode! mdb "rule-merge" q)
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+      (is (some? err))
+      (is (re-find #"rules" (.getMessage err))))))
+
+(deftest validate-federation-mode-skips-tombstone-only-and-absent
+  (testing "no validation runs when mode is :tombstone-only or absent —
+            the validator only enforces the stable-only rule for the opt-in"
+    (let [mdb (meta-db)
+          tombstone {:federation-mode :tombstone-only
+                     :query '[:find ?path :where [?file :file/path ?path] [?file :file/imports _]]}
+          absent    {:query '[:find ?path :where [?file :file/path ?path] [?file :file/imports _]]}]
+      (is (nil? (artifacts/validate-federation-mode! mdb "x" tombstone)))
+      (is (nil? (artifacts/validate-federation-mode! mdb "y" absent))))))
+
 (deftest run-federated-query-falls-back-when-unsafe
   (let [trunk (th/make-test-conn "fed-trunk-unsafe")
         delta (th/make-test-conn "fed-delta-unsafe")
