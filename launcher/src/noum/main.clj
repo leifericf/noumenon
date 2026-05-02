@@ -738,6 +738,30 @@
 
 ;; --- Connection management ---
 
+(defn- ip-literal?
+  "True for IPv4 literal hostnames and `localhost`. The dot-segment
+   heuristic that works for real hostnames (`api.example.com` → \"api\")
+   produces useless results here (`127.0.0.1` → \"127\")."
+  [host]
+  (or (some? (re-matches #"\d+\.\d+\.\d+\.\d+" host))
+      (= host "localhost")))
+
+(defn- derive-connection-name
+  "Auto-derive a saved-connection name from the URL the user typed.
+   For IP literals / localhost, keep the host (and port, if any, joined
+   by `-` so the name is filesystem-safe). For real hostnames, take the
+   first dot-segment, which keeps `api.example.com` → \"api\"."
+  [target]
+  (let [host-and-port (-> target
+                          (str/replace #"^https?://" "")
+                          (str/split #"/")
+                          first)
+        host          (first (str/split host-and-port #":"))]
+    (if (ip-literal? host)
+      (str/replace host-and-port #":" "-")
+      (let [parts (str/split host #"\.")]
+        (if (> (count parts) 1) (first parts) host)))))
+
 (defn- do-connect [{:keys [positional flags]}]
   (if-not (seq positional)
     (do (tui/eprintln "Usage: noum connect <url-or-name> [--token <token>]")
@@ -750,15 +774,7 @@
                                " Commands will use the local daemon."))
             0)
         (let [token (:token flags)
-              ;; Derive a connection name from the URL
-              ;; Derive name from hostname (drop TLD): noumenon.example.com -> noumenon
-              name  (or (:name flags)
-                        (let [host (str/replace target #"https?://" "")
-                              host (first (str/split host #"[:/]"))
-                              parts (str/split host #"\.")]
-                          (if (> (count parts) 1)
-                            (first parts)
-                            host)))
+              name  (or (:name flags) (derive-connection-name target))
               conn  {:host target :token token :insecure (:insecure flags)}]
           (when (and token (:insecure flags))
             (tui/eprintln (str (style/yellow "WARNING: ") "Sending auth token over unencrypted HTTP. "

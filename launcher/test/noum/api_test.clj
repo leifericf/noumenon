@@ -60,6 +60,27 @@
         ec  (binding [*err* buf] (f))]
     [ec (str buf)]))
 
+(deftest derive-connection-name
+  ;; Bug: derive-connection-name took the first dot-segment of the host,
+  ;; which works for hostnames (`api.example.com` → "api") but produces
+  ;; useless names for IP literals (`127.0.0.1:7895` → "127"). The new
+  ;; logic detects IP literals and keeps a disambiguating port suffix.
+  (require 'noum.main)
+  (let [derive (resolve 'noum.main/derive-connection-name)]
+    (testing "IPv4 literal keeps host:port (with port replaced by `-`)"
+      (is (= "127.0.0.1-7895" (derive "127.0.0.1:7895"))))
+    (testing "IPv4 literal without port"
+      (is (= "127.0.0.1" (derive "127.0.0.1"))))
+    (testing "localhost is treated like an IP literal so the port disambiguates"
+      (is (= "localhost-7895" (derive "localhost:7895")))
+      (is (= "localhost" (derive "localhost"))))
+    (testing "hostname uses first dot-segment (existing behavior)"
+      (is (= "api" (derive "api.example.com")))
+      (is (= "noumenon" (derive "noumenon.example.com:443"))))
+    (testing "scheme prefix is stripped"
+      (is (= "prod" (derive "https://prod.api.example.com")))
+      (is (= "127.0.0.1-7895" (derive "http://127.0.0.1:7895"))))))
+
 (deftest do-introspect-rejects-mutually-exclusive-flags
   ;; Bug: --status / --stop / --history are mutually exclusive, but the
   ;; cond order silently picked the first one set, ignoring the others.
