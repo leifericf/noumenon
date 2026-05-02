@@ -1169,11 +1169,14 @@
     (validate-string-length! "key" key 256)
     (when (string? value)
       (validate-string-length! "value" value max-param-value-len))
-    (let [meta-conn (db/ensure-meta-db (:db-dir config))
-          edn-value (if (string? value)
-                      (try (edn/read-string {:readers {}} value) (catch Exception _ value))
-                      value)]
-      (artifacts/set-setting! meta-conn key edn-value)
+    ;; Store the value as the JSON type the caller sent. The earlier
+    ;; `try (edn/read-string ...)` silently re-typed every string that
+    ;; happened to parse as EDN ("42" -> 42, "true" -> true, ":foo" ->
+    ;; keyword), which surprised cross-language clients and made round-
+    ;; trip values diverge from input. Typed callers send `{"value": 42}`
+    ;; for an int; string callers send `{"value": "42"}` for a string.
+    (let [meta-conn (db/ensure-meta-db (:db-dir config))]
+      (artifacts/set-setting! meta-conn key value)
       (ok {:key key}))))
 
 ;; --- Routing ---

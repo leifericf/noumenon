@@ -632,8 +632,14 @@
                         (do (tui/eprintln (str "  " k ": " val)) 0)
                         (do (tui/eprintln (str "No setting: " k)) 1)))
                     (print-api-result all)))))
+          ;; Pre-parse the CLI string so daemon-side settings store the
+          ;; natural type (CLI `noum settings retry/limit 5` becomes the
+          ;; integer 5, not the string "5"). The daemon no longer
+          ;; silently re-types string values, so the launcher does the
+          ;; conversion that CLI users already expect — symmetric with
+          ;; how launcher-local settings handle the same shape above.
           (print-api-result (api/post! conn "/api/settings"
-                                       {:key k :value v})))))))
+                                       {:key k :value (parse-setting-value v)})))))))
 
 ;; --- Connection management ---
 

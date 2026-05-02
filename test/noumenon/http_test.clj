@@ -240,6 +240,42 @@
       (is (re-find #"(?i)invalid json" (str (:error body)))
           (str "expected 'Invalid JSON' wording, got: " (:error body))))))
 
+(deftest settings-strings-stay-strings
+  (testing "POST /api/settings with `{\"value\": \"42\"}` used to round-trip
+            as the integer 42 — the handler ran every string value
+            through edn/read-string and silently re-typed it. The
+            handler now stores strings as strings; typed callers can
+            send `{\"value\": 42}` (JSON int) for an integer. Cross-
+            language clients (Electron UI, future GUIs) get the type
+            they sent."
+    (let [tmp     (str "/tmp/noumenon-settings-test-" (System/currentTimeMillis))
+          handler (http/make-handler {:db-dir tmp})
+          set-it  (fn [k v]
+                    (handler (post-with-body "/api/settings" {:key k :value v})))
+          read-it (fn []
+                    (let [resp (handler {:request-method :get :uri "/api/settings"})]
+                      (json/read-str (:body resp) :key-fn keyword)))]
+      (testing "string \"42\" stays a string (was the integer 42)"
+        (set-it "test/string" "42")
+        (let [body (read-it)]
+          (is (= "42" (get-in body [:data (keyword "test/string")]))
+              (str "expected string '42', got: " (pr-str (:data body))))))
+      (testing "string \"true\" stays a string (was the boolean true)"
+        (set-it "test/bool-string" "true")
+        (let [body (read-it)]
+          (is (= "true" (get-in body [:data (keyword "test/bool-string")]))
+              (str "expected string 'true', got: " (pr-str (:data body))))))
+      (testing "JSON integer is still stored as integer"
+        (set-it "test/int" 42)
+        (let [body (read-it)]
+          (is (= 42 (get-in body [:data (keyword "test/int")]))
+              (str "expected int 42, got: " (pr-str (:data body))))))
+      (testing "JSON boolean is still stored as boolean"
+        (set-it "test/bool" true)
+        (let [body (read-it)]
+          (is (= true (get-in body [:data (keyword "test/bool")]))
+              (str "expected bool true, got: " (pr-str (:data body)))))))))
+
 (deftest as_of-non-string-non-number-clean-error
   (testing "as_of with a non-string, non-number value used to surface
             the JVM ClassCastException message verbatim, leaking
