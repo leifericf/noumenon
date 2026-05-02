@@ -77,7 +77,22 @@
         (throw (ex-info (str "Cannot resolve hostname: " host)
                         {:url url :host host}))))))
 
-(def ^:private validate-clone-url! validate-url-host!)
+(defn- validate-clone-url!
+  "Validate that a URL is safe to pass to `git clone`. Two gates:
+   (1) the scheme must match the `git-url?` allowlist (`https?://` or
+   `git@host:path`), and (2) the resolved host must not point at a
+   private/loopback range. The scheme check is the primary defense
+   against `file://` / `ssh://` / raw paths — `validate-url-host!`'s
+   regex-based hostname extractor returns nil for those, so its
+   `when-let` would otherwise short-circuit and leave the URL
+   unchecked. Perforce depot paths follow a different code path
+   (`p4-clone!`) and never reach this validator."
+  [url]
+  (when-not (git-url? url)
+    (throw (ex-info (str "Blocked: invalid URL scheme (only https://, http://, "
+                         "and git@host:path are allowed): " url)
+                    {:url url})))
+  (validate-url-host! url))
 
 (defn validate-proxy-host!
   "Validate that a proxy host URL does not resolve to a private/loopback address.

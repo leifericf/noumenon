@@ -457,6 +457,24 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Blocked.*private"
                           (git/clone! "https://127.0.0.1/evil/repo.git" "/tmp/test-clone")))))
 
+(deftest clone-blocks-non-network-schemes
+  (testing "file:// is rejected — extract-hostname's when-let used to
+            short-circuit for schemes without a host, leaving file://
+            URLs to be cloned by `git clone --bare -- file:///path`,
+            which gave any authenticated admin a way to slurp a
+            private local git repo into the daemon's storage and then
+            query it via /api/ask"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"(?i)scheme|invalid"
+                          (git/clone-bare! "file:///tmp/probe-repo" "/tmp/test-clone-bare"))))
+  (testing "ssh:// is also rejected — only git@host:path SSH form is
+            allowed, not the URL form, because the regex-based hostname
+            extractor doesn't normalize ssh:// reliably"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"(?i)scheme|invalid"
+                          (git/clone! "ssh://git@github.com/foo/bar.git" "/tmp/test-clone"))))
+  (testing "raw filesystem paths are rejected"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"(?i)scheme|invalid"
+                          (git/clone-bare! "/tmp/probe-repo" "/tmp/test-clone-bare")))))
+
 (deftest blocked-address-detects-ipv4-mapped-ipv6
   (testing "blocked-address? catches IPv4-mapped IPv6 loopback"
     (let [addr (java.net.InetAddress/getByName "::ffff:127.0.0.1")]
