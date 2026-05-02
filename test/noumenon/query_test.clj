@@ -1,7 +1,7 @@
 (ns noumenon.query-test
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is]]
+            [clojure.test :refer [deftest is testing]]
             [datomic.client.api :as d]
             [noumenon.artifacts :as artifacts]
             [noumenon.db :as db]
@@ -231,14 +231,27 @@
       (is (contains? paths "src/a.clj"))
       (is (contains? paths "src/b.clj")))))
 
-(deftest delta-paths-from-delta-db
+(deftest delta-tombstoned-paths-from-delta-db
   (let [conn (make-conn)]
     (d/transact conn {:tx-data [{:file/path "src/a.clj" :file/size 100}
-                                {:file/path "src/b.clj" :file/deleted? true}]})
-    (is (= #{"src/a.clj" "src/b.clj"}
-           (set (query/delta-paths (d/db conn)))))))
+                                {:file/path "src/b.clj" :file/deleted? true}
+                                {:file/path "src/c.clj" :file/deleted? true}]})
+    (is (= #{"src/b.clj" "src/c.clj"}
+           (set (query/delta-tombstoned-paths (d/db conn))))
+        "only files with :file/deleted? true are listed; live entries are not")))
 
-(deftest run-federated-query-merges-trunk-minus-delta-paths
+(deftest delta-added-paths-vs-trunk
+  (let [trunk (th/make-test-conn "added-trunk")
+        delta (th/make-test-conn "added-delta")]
+    (d/transact trunk {:tx-data [{:file/path "src/a.clj"} {:file/path "src/b.clj"}]})
+    (d/transact delta {:tx-data [{:file/path "src/a.clj" :file/size 999}    ;; modified
+                                 {:file/path "src/c.clj" :file/size 100}    ;; added
+                                 {:file/path "src/b.clj" :file/deleted? true}]}) ;; tombstoned
+    (is (= #{"src/c.clj"}
+           (set (query/delta-added-paths (d/db trunk) (d/db delta))))
+        "only files in delta but not in trunk count as added — modified and tombstoned excluded")))
+
+(deftest run-federated-query-tombstone-only-merge
   (let [trunk (th/make-test-conn "fed-trunk-test")
         delta (th/make-test-conn "fed-delta-test")
         mdb   (meta-db)]
@@ -246,20 +259,23 @@
     (d/transact trunk {:tx-data [{:file/path "src/a.clj" :file/size 100 :file/lang :clojure}
                                  {:file/path "src/b.clj" :file/size 200 :file/lang :clojure}
                                  {:file/path "src/c.clj" :file/size 300 :file/lang :clojure}]})
-    ;; Delta modifies a.clj (different size) and tombstones c.clj
+    ;; Delta: a.clj modified, c.clj tombstoned, d.clj added
     (d/transact delta {:tx-data [{:file/path "src/a.clj" :file/size 999 :file/lang :clojure}
-                                 {:file/path "src/c.clj" :file/deleted? true}]})
+                                 {:file/path "src/c.clj" :file/deleted? true}
+                                 {:file/path "src/d.clj" :file/size 50 :file/lang :clojure}]})
     (let [result (query/run-federated-query mdb (d/db trunk) (d/db delta)
                                             "orphan-files" {})
           paths  (set (map first (:ok result)))]
       (is (true? (:federation-safe? result)))
-      ;; Trunk row count: only b.clj (a and c excluded by delta paths)
-      (is (= 1 (:trunk-count result)) "trunk has b only")
-      ;; Delta returns a.clj as orphan (it's still in delta with file/lang).
-      ;; Tombstoned c.clj has no :file/lang so it's NOT an orphan in delta.
-      (is (= 1 (:delta-count result)) "delta has a only (c tombstone has no lang)")
-      (is (= #{"src/b.clj" "src/a.clj"} paths)
-          "merged result has b from trunk and a from delta — c is gone"))))
+      (testing "tombstone-only merge keeps trunk's view of modified files"
+        ;; Trunk: a (modified — KEPT), b (unchanged — kept), c (tombstoned — excluded)
+        (is (= 2 (:trunk-count result)) "trunk has a and b (c excluded by tombstone)")
+        (is (contains? paths "src/a.clj") "modified file a.clj keeps trunk's row")
+        (is (contains? paths "src/b.clj") "unchanged file b.clj is in trunk view")
+        (is (not (contains? paths "src/c.clj")) "tombstoned file c.clj is gone"))
+      (testing "delta side contributes only ADDED files (not modified — would double-count)"
+        (is (= 1 (:delta-count result)) "delta contributes only d.clj")
+        (is (contains? paths "src/d.clj") "added file d.clj is included from delta")))))
 
 (deftest run-federated-query-falls-back-when-unsafe
   (let [trunk (th/make-test-conn "fed-trunk-unsafe")

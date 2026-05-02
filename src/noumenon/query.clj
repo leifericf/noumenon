@@ -1,6 +1,7 @@
 (ns noumenon.query
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.set]
             [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.artifacts :as artifacts]))
@@ -126,30 +127,68 @@
 
 ;; --- Federation merge ---
 
-(defn delta-paths
-  "Return the set of :file/path values present in a delta DB."
+(defn delta-tombstoned-paths
+  "Return paths that are tombstoned (`:file/deleted? true`) in the delta —
+   files the developer's branch has removed. Trunk should exclude these
+   from federated results so they don't show in branch-view answers."
   [delta-db]
-  (mapv first (d/q '[:find ?p :where [_ :file/path ?p]] delta-db)))
+  (mapv first (d/q '[:find ?p
+                     :where
+                     [?f :file/deleted? true]
+                     [?f :file/path ?p]]
+                   delta-db)))
+
+(defn delta-added-paths
+  "Return paths the delta has but the trunk basis didn't — i.e., new files
+   added in the developer's branch. Used to scope which delta rows we
+   merge on top of trunk; files modified in the delta keep trunk's
+   authoritative history view."
+  [trunk-db delta-db]
+  (let [delta-paths (set (mapv first (d/q '[:find ?p
+                                            :where
+                                            [?f :file/path ?p]
+                                            (not [?f :file/deleted? true])]
+                                          delta-db)))
+        trunk-paths (set (mapv first (d/q '[:find ?p
+                                            :where [_ :file/path ?p]]
+                                          trunk-db)))]
+    (vec (clojure.set/difference delta-paths trunk-paths))))
 
 (defn run-federated-query
-  "Run a named query across a trunk DB and a delta DB, concatenating the
-   results. Trunk is queried with :exclude-paths covering every :file/path in
-   the delta — so a path appears in at most one side of the merge.
+  "Run a named query across a trunk DB and a delta DB and merge results.
 
-   When the query is not federation-safe, returns trunk-only with
-   :federation-safe? false (so the caller can show a banner)."
+   v1 merge semantics — `:tombstone-only`:
+     • Trunk rows: full trunk view, MINUS files the delta has tombstoned.
+       Modified-in-delta files keep trunk's history (matters for hotspots,
+       files-by-churn, complex-hotspots, bug-hotspots — anything that
+       aggregates over commits or other data the sparse delta lacks).
+     • Delta rows: only files ADDED in the branch (not in trunk). Modified
+       files don't double-count with trunk; deleted files (tombstones) are
+       skipped — they were already excluded above.
+
+   The earlier 'exclude all delta paths from trunk + append delta rows'
+   merge made modified files disappear from churn-based queries because
+   the delta DB has no commits to carry their history. Tombstone-only
+   keeps history intact while still respecting branch deletions.
+
+   Non-federation-safe queries return trunk-only with `:federation-safe?
+   false` so the caller can show a banner."
   [meta-db trunk-db delta-db query-name params]
-  (let [excludes     (delta-paths delta-db)
+  (let [excludes     (delta-tombstoned-paths delta-db)
         trunk-result (run-named-query meta-db trunk-db query-name params
                                       {:exclude-paths excludes})]
     (if (:error trunk-result)
       trunk-result
       (let [fsafe?       (:federation-safe? trunk-result)
             trunk-rows   (vec (:ok trunk-result))
-            delta-result (when fsafe? (run-named-query meta-db delta-db query-name params))
-            delta-rows   (vec (:ok delta-result []))
-            rows         (if fsafe? (into trunk-rows delta-rows) trunk-rows)]
+            added-paths  (when fsafe? (delta-added-paths trunk-db delta-db))
+            delta-result (when (and fsafe? (seq added-paths))
+                           (run-named-query meta-db delta-db query-name params))
+            delta-rows   (when (seq added-paths)
+                           (filterv #(some #{(first %)} added-paths)
+                                    (vec (:ok delta-result []))))
+            rows         (if fsafe? (into trunk-rows (or delta-rows [])) trunk-rows)]
         {:ok               rows
          :trunk-count      (count trunk-rows)
-         :delta-count      (count delta-rows)
+         :delta-count      (count (or delta-rows []))
          :federation-safe? fsafe?}))))
