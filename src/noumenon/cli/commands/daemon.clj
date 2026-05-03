@@ -3,15 +3,20 @@
    the HTTP daemon. The daemon boots through noumenon.system so that
    process exit walks the Integrant halt graph (HTTP server → caches →
    Datomic connections)."
-  (:require [noumenon.mcp :as mcp]
+  (:require [noumenon.daemon-control :as daemon-control]
+            [noumenon.mcp :as mcp]
             [noumenon.system :as system]
             [noumenon.util :refer [log!]]))
 
 (defn do-serve
-  "Start the MCP server."
+  "Start the MCP server. Ensures a daemon is reachable first — spawning
+   one if absent — so the bridge can proxy every tool call instead of
+   opening its own Datomic conn and racing the daemon for the lock."
   [parsed]
-  (let [user-db (str (System/getProperty "user.home") "/.noumenon/data")]
-    (mcp/serve! (update parsed :db-dir #(or % user-db)))
+  (let [user-db (str (System/getProperty "user.home") "/.noumenon/data")
+        opts    (update parsed :db-dir #(or % user-db))]
+    (daemon-control/ensure-spawned! opts)
+    (mcp/serve! opts)
     {:exit 0}))
 
 (defn do-daemon
