@@ -17,40 +17,24 @@
             [noumenon.imports :as imports]
             [noumenon.introspect :as introspect]
             [noumenon.llm :as llm]
+            [noumenon.mcp.protocol :as protocol]
             [noumenon.query :as query]
             [noumenon.repo :as repo]
             [noumenon.sessions :as sessions]
             [noumenon.sync :as sync]
             [noumenon.synthesize :as synthesize]
             [noumenon.util :as util :refer [log!]])
-  (:import [java.io BufferedReader PrintWriter]
-           [java.lang ProcessHandle]))
+  (:import [java.lang ProcessHandle]))
 
 ;; --- Helpers ---
-
-;; --- Connection cache ---
-
-;; --- Async introspect sessions ---
 
 (defn- get-or-create-conn
   "Delegate to shared db/conn-cache."
   [db-dir db-name]
   (db/get-or-create-conn db-dir db-name))
 
-;; --- JSON-RPC plumbing ---
-
-(defn- format-response [id result]
-  (json/write-str {:jsonrpc "2.0" :id id :result result}))
-
-(defn- format-error [id code message]
-  (json/write-str {:jsonrpc "2.0" :id id
-                   :error {:code code :message message}}))
-
-(defn- tool-result [text]
-  {:content [{:type "text" :text text}]})
-
-(defn- tool-error [text]
-  {:content [{:type "text" :text text}] :isError true})
+(def ^:private tool-result protocol/tool-result)
+(def ^:private tool-error  protocol/tool-error)
 
 ;; --- Input validation ---
 ;; Length caps live in noumenon.util so the HTTP handlers and the MCP
@@ -1150,36 +1134,12 @@
 
 ;; --- MCP method handlers ---
 
-(defn- handle-initialize [_params]
-  {:protocolVersion "2024-11-05"
-   :capabilities {:tools {:listChanged false}}
-   :serverInfo {:name "noumenon" :version (util/read-version)}})
-
-(defn- handle-tools-list [_params]
-  {:tools tools})
-
-(defn- make-mcp-progress-fn
-  "Create a progress-fn that sends MCP notifications/progress to the writer.
-   Returns nil if no progressToken was provided by the client."
-  [^PrintWriter writer progress-token]
-  (when progress-token
-    (fn [{:keys [current total message]}]
-      (let [notification (json/write-str
-                          {:jsonrpc "2.0"
-                           :method  "notifications/progress"
-                           :params  {:progressToken progress-token
-                                     :progress      current
-                                     :total         (or total 0)
-                                     :message       message}})]
-        (locking writer
-          (.println writer notification))))))
-
-(defn- handle-tools-call [params defaults ^PrintWriter writer]
+(defn- handle-tools-call [params defaults ^java.io.PrintWriter writer]
   (let [tool-name (get params "name")
         arguments (or (get params "arguments") {})
         meta-info (get params "_meta")
         progress-token (get meta-info "progressToken")
-        progress-fn (make-mcp-progress-fn writer progress-token)]
+        progress-fn (protocol/make-mcp-progress-fn writer progress-token)]
     (if-let [handler (tool-handlers tool-name)]
       (try
         (handler arguments (if progress-fn
@@ -1202,35 +1162,6 @@
                (str "Internal error in " tool-name ": " msg
                     ". DO NOT RETRY — report this error to the user."))))))
       (tool-error (str "Unknown tool: " tool-name)))))
-
-;; --- Main loop ---
-
-(def ^:private max-line-bytes
-  "Maximum allowed JSON-RPC line size (10 MB)."
-  (* 10 1024 1024))
-
-(defn- read-bounded-line
-  "Read a line from reader, rejecting if it exceeds max-line-bytes. Returns nil on EOF."
-  [^BufferedReader reader]
-  (let [sb (StringBuilder.)]
-    (loop []
-      (let [ch (.read reader)]
-        (cond
-          (= ch -1)          (when (pos? (.length sb)) (.toString sb))
-          (= ch (int \newline)) (.toString sb)
-          (= ch (int \return))  (do (.mark reader 1)
-                                    (when (not= (.read reader) (int \newline))
-                                      (.reset reader))
-                                    (.toString sb))
-          :else
-          (do (.append sb (char ch))
-              (when (> (.length sb) max-line-bytes)
-                (throw (ex-info "Request exceeds maximum size" {:limit max-line-bytes})))
-              (recur)))))))
-
-(defn- suppress-datomic-logging! []
-  (.setLevel (java.util.logging.Logger/getLogger "datomic")
-             java.util.logging.Level/WARNING))
 
 ;; --- Remote proxy mode ---
 
@@ -1385,7 +1316,7 @@
 
 (defn- handle-tools-call-proxy
   "Route tools/call to either local handler or remote proxy."
-  [params defaults ^PrintWriter writer remote-conn]
+  [params defaults ^java.io.PrintWriter writer remote-conn]
   (if remote-conn
     (let [tool-name (get params "name")
           arguments (or (get params "arguments") {})]
@@ -1396,45 +1327,25 @@
   "Start MCP server. Reads JSON-RPC from stdin, writes responses to stdout.
    Blocks until stdin EOF. Options: :db-dir, :provider, :model."
   [opts]
-  (suppress-datomic-logging!)
+  (protocol/suppress-datomic-logging!)
   (log! "noumenon MCP server starting")
-  (let [reader       (BufferedReader. (io/reader System/in))
-        writer       (PrintWriter. System/out true)
+  (let [{:keys [reader writer]} (protocol/open-stdio)
         defaults     (cond-> (select-keys opts [:db-dir :provider :model])
                        (:no-auto-update opts) (assoc :auto-update false))
         resolve-conn #(or (load-connection-config) (detect-local-daemon))
-        dispatch     (fn [id method params]
+        dispatch     (fn [id method params writer]
                        (case method
-                         "initialize"              (format-response id (handle-initialize params))
+                         "initialize"                (protocol/format-response id (protocol/handle-initialize params))
                          "notifications/initialized" nil
-                         "tools/list"              (format-response id (handle-tools-list params))
-                         "tools/call"              (format-response id (handle-tools-call-proxy
-                                                                        params defaults writer (resolve-conn)))
-                         "ping"                    (format-response id {})
-                         "resources/list"          (format-response id {:resources []})
-                         (format-error id -32601 (str "Method not found: " method))))]
+                         "tools/list"                (protocol/format-response id (protocol/handle-tools-list tools))
+                         "tools/call"                (protocol/format-response id (handle-tools-call-proxy
+                                                                                   params defaults writer (resolve-conn)))
+                         "ping"                      (protocol/format-response id {})
+                         "resources/list"            (protocol/format-response id {:resources []})
+                         (protocol/format-error id -32601 (str "Method not found: " method))))]
     (when-let [conn (resolve-conn)]
       (log! (str "MCP proxy mode: forwarding to " (:host conn)
                  (when-not (load-connection-config) " (auto-detected local daemon)"))))
     (log! "noumenon MCP server ready")
-    (loop []
-      (when-let [line (try
-                        (read-bounded-line reader)
-                        (catch Exception e
-                          (log! "read/error" (.getMessage e))
-                          (.println writer (format-error nil -32700 "Request too large"))
-                          :oversized))]
-        (when-not (= line :oversized)
-          (when (seq line)
-            (try
-              (let [request (json/read-str line)
-                    id      (get request "id")
-                    method  (get request "method")
-                    params  (or (get request "params") {})]
-                (when-let [response (dispatch id method params)]
-                  (locking writer
-                    (.println writer response))))
-              (catch Exception e
-                (log! "process/error" (.getMessage e))
-                (.println writer (format-error nil -32700 "Parse error"))))))
-        (recur)))))
+    (protocol/run-stdio! {:reader reader :writer writer
+                          :log-fn log!  :dispatch dispatch})))
