@@ -138,6 +138,11 @@
   [db-dir db-name]
   (swap! index-cache dissoc (index-path db-dir db-name)))
 
+(defn release-cache!
+  "Drop every cached TF-IDF index. Called on daemon shutdown."
+  []
+  (reset! index-cache {}))
+
 ;; --- Index builder ---
 
 (defn- query-file-texts

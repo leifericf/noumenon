@@ -68,3 +68,10 @@
   "Total active ask sessions across all tokens."
   []
   (apply + (map count (vals @ask-sessions))))
+
+(defn release!
+  "Drop the LLM semaphore and clear the ask-session registry. Called on
+   daemon shutdown."
+  []
+  (reset! llm-semaphore nil)
+  (reset! ask-sessions {}))

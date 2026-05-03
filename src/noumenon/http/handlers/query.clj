@@ -232,6 +232,11 @@
 
 (defonce ^:private completion-cache (atom {}))
 
+(defn release-completion-cache!
+  "Drop the per-repo completion cache. Called on daemon shutdown."
+  []
+  (reset! completion-cache {}))
+
 (defn- get-completion-data
   "Load or return cached completion source data for a repo. 60s TTL."
   [db meta-db db-name]

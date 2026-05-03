@@ -38,3 +38,13 @@
   (str "Improvements: " (:improvements result)
        " in " (:iterations result) " iterations"
        "\nFinal score: " (format "%.3f" (double (:final-score result 0)))))
+
+(defn release!
+  "Cancel any running session futures and drop the registry. Called on
+   daemon shutdown so introspect runs don't keep working past the
+   process lifetime."
+  []
+  (doseq [[_ {:keys [stop-flag future]}] @sessions]
+    (when stop-flag (reset! stop-flag true))
+    (when future (future-cancel future)))
+  (reset! sessions {}))

@@ -78,6 +78,14 @@
   [db-dir db-name]
   (swap! conn-cache dissoc [db-dir db-name]))
 
+(defn release-conns!
+  "Release all cached Datomic connections. Datomic-Local doesn't expose a
+   close method on the connection itself, so this just drops the cache so
+   the next request reopens a fresh client+conn pair. Called on daemon
+   shutdown so a restart doesn't observe a stale conn map."
+  []
+  (reset! conn-cache {}))
+
 (def meta-db-name
   "Reserved db-name for the daemon's meta database (tokens, settings,
    prompts, rules, ask sessions, benchmark/introspect history). Callers
