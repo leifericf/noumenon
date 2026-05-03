@@ -48,8 +48,34 @@
          (str/join "\n"))
     (catch Exception _ "")))
 
+(def ^:private lock-file
+  (str (fs/path paths/data-dir "noumenon" "noumenon-internal" ".lock")))
+
+(defn- lock-holder
+  "Return \"PID N (cmdline)\" if any process holds the Datomic lock, nil
+   otherwise. Uses lsof + ps; both work identically on macOS and Linux.
+   Silently returns nil if either tool is missing or the lock is free."
+  []
+  (try
+    (let [{:keys [exit out]} (proc/shell {:out :string :err :string :continue true}
+                                         "lsof" "-Fp" lock-file)]
+      (when (zero? exit)
+        (when-let [pid (some->> (str/split-lines out)
+                                (some #(when (str/starts-with? % "p") (subs % 1))))]
+          (let [cmd (->> (proc/shell {:out :string :err :string :continue true}
+                                     "ps" "-p" pid "-o" "command=")
+                         :out
+                         str/trim)
+                short-cmd (if (> (count cmd) 120)
+                            (str (subs cmd 0 60) " … " (subs cmd (- (count cmd) 60)))
+                            cmd)]
+            (str "PID " pid (when (seq short-cmd) (str " (" short-cmd ")")))))))
+    (catch Exception _ nil)))
+
 (defn- failure-message [headline]
   (str headline
+       (when-let [h (lock-holder)]
+         (str "\nLock currently held by " h "."))
        "\n\nLast lines of " paths/daemon-log ":\n"
        (tail-log 30)))
 
