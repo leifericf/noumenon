@@ -100,7 +100,11 @@
 
 (defn render-prompt
   "Substitute template variables into the prompt template string.
-   Content is escaped and wrapped in delimiters to prevent prompt injection."
+   Every user-controlled binding (content, repo-name, file-path, imports,
+   imported-by) is run through `escape-double-mustache` so a value like
+   `{{content}}` cannot smuggle template syntax back into the rendered
+   prompt. Content additionally has its closing delimiter neutralized and
+   is wrapped in untrusted-content tags."
   [template {:keys [file-path lang line-count content repo-name imports imported-by]}]
   (let [safe-content (str "<file-content>\n"
                           (-> content
@@ -109,16 +113,18 @@
                           "\n</file-content>")
         imports-section (if (str/blank? imports)
                           ""
-                          (str "\nKnown imports (resolved file paths):\n" imports "\n"))
+                          (str "\nKnown imports (resolved file paths):\n"
+                               (escape-double-mustache imports) "\n"))
         imported-by-section (if (str/blank? imported-by)
                               ""
-                              (str "\nFiles that depend on this file:\n" imported-by "\n"))
-        bindings {"file-path"    (or file-path "")
+                              (str "\nFiles that depend on this file:\n"
+                                   (escape-double-mustache imported-by) "\n"))
+        bindings {"file-path"    (escape-double-mustache (or file-path ""))
                   "lang"         (name (or lang :unknown))
                   "lang-name"    (name (or lang :unknown))
                   "line-count"   (str (or line-count 0))
                   "content"      safe-content
-                  "repo-name"    (or repo-name "")
+                  "repo-name"    (escape-double-mustache (or repo-name ""))
                   "imports"      imports-section
                   "imported-by"  imported-by-section}]
     (str/replace template #"\{\{([^}]+)\}\}"
