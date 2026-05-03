@@ -1398,23 +1398,23 @@
   [opts]
   (suppress-datomic-logging!)
   (log! "noumenon MCP server starting")
-  (let [reader      (BufferedReader. (io/reader System/in))
-        writer      (PrintWriter. System/out true)
-        remote-conn (or (load-connection-config) (detect-local-daemon))
-        defaults    (cond-> (select-keys opts [:db-dir :provider :model])
-                      (:no-auto-update opts) (assoc :auto-update false))
-        dispatch    (fn [id method params]
-                      (case method
-                        "initialize"              (format-response id (handle-initialize params))
-                        "notifications/initialized" nil
-                        "tools/list"              (format-response id (handle-tools-list params))
-                        "tools/call"              (format-response id (handle-tools-call-proxy
-                                                                       params defaults writer remote-conn))
-                        "ping"                    (format-response id {})
-                        "resources/list"          (format-response id {:resources []})
-                        (format-error id -32601 (str "Method not found: " method))))]
-    (when remote-conn
-      (log! (str "MCP proxy mode: forwarding to " (:host remote-conn)
+  (let [reader       (BufferedReader. (io/reader System/in))
+        writer       (PrintWriter. System/out true)
+        defaults     (cond-> (select-keys opts [:db-dir :provider :model])
+                       (:no-auto-update opts) (assoc :auto-update false))
+        resolve-conn #(or (load-connection-config) (detect-local-daemon))
+        dispatch     (fn [id method params]
+                       (case method
+                         "initialize"              (format-response id (handle-initialize params))
+                         "notifications/initialized" nil
+                         "tools/list"              (format-response id (handle-tools-list params))
+                         "tools/call"              (format-response id (handle-tools-call-proxy
+                                                                        params defaults writer (resolve-conn)))
+                         "ping"                    (format-response id {})
+                         "resources/list"          (format-response id {:resources []})
+                         (format-error id -32601 (str "Method not found: " method))))]
+    (when-let [conn (resolve-conn)]
+      (log! (str "MCP proxy mode: forwarding to " (:host conn)
                  (when-not (load-connection-config) " (auto-detected local daemon)"))))
     (log! "noumenon MCP server ready")
     (loop []
