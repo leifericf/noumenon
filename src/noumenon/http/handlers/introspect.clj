@@ -9,7 +9,8 @@
             [noumenon.introspect :as introspect]
             [noumenon.llm :as llm]
             [noumenon.query :as query]
-            [noumenon.sessions :as sessions]))
+            [noumenon.sessions :as sessions]
+            [noumenon.util :as util]))
 
 (defn- resolve-extra-repos
   "Resolve comma-separated repo identifiers to [{:db db :repo-name name} ...]."
@@ -58,6 +59,7 @@
 
 (defn handle-introspect [request config]
   (let [params (mw/parse-json-body request)]
+    (util/validate-introspect-targets! (:target params))
     (sessions/evict-stale!)
     (when (>= (sessions/running-count) sessions/max-sessions)
       (throw (ex-info "Too many active introspect sessions"

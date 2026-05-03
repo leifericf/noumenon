@@ -153,6 +153,33 @@
 (def max-params-count    "Max named-query :params keys" 20)
 (def max-param-key-len   "Named-query :params key len"  256)
 
+(def valid-introspect-targets
+  "The set of targets the introspect loop knows how to optimize. Lives at
+   the cross-layer level so MCP, HTTP, and CLI surfaces all reject the
+   same typo'd inputs instead of silently dropping them."
+  #{:examples :system-prompt :rules :code :train})
+
+(defn validate-introspect-targets!
+  "Throw ex-info if `target-str` (a comma-separated `--target` value) names
+   any target not in `valid-introspect-targets`. Pass-through on nil or
+   blank — those mean 'no filter' and are not user errors. Trims whitespace
+   around each comma so `examples, code` validates the same as `examples,code`.
+   The thrown ex-info carries `:user-message` so the caller can render it
+   directly without leaking the exception class."
+  [target-str]
+  (when (and target-str (not (str/blank? target-str)))
+    (let [parts (->> (str/split target-str #",")
+                     (map str/trim)
+                     (remove str/blank?))
+          unknown (seq (remove (comp valid-introspect-targets keyword) parts))]
+      (when unknown
+        (let [msg (str "Unknown introspect targets: " (str/join ", " unknown)
+                       ". Valid: " (str/join ", "
+                                             (map name valid-introspect-targets)))]
+          (throw (ex-info msg
+                          {:status 400 :message msg :user-message msg
+                           :field "target" :unknown (vec unknown)})))))))
+
 (defn validate-params!
   "Validate a named-query :params map: cap on entry count, key length,
    and value length. Throws ex-info :status 400 on any breach. Accepts

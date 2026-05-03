@@ -83,3 +83,46 @@
               255)
           (str "max-branch-name-len=" util/max-branch-name-len
                " leaves no FS-component headroom; lower it.")))))
+
+(deftest validate-introspect-targets-rejects-unknown
+  (testing "Unknown targets must surface as an ExceptionInfo with a
+            user-facing message that names the offending value(s) and
+            lists the valid set, so a typo never silently expands the
+            run to all targets."
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (util/validate-introspect-targets! "foobar"))
+        "single unknown target rejected")
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (util/validate-introspect-targets! "examples,foobar"))
+        "mix of known + unknown rejected (any unknown is a typo)")
+    (try
+      (util/validate-introspect-targets! "foobar,quux")
+      (is false "expected throw, got success")
+      (catch clojure.lang.ExceptionInfo e
+        (let [msg     (.getMessage e)
+              user-msg (:user-message (ex-data e))]
+          (is (re-find #"foobar" msg) (str "msg names the bad input; got: " msg))
+          (is (re-find #"quux"   msg) (str "msg names every bad input; got: " msg))
+          (is (re-find #"examples" msg)
+              (str "msg lists at least one valid target; got: " msg))
+          (is (string? user-msg)
+              "ex-data carries :user-message for surface-level rendering"))))))
+
+(deftest validate-introspect-targets-accepts-known
+  (testing "All listed valid targets are accepted, alone or combined,
+            including with whitespace around the commas."
+    (is (nil? (util/validate-introspect-targets! "examples")))
+    (is (nil? (util/validate-introspect-targets! "system-prompt")))
+    (is (nil? (util/validate-introspect-targets! "rules")))
+    (is (nil? (util/validate-introspect-targets! "code")))
+    (is (nil? (util/validate-introspect-targets! "train")))
+    (is (nil? (util/validate-introspect-targets!
+               "examples,system-prompt,rules,code,train")))
+    (is (nil? (util/validate-introspect-targets! "examples, code")))))
+
+(deftest validate-introspect-targets-tolerates-nil-and-blank
+  (testing "Absent target is the 'no filter' case and must pass through
+            without error — only TYPO'D targets are a user mistake."
+    (is (nil? (util/validate-introspect-targets! nil)))
+    (is (nil? (util/validate-introspect-targets! "")))
+    (is (nil? (util/validate-introspect-targets! "   ")))))

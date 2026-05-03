@@ -57,6 +57,7 @@
 
 (defn handle-introspect [args defaults]
   (mu/validate-llm-inputs! args)
+  (util/validate-introspect-targets! (args "target"))
   (mu/with-conn args defaults
     (fn [ctx]
       (let [run-opts (build-introspect-opts args defaults ctx
@@ -101,6 +102,7 @@
 
 (defn handle-introspect-start [args defaults]
   (mu/validate-llm-inputs! args)
+  (util/validate-introspect-targets! (args "target"))
   (ensure-session-capacity!)
   (mu/with-conn args defaults
     (fn [ctx]
