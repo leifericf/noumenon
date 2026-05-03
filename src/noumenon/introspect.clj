@@ -140,6 +140,35 @@
                            :where [?e :ask.session/suggested-queries ?qs]]
                          meta-db)}))
 
+(defn- format-section
+  "Render one insight section. Returns nil when `coll` is empty."
+  [coll {:keys [header preamble take-n format-fn]}]
+  (when (seq coll)
+    (str header "\n"
+         (when preamble (str preamble "\n"))
+         (->> coll (take take-n) (map format-fn) (str/join "\n"))
+         "\n\n")))
+
+(defn- unanswered-line [{:keys [question iterations]}]
+  (str "  - \"" question "\" (" iterations " iterations)"))
+
+(defn- empty-q-line [[question query-edn]]
+  (str "  - Q: \"" (subs question 0 (min 60 (count question)))
+       "\" → " (subs query-edn 0 (min 80 (count query-edn)))))
+
+(defn- error-line [[question _]] (str "  - \"" question "\""))
+
+(defn- neg-fb-line [[question comment answer missing quality notes]]
+  (str "  - Q: \"" question "\"\n"
+       "    Answer: " (subs answer 0 (min 100 (count answer)))
+       (when (seq comment) (str "\n    User comment: \"" comment "\""))
+       (when (seq missing) (str "\n    Agent said was MISSING: " missing))
+       (when (seq quality) (str "\n    Agent flagged QUALITY issues: " quality))
+       (when (seq notes)   (str "\n    Agent notes: " notes))))
+
+(defn- popular-line [[qedn cnt]]
+  (str "  - (" cnt "x) " (subs qedn 0 (min 80 (count qedn)))))
+
 (defn- format-ask-insights
   "Format ask session data into a markdown summary string. Pure."
   [{:keys [sessions unanswered errors empty-qs popular neg-fb
@@ -147,67 +176,39 @@
   (let [total (count sessions)]
     (if (zero? total)
       "No ask sessions recorded yet."
-      (str "## Ask Session Insights (" total " sessions)\n\n"
-           (when (seq unanswered)
-             (str "### Unanswered questions (" (count unanswered) " sessions hit budget limit)\n"
-                  "These questions could not be answered — they represent gaps:\n"
-                  (->> unanswered
-                       (take 10)
-                       (map #(str "  - \"" (:question %) "\" (" (:iterations %) " iterations)"))
-                       (str/join "\n"))
-                  "\n\n"))
-           (when (seq empty-qs)
-             (str "### Queries that returned zero results (" (count empty-qs) " occurrences)\n"
-                  "The agent wrote these Datalog queries but got no data back — likely wrong attributes or missing data:\n"
-                  (->> empty-qs
-                       (take 10)
-                       (map (fn [[question query-edn]]
-                              (str "  - Q: \"" (subs question 0 (min 60 (count question)))
-                                   "\" → " (subs query-edn 0 (min 80 (count query-edn))))))
-                       (str/join "\n"))
-                  "\n\n"))
-           (when (seq errors)
-             (str "### Parse errors (" (count errors) " occurrences)\n"
-                  "The LLM produced unparseable responses for these questions:\n"
-                  (->> errors (take 5)
-                       (map (fn [[question _]] (str "  - \"" question "\"")))
-                       (str/join "\n"))
-                  "\n\n"))
-           (when (seq neg-fb)
-             (str "### Negatively rated answers (" (count neg-fb) " — HIGHEST PRIORITY)\n"
-                  "Users rated these answers unhelpful. The agent's own reflection on each session is included — use both signals to diagnose the root cause.\n"
-                  (->> neg-fb
-                       (take 10)
-                       (map (fn [[question comment answer missing quality notes]]
-                              (str "  - Q: \"" question "\"\n"
-                                   "    Answer: " (subs answer 0 (min 100 (count answer)))
-                                   (when (seq comment) (str "\n    User comment: \"" comment "\""))
-                                   (when (seq missing) (str "\n    Agent said was MISSING: " missing))
-                                   (when (seq quality) (str "\n    Agent flagged QUALITY issues: " quality))
-                                   (when (seq notes)   (str "\n    Agent notes: " notes)))))
-                       (str/join "\n"))
-                  "\n\n"))
-           (when (seq popular)
-             (str "### Most common Datalog patterns (top 10)\n"
-                  "These queries are written most often — consider making them named queries:\n"
-                  (->> popular
-                       (sort-by second >)
-                       (take 10)
-                       (map (fn [[qedn cnt]]
-                              (str "  - (" cnt "x) " (subs qedn 0 (min 80 (count qedn))))))
-                       (str/join "\n"))
-                  "\n\n"))
-           (summarize-feedback-items missing-attrs
-                                     "Data Gaps Reported by Ask Agents"
-                                     "Attributes or relationships agents needed but couldn't find:"
-                                     "reported" 15)
-           (summarize-feedback-items quality-iss
-                                     "Data Quality Issues Reported by Agents"
-                                     nil "reported" 10)
-           (summarize-feedback-items suggested-qs
-                                     "Named Queries Suggested by Agents"
-                                     "Queries agents wished existed — consider adding these:"
-                                     "suggested" 10)))))
+      (let [sections [[unanswered
+                       {:header    (str "### Unanswered questions (" (count unanswered) " sessions hit budget limit)")
+                        :preamble  "These questions could not be answered — they represent gaps:"
+                        :take-n    10 :format-fn unanswered-line}]
+                      [empty-qs
+                       {:header    (str "### Queries that returned zero results (" (count empty-qs) " occurrences)")
+                        :preamble  "The agent wrote these Datalog queries but got no data back — likely wrong attributes or missing data:"
+                        :take-n    10 :format-fn empty-q-line}]
+                      [errors
+                       {:header    (str "### Parse errors (" (count errors) " occurrences)")
+                        :preamble  "The LLM produced unparseable responses for these questions:"
+                        :take-n    5 :format-fn error-line}]
+                      [neg-fb
+                       {:header    (str "### Negatively rated answers (" (count neg-fb) " — HIGHEST PRIORITY)")
+                        :preamble  "Users rated these answers unhelpful. The agent's own reflection on each session is included — use both signals to diagnose the root cause."
+                        :take-n    10 :format-fn neg-fb-line}]
+                      [(seq (sort-by second > (or popular [])))
+                       {:header    "### Most common Datalog patterns (top 10)"
+                        :preamble  "These queries are written most often — consider making them named queries:"
+                        :take-n    10 :format-fn popular-line}]]]
+        (str "## Ask Session Insights (" total " sessions)\n\n"
+             (str/join (map (fn [[coll spec]] (format-section coll spec)) sections))
+             (summarize-feedback-items missing-attrs
+                                       "Data Gaps Reported by Ask Agents"
+                                       "Attributes or relationships agents needed but couldn't find:"
+                                       "reported" 15)
+             (summarize-feedback-items quality-iss
+                                       "Data Quality Issues Reported by Agents"
+                                       nil "reported" 10)
+             (summarize-feedback-items suggested-qs
+                                       "Named Queries Suggested by Agents"
+                                       "Queries agents wished existed — consider adding these:"
+                                       "suggested" 10))))))
 
 (defn- ask-session-insights
   "Summarize ask session data for the introspect agent."
@@ -866,11 +867,49 @@
                                  :baseline base-mean :result new-mean
                                  :delta delta)}))))
 
+(defn- request-proposal!
+  "Invoke the optimizer LLM and parse its response.
+   Returns {:proposal :raw-text :validation :error}."
+  [optimizer-invoke-fn meta-db meta-prompt]
+  (let [response   (try
+                     (log! "introspect: requesting proposal from optimizer...")
+                     (optimizer-invoke-fn [{:role "user" :content meta-prompt}])
+                     (catch Exception e
+                       (log! (str "introspect: optimizer error: " (.getMessage e)))
+                       {:error (.getMessage e)}))
+        raw-text   (:text response)
+        proposal   (parse-proposal raw-text)
+        validation (when proposal (validate-proposal meta-db proposal))]
+    {:proposal proposal :raw-text raw-text :validation validation
+     :error    (:error response)}))
+
+(defn- skip-with-error
+  "Attach an error detail to a skip outcome record (when present) and drop the log message."
+  [{:keys [message] :as skip} error]
+  (log! message)
+  (cond-> (dissoc skip :message)
+    error (assoc-in [:record :error] error)))
+
+(defn- code-gate-for
+  "Run the code gate for :code-targeted proposals; returns nil for other targets."
+  [{:keys [target modification]}]
+  (when (= :code target)
+    (run-code-gate!
+     (str (validate-code-path! (:file modification)) ".staging")
+     (:content modification))))
+
+(defn- apply-and-evaluate!
+  "Apply the modification (with auto-revert on failure) and decide whether to keep."
+  [ctx {:keys [target] :as proposal}]
+  (with-modification (assoc proposal :meta-conn (:meta-conn ctx))
+    (when (= :train target)
+      (apply-train-model! (:meta-conn ctx) (:db ctx)))
+    (evaluate-and-decide ctx proposal)))
+
 (defn run-iteration!
   "Run a single introspect iteration.
    Returns {:outcome kw :record map :eval-result map?}."
-  [{:keys [db meta-db meta-conn optimizer-invoke-fn
-           baseline history allowed-targets] :as ctx}]
+  [{:keys [db meta-db optimizer-invoke-fn baseline history allowed-targets] :as ctx}]
   (let [meta-prompt (build-meta-prompt
                      {:db               db
                       :meta-db          meta-db
@@ -879,35 +918,17 @@
                       :rules            (load-current-rules meta-db)
                       :history          history
                       :baseline-results (:results baseline)})
-        response    (try
-                      (log! "introspect: requesting proposal from optimizer...")
-                      (optimizer-invoke-fn [{:role "user" :content meta-prompt}])
-                      (catch Exception e
-                        (log! (str "introspect: optimizer error: " (.getMessage e)))
-                        {:error (.getMessage e)}))
-        raw-text    (:text response)
-        proposal    (parse-proposal raw-text)
-        validation  (when proposal (validate-proposal meta-db proposal))]
-    (if-let [{:keys [message] :as skip} (classify-proposal proposal validation allowed-targets)]
-      (do (log! message)
-          (let [error-detail (or (:error response)
-                                 (when (nil? proposal)
-                                   (util/truncate (str raw-text) 2000)))]
-            (cond-> (dissoc skip :message)
-              error-detail (assoc-in [:record :error] error-detail))))
-      (let [{:keys [target modification]} proposal
-            _ (log! (str "introspect: target=" (name target)
-                         " goal=" (pr-str (:goal proposal)) "\n  " (:rationale proposal)))
-            code-gate (when (= :code target)
-                        (run-code-gate!
-                         (str (validate-code-path! (:file modification)) ".staging")
-                         (:content modification)))]
-        (if (and (= :code target) (not (:pass? code-gate)))
-          {:outcome :gate-failed :record (make-record proposal :gate-failed)}
-          (with-modification (assoc proposal :meta-conn meta-conn)
-            (when (= :train target)
-              (apply-train-model! meta-conn db))
-            (evaluate-and-decide ctx proposal)))))))
+        {:keys [proposal raw-text validation error]}
+        (request-proposal! optimizer-invoke-fn meta-db meta-prompt)]
+    (if-let [skip (classify-proposal proposal validation allowed-targets)]
+      (skip-with-error skip (or error (when (nil? proposal) (util/truncate (str raw-text) 2000))))
+      (do
+        (log! (str "introspect: target=" (name (:target proposal))
+                   " goal=" (pr-str (:goal proposal)) "\n  " (:rationale proposal)))
+        (let [gate (code-gate-for proposal)]
+          (if (and (= :code (:target proposal)) (not (:pass? gate)))
+            {:outcome :gate-failed :record (make-record proposal :gate-failed)}
+            (apply-and-evaluate! ctx proposal)))))))
 
 ;; --- Main loop ---
 
@@ -957,49 +978,62 @@
     (>= i max-iterations)              (str "reached max iterations (" max-iterations ")")
     (and max-ms (> (- (System/currentTimeMillis) start-ms) max-ms)) "time budget exhausted"))
 
+(defn- iteration-context
+  "Per-iteration ctx for run-iteration!: assembles current meta-db, baseline, and history."
+  [{:keys [db meta-conn repo-name repo-path invoke-fn-factory optimizer-invoke-fn
+           git-commit? allowed-targets eval-runs extra-repos]} baseline history]
+  {:db db :meta-db (d/db meta-conn) :meta-conn meta-conn
+   :repo-name repo-name :repo-path repo-path
+   :invoke-fn-factory invoke-fn-factory
+   :optimizer-invoke-fn optimizer-invoke-fn
+   :baseline baseline :history history
+   :git-commit? git-commit?
+   :allowed-targets allowed-targets
+   :eval-runs eval-runs
+   :extra-repos extra-repos})
+
+(defn- record-iteration!
+  "Persist one iteration record and emit a progress event."
+  [{:keys [meta-conn run-id progress-fn max-iterations]} i record outcome]
+  (d/transact meta-conn {:tx-data (iter-tx-data run-id i record)})
+  (when progress-fn
+    (progress-fn {:current (inc i) :total max-iterations
+                  :message (str (name (or (:target record) :unknown))
+                                " " (name (or outcome :unknown)))})))
+
+(defn- step-iteration
+  "Run one iteration, persist it, and update accumulators. Pure-ish: takes side-effect deps in `opts`."
+  [opts {:keys [baseline history improvements]} i max-iterations]
+  (log! (str "\nintrospect: === Iteration " (inc i) "/" max-iterations " ==="))
+  (let [{:keys [outcome eval-result record]}
+        (run-iteration! (iteration-context opts baseline history))]
+    (record-iteration! opts i record outcome)
+    {:baseline     (if (= :improved outcome) eval-result baseline)
+     :history      (conj history record)
+     :improvements (cond-> improvements (= :improved outcome) inc)}))
+
 (defn run-loop!
   "Run the introspect improvement loop.
    Persists results to the internal meta database.
    Returns {:run-id str :iterations n :improvements n :final-score double}."
-  [{:keys [db repo-name repo-path invoke-fn-factory optimizer-invoke-fn
-           meta-conn max-iterations git-commit? allowed-targets eval-runs
-           stop-flag progress-fn extra-repos]
-    :or   {max-iterations 10 eval-runs 1}
-    :as   opts}]
+  [{:keys [meta-conn max-iterations stop-flag] :or {max-iterations 10} :as opts}]
   (let [{:keys [run-id baseline history start-ms started-at max-ms]}
         (initialize-run! opts)
-
         budget  {:stop-flag stop-flag :max-iterations max-iterations
                  :max-ms max-ms :start-ms start-ms}
-
-        result
-        (loop [i 0, baseline baseline, history history, improvements 0]
-          (if-let [reason (budget-done? budget i)]
-            (do (log! (str "introspect: " reason))
-                {:iterations i :improvements improvements
-                 :final-score (:mean baseline)})
-            (do (log! (str "\nintrospect: === Iteration " (inc i) "/"
-                           max-iterations " ==="))
-                (let [{:keys [outcome eval-result record]}
-                      (run-iteration!
-                       {:db db :meta-db (d/db meta-conn) :meta-conn meta-conn
-                        :repo-name repo-name :repo-path repo-path
-                        :invoke-fn-factory invoke-fn-factory
-                        :optimizer-invoke-fn optimizer-invoke-fn
-                        :baseline baseline :history history
-                        :git-commit? git-commit?
-                        :allowed-targets allowed-targets
-                        :eval-runs eval-runs
-                        :extra-repos extra-repos})
-                      new-baseline (if (= :improved outcome) eval-result baseline)]
-                  (d/transact meta-conn
-                              {:tx-data (iter-tx-data run-id i record)})
-                  (when progress-fn
-                    (progress-fn {:current (inc i) :total max-iterations
-                                  :message (str (name (or (:target record) :unknown))
-                                                " " (name (or outcome :unknown)))}))
-                  (recur (inc i) new-baseline (conj history record)
-                         (if (= :improved outcome) (inc improvements) improvements))))))]
+        loop-opts (assoc opts :run-id run-id :max-iterations max-iterations)
+        final
+        (reduce (fn [acc i]
+                  (if-let [reason (budget-done? budget i)]
+                    (do (log! (str "introspect: " reason))
+                        (reduced (assoc acc :iterations i)))
+                    (-> (step-iteration loop-opts acc i max-iterations)
+                        (assoc :iterations (inc i)))))
+                {:baseline baseline :history history :improvements 0 :iterations 0}
+                (range max-iterations))
+        result {:iterations  (:iterations final)
+                :improvements (:improvements final)
+                :final-score (:mean (:baseline final))}]
     (d/transact meta-conn
                 {:tx-data (run-complete-tx-data
                            {:run-id run-id :started-at started-at
