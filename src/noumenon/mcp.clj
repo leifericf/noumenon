@@ -1,16 +1,10 @@
 (ns noumenon.mcp
-  "Top-level MCP server. Holds the declarative tool schema, the
-   tool-name → handler dispatch, and the JSON-RPC `serve!` entry point.
-   Protocol framing lives in noumenon.mcp.protocol; remote-proxy mode
-   lives in noumenon.mcp.proxy; per-cluster tool handlers live under
-   noumenon.mcp.handlers.*."
-  (:require [clojure.string :as str]
-            [noumenon.mcp.handlers.benchmark :as h-bench]
-            [noumenon.mcp.handlers.introspect :as h-intro]
-            [noumenon.mcp.handlers.meta :as h-meta]
-            [noumenon.mcp.handlers.mutation :as h-mut]
-            [noumenon.mcp.handlers.query :as h-query]
-            [noumenon.mcp.protocol :as protocol]
+  "Top-level MCP server. Holds the declarative tool schema and the
+   JSON-RPC `serve!` entry point. Tool calls are always proxied to a
+   running Noumenon daemon over HTTP — the bridge never opens local
+   Datomic. Protocol framing lives in noumenon.mcp.protocol; the
+   proxy itself lives in noumenon.mcp.proxy."
+  (:require [noumenon.mcp.protocol :as protocol]
             [noumenon.mcp.proxy :as proxy]
             [noumenon.mcp.util :as mu]
             [noumenon.util :refer [log!]]))
@@ -253,88 +247,32 @@
 
 ;; --- Tool dispatch ---
 
-(def ^:private tool-handlers
-  {"noumenon_import"             h-mut/handle-import
-   "noumenon_status"             h-query/handle-status
-   "noumenon_query"              h-query/handle-query
-   "noumenon_query_federated"    h-query/handle-query-federated
-   "noumenon_list_queries"       h-query/handle-list-queries
-   "noumenon_get_schema"         h-query/handle-get-schema
-   "noumenon_update"             h-mut/handle-update
-   "noumenon_ask"                h-mut/handle-ask
-   "noumenon_search"             h-query/handle-search
-   "noumenon_analyze"            h-mut/handle-analyze
-   "noumenon_enrich"             h-mut/handle-enrich
-   "noumenon_synthesize"         h-mut/handle-synthesize
-   "noumenon_digest"             h-mut/handle-digest
-   "noumenon_list_databases"     h-meta/handle-list-databases
-   "noumenon_llm_providers"      h-meta/handle-llm-providers
-   "noumenon_llm_models"         h-meta/handle-llm-models
-   "noumenon_reseed"             h-meta/handle-reseed
-   "noumenon_artifact_history"   h-meta/handle-artifact-history
-   "noumenon_benchmark_run"      h-bench/handle-benchmark-run
-   "noumenon_benchmark_results"  h-bench/handle-benchmark-results
-   "noumenon_benchmark_compare"  h-bench/handle-benchmark-compare
-   "noumenon_introspect"         h-intro/handle-introspect
-   "noumenon_introspect_start"   h-intro/handle-introspect-start
-   "noumenon_introspect_status"  h-intro/handle-introspect-status
-   "noumenon_introspect_stop"    h-intro/handle-introspect-stop
-   "noumenon_introspect_history" h-intro/handle-introspect-history})
-
-(defn- handle-tools-call [params defaults ^java.io.PrintWriter writer]
-  (let [tool-name      (get params "name")
-        arguments      (or (get params "arguments") {})
-        meta-info      (get params "_meta")
-        progress-token (get meta-info "progressToken")
-        progress-fn    (protocol/make-mcp-progress-fn writer progress-token)]
-    (if-let [handler (tool-handlers tool-name)]
-      (try
-        (handler arguments (if progress-fn
-                             (assoc defaults :progress-fn progress-fn)
-                             defaults))
-        (catch clojure.lang.ExceptionInfo e
-          (let [msg (.getMessage e)
-                user-msg (:user-message (ex-data e))]
-            (log! "tool/error" tool-name msg)
-            (mu/tool-error (or user-msg
-                               (str "Internal error: " msg)))))
-        (catch Exception e
-          (let [msg (.getMessage e)]
-            (log! "tool/error" tool-name msg)
-            (mu/tool-error
-             (if (and msg (str/includes? msg ".lock"))
-               (str "FATAL: Database locked by another process (likely a running daemon). "
-                    "DO NOT RETRY — all Noumenon tool calls will fail until the lock is released. "
-                    "Tell the user to kill the daemon: ps aux | grep 'noumenon.*daemon' | grep -v grep | awk '{print $2}' | xargs kill")
-               (str "Internal error in " tool-name ": " msg
-                    ". DO NOT RETRY — report this error to the user."))))))
-      (mu/tool-error (str "Unknown tool: " tool-name)))))
-
-(defn- handle-tools-call-proxy
-  "Route tools/call to either local handler or remote proxy."
-  [params defaults ^java.io.PrintWriter writer remote-conn]
-  (if remote-conn
-    (let [tool-name (get params "name")
-          arguments (or (get params "arguments") {})]
-      (proxy/proxy-tool-call tool-name arguments remote-conn))
-    (handle-tools-call params defaults writer)))
+(defn- proxy-tool-call
+  "Forward a tools/call to the daemon resolved at this exact moment.
+   If no daemon is reachable right now, return a structured MCP error
+   instead of opening any local state."
+  [params]
+  (if-let [conn (proxy/resolve-conn)]
+    (proxy/proxy-tool-call (get params "name")
+                           (or (get params "arguments") {})
+                           conn)
+    (mu/tool-error
+     (str "No Noumenon daemon reachable. Run `noum start` to start one, "
+          "or set ~/.noumenon/config.edn to point at a remote daemon."))))
 
 (defn serve!
   "Start MCP server. Reads JSON-RPC from stdin, writes responses to stdout.
-   Blocks until stdin EOF. Options: :db-dir, :provider, :model."
-  [opts]
-  (protocol/suppress-datomic-logging!)
+   Blocks until stdin EOF. Tool calls are forwarded to a Noumenon daemon
+   over HTTP; this process never opens local Datomic."
+  [_opts]
   (log! "noumenon MCP server starting")
   (let [{:keys [reader writer]} (protocol/open-stdio)
-        defaults (cond-> (select-keys opts [:db-dir :provider :model])
-                   (:no-auto-update opts) (assoc :auto-update false))
-        dispatch (fn [id method params writer]
+        dispatch (fn [id method params _writer]
                    (case method
                      "initialize"                (protocol/format-response id (protocol/handle-initialize params))
                      "notifications/initialized" nil
                      "tools/list"                (protocol/format-response id (protocol/handle-tools-list tools))
-                     "tools/call"                (protocol/format-response id (handle-tools-call-proxy
-                                                                               params defaults writer (proxy/resolve-conn)))
+                     "tools/call"                (protocol/format-response id (proxy-tool-call params))
                      "ping"                      (protocol/format-response id {})
                      "resources/list"            (protocol/format-response id {:resources []})
                      (protocol/format-error id -32601 (str "Method not found: " method))))]
