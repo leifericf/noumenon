@@ -1,79 +1,24 @@
 (ns noumenon.mcp
-  (:require [clojure.java.io :as io]
-            [clojure.string :as str]
-            [datomic.client.api :as d]
-            [noumenon.agent :as agent]
-            [noumenon.analyze :as analyze]
-            [noumenon.artifacts :as artifacts]
-            [noumenon.db :as db]
-            [noumenon.delta :as delta]
-            [noumenon.embed :as embed]
-            [noumenon.files :as files]
-            [noumenon.git :as git]
-            [noumenon.benchmark :as bench]
-            [noumenon.imports :as imports]
-            [noumenon.introspect :as introspect]
-            [noumenon.llm :as llm]
+  "Top-level MCP server. Holds the declarative tool schema, the
+   tool-name → handler dispatch, and the JSON-RPC `serve!` entry point.
+   Protocol framing lives in noumenon.mcp.protocol; remote-proxy mode
+   lives in noumenon.mcp.proxy; per-cluster tool handlers live under
+   noumenon.mcp.handlers.*."
+  (:require [clojure.string :as str]
             [noumenon.mcp.handlers.benchmark :as h-bench]
             [noumenon.mcp.handlers.introspect :as h-intro]
+            [noumenon.mcp.handlers.meta :as h-meta]
+            [noumenon.mcp.handlers.mutation :as h-mut]
+            [noumenon.mcp.handlers.query :as h-query]
             [noumenon.mcp.protocol :as protocol]
             [noumenon.mcp.proxy :as proxy]
-            [noumenon.query :as query]
-            [noumenon.repo :as repo]
-            [noumenon.sessions :as sessions]
-            [noumenon.sync :as sync]
-            [noumenon.synthesize :as synthesize]
-            [noumenon.util :as util :refer [log!]]))
-
-;; --- Helpers ---
-
-(defn- get-or-create-conn
-  "Delegate to shared db/conn-cache."
-  [db-dir db-name]
-  (db/get-or-create-conn db-dir db-name))
-
-(def ^:private tool-result protocol/tool-result)
-(def ^:private tool-error  protocol/tool-error)
-
-;; --- Input validation ---
-;; Length caps live in noumenon.util so the HTTP handlers and the MCP
-;; layer agree on what constitutes a valid request shape. MCP-specific
-;; bits (model alias / provider name / layers tokenization) stay local.
-
-(def ^:private max-repo-path-len   util/max-repo-path-len)
-(def ^:private max-question-len    util/max-question-len)
-(def ^:private max-model-len 256)
-(def ^:private max-provider-len 64)
-(def ^:private max-layers-len 64)
-(def ^:private allowed-layers #{:raw :import :enrich :full :embedded})
-(def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
-(def ^:private max-run-id-len 256)
-
-(defn- validate-llm-inputs!
-  "Validate model and provider string lengths when present."
-  [args]
-  (when-let [m (args "model")] (util/validate-string-length! "model" m max-model-len))
-  (when-let [p (args "provider")] (util/validate-string-length! "provider" p max-provider-len)))
-
-(defn- validate-layers
-  "Parse and validate a comma-separated layers string. Returns keyword vector or nil."
-  [layers-str]
-  (when layers-str
-    (util/validate-string-length! "layers" layers-str max-layers-len)
-    (let [kws (mapv keyword (str/split layers-str #","))]
-      (when-let [bad (seq (remove allowed-layers kws))]
-        (throw (ex-info (str "Unknown layers: " (pr-str bad)
-                             ". Valid: raw, import, enrich, full")
-                        {:user-message (str "Unknown layers: " (pr-str bad)
-                                            ". Valid: raw, import, enrich, full")})))
-      kws)))
+            [noumenon.mcp.util :as mu]
+            [noumenon.util :refer [log!]]))
 
 ;; --- Tool definitions ---
 
 (def ^:private repo-path-prop
   {"repo_path" {:type "string" :description "Repository path — filesystem path, Git URL, or Perforce depot path (//depot/...)"}})
-
-;; db-dir-prop removed: db-dir is server-level config only
 
 (def ^:private tools
   [{:name "noumenon_import"
@@ -306,566 +251,42 @@
                                        :description "Artifact name (required for prompt, ignored for rules)"}}
                   :required ["type"]}}])
 
-;; --- Tool handlers ---
-
-(defn- lookup-repo-uri
-  "Look up stored :repo/uri for a database name. Returns path string or nil."
-  [db-dir db-name]
-  (let [db-path (io/file db-dir "noumenon" db-name)]
-    (when (.isDirectory db-path)
-      (try
-        (let [conn (get-or-create-conn db-dir db-name)
-              db   (d/db conn)]
-          (ffirst (d/q '[:find ?uri :where [_ :repo/uri ?uri]] db)))
-        (catch Exception e
-          (log! "lookup-repo-uri" db-name (.getMessage e))
-          nil)))))
-
-(defn- resolve-extra-repos
-  "Resolve comma-separated repo identifiers to [{:db db :repo-name name} ...]."
-  [extra-repos-str db-dir]
-  (when (seq extra-repos-str)
-    (->> (str/split extra-repos-str #",")
-         (mapv (fn [raw]
-                 (let [raw     (str/trim raw)
-                       {:keys [db-name]}
-                       (repo/resolve-repo raw db-dir {:lookup-uri-fn lookup-repo-uri})
-                       conn    (get-or-create-conn db-dir db-name)]
-                   {:db (d/db conn) :repo-name db-name}))))))
-
-(defn- with-conn
-  "Resolve repo identifier from arguments, get/create connection, call f with context.
-   Accepts filesystem paths, Git URLs, or database names.
-   When auto-update is enabled (default), transparently updates stale databases before returning."
-  [args defaults f]
-  (let [raw-id (args "repo_path")]
-    (when-not (string? raw-id)
-      (throw (ex-info "repo_path is required" {:field "repo_path"})))
-    (util/validate-string-length! "repo_path" raw-id max-repo-path-len)
-    (let [db-dir    (util/resolve-db-dir defaults)
-          {:keys [repo-path db-name]}
-          (repo/resolve-repo raw-id db-dir {:lookup-uri-fn lookup-repo-uri})
-          conn      (get-or-create-conn db-dir db-name)
-          meta-conn (db/ensure-meta-db db-dir)]
-      (when (and (:auto-update defaults true)
-                 (not (str/starts-with? (str repo-path) "db://")))
-        (try
-          (let [db (d/db conn)]
-            (when (sync/stale? db repo-path)
-              (log! "auto-update" "HEAD changed, updating...")
-              (sync/update-repo! conn repo-path repo-path {:concurrency 8})))
-          (catch Exception e
-            (log! "auto-update" (str "failed, continuing: " (.getMessage e))))))
-      (f {:conn conn :db (d/db conn)
-          :meta-conn meta-conn :meta-db (d/db meta-conn)
-          :repo-path repo-path :db-dir db-dir :db-name db-name}))))
-
-(defn- format-import-summary [git-r files-r]
-  (str "Import complete. "
-       (:commits-imported git-r) " commits imported, "
-       (:commits-skipped git-r) " skipped. "
-       (:files-imported files-r) " files imported, "
-       (:files-skipped files-r) " skipped. "
-       (:dirs-imported files-r) " directories imported."))
-
-(defn- handle-import [args defaults]
-  (with-conn args defaults
-    (fn [{:keys [conn repo-path]}]
-      (let [git-r   (git/import-commits! conn repo-path repo-path (:progress-fn defaults))
-            files-r (files/import-files! conn repo-path repo-path)]
-        (tool-result (format-import-summary git-r files-r))))))
-
-(defn- handle-status [args defaults]
-  (with-conn args defaults
-    (fn [{:keys [db]}]
-      (let [{:keys [commits files dirs head-sha]} (query/repo-stats db)
-            head (if head-sha
-                   (str "\nHead: " (subs head-sha 0 (min 7 (count head-sha))))
-                   "")]
-        (tool-result (str commits " commits, " files " files, " dirs " directories." head
-                          "\n\nTip: Use noumenon_query or noumenon_ask to explore the codebase before reading files directly."))))))
-
-(defn- handle-search [args defaults]
-  (util/validate-string-length! "query" (args "query") max-question-len)
-  (with-conn args defaults
-    (fn [{:keys [db-dir db-name]}]
-      (let [idx   (embed/get-cached-index db-dir db-name)
-            _     (when-not idx
-                    (throw (ex-info "No TF-IDF index found. Run embed (or digest) first."
-                                    {:user-message "No TF-IDF index. Run: noumenon embed <repo>"})))
-            limit (min (or (args "limit") 8) 50)
-            results (embed/search idx (args "query") :limit limit)]
-        (if (seq results)
-          (tool-result
-           (str "Found " (count results) " results:\n\n"
-                (->> results
-                     (map-indexed
-                      (fn [i {:keys [kind path name text score]}]
-                        (str (inc i) ". "
-                             (if (= :file kind)
-                               (str path " (file)")
-                               (str name " (component)"))
-                             " — score: " (format "%.3f" (double score))
-                             "\n   " (first (clojure.string/split-lines text)))))
-                     (clojure.string/join "\n"))))
-          (tool-result "No results found. The index may be empty — run analyze + embed first."))))))
-
-(defn- handle-query [args defaults]
-  (util/validate-string-length! "query_name" (args "query_name") util/max-query-name-len)
-  (with-conn args defaults
-    (fn [{:keys [db meta-db]}]
-      (let [raw-params (args "params")
-            _          (util/validate-params! raw-params)
-            params     (into {} (map (fn [[k v]] [(keyword k) v])) raw-params)
-            result (query/run-named-query meta-db db (args "query_name") params)]
-        (if (:ok result)
-          (let [all-rows   (:ok result)
-                total      (count all-rows)
-                limit      (min (or (some-> (args "limit") long) 500) 10000)
-                rows       (take limit all-rows)
-                truncated? (> total limit)
-                query-name (args "query_name")
-                query-def  (artifacts/load-named-query meta-db query-name)
-                header     (when-let [cols (:columns query-def)]
-                             (str "Columns: " (str/join ", " cols) "\n"))
-                summary    (str "Query '" query-name "': " (count rows)
-                                (when truncated? (str " of " total))
-                                " results\n")]
-            (tool-result (str summary header
-                              (str/join "\n" (map pr-str rows))
-                              (when truncated?
-                                (str "\n... truncated (" (- total limit) " more rows). "
-                                     "Pass a higher `limit` to see more.")))))
-          (tool-error (:error result)))))))
-
-(defn- handle-query-federated [args defaults]
-  (util/validate-string-length! "query_name" (args "query_name") util/max-query-name-len)
-  (util/validate-string-length! "branch" (args "branch") util/max-branch-name-len)
-  (let [basis-sha (args "basis_sha")
-        branch    (args "branch")]
-    (when-not (sync/valid-sha? basis-sha)
-      (throw (ex-info "Invalid basis_sha"
-                      {:user-message "basis_sha must be a 40-char lowercase hex SHA"})))
-    (with-conn args defaults
-      (fn [{:keys [db meta-db repo-path db-name]}]
-        (let [raw-params (args "params")
-              _          (util/validate-params! raw-params)
-              params     (into {} (map (fn [[k v]] [(keyword k) v])) raw-params)
-              ;; Auto-derive parent metadata so the delta's branch entity
-              ;; carries the lineage breadcrumb. parent-host is "local"
-              ;; because MCP runs in-process — no over-the-wire host to
-              ;; record. Mirrors the http.clj/federated-delta-opts shape.
-              delta-opts (cond-> {:parent-db-name db-name
-                                  :parent-host    "local"}
-                           branch (assoc :branch-name branch))
-              delta-conn (delta/ensure-delta-db! repo-path basis-sha delta-opts)
-              _          (delta/update-delta! delta-conn repo-path basis-sha delta-opts)
-              delta-db   (d/db delta-conn)
-              query-name (args "query_name")
-              result     (query/run-federated-query meta-db db delta-db query-name params)]
-          (if (:error result)
-            (tool-error (:error result))
-            (let [all-rows   (:ok result)
-                  total      (count all-rows)
-                  limit      (min (or (some-> (args "limit") long) 500) 10000)
-                  rows       (take limit all-rows)
-                  truncated? (> total limit)
-                  query-def  (artifacts/load-named-query meta-db query-name)
-                  header     (when-let [cols (:columns query-def)]
-                               (str "Columns: " (str/join ", " cols) "\n"))
-                  fsafe?     (:federation-safe? result)
-                  summary    (str "Federated '" query-name "' "
-                                  "(trunk: " (:trunk-count result) ", "
-                                  "delta: " (:delta-count result)
-                                  (when-not fsafe? ", NOT federation-safe — trunk-only")
-                                  "): " (count rows)
-                                  (when truncated? (str " of " total))
-                                  " results\n")]
-              (tool-result (str summary header
-                                (str/join "\n" (map pr-str rows))
-                                (when truncated?
-                                  (str "\n... truncated (" (- total limit) " more rows). "
-                                       "Pass a higher `limit` to see more.")))))))))))
-
-(defn- handle-list-queries [_args defaults]
-  (let [db-dir    (util/resolve-db-dir defaults)
-        meta-conn (db/ensure-meta-db db-dir)
-        meta-db   (d/db meta-conn)
-        lines     (->> (artifacts/list-active-query-names meta-db)
-                       (keep (fn [n]
-                               (when-let [q (artifacts/load-named-query meta-db n)]
-                                 (str n " — " (:description q "no description")
-                                      (when (seq (:inputs q))
-                                        (str " [requires params: " (str/join ", " (map name (:inputs q))) "]")))))))]
-    (tool-result
-     (if (seq lines)
-       (str "Available queries (pass the name to noumenon_query):\n"
-            (str/join "\n" lines))
-       "No named queries found. First call noumenon_update with your repo_path to initialize the knowledge graph, then retry. If queries are still missing, call noumenon_reseed."))))
-
-(defn- handle-get-schema [args defaults]
-  (with-conn args defaults
-    (fn [{:keys [db]}]
-      (tool-result (query/schema-summary db)))))
-
-(defn- format-update-changes
-  "Format update result as a human-readable summary string."
-  [result]
-  (let [changes (str (when (pos? (:added result 0)) (str " " (:added result) " files added."))
-                     (when (pos? (:modified result 0)) (str " " (:modified result) " modified."))
-                     (when (pos? (:deleted result 0)) (str " " (:deleted result) " deleted."))
-                     (when (pos? (:commits result 0)) (str " " (:commits result) " new commits.")))]
-    (if (seq changes)
-      (str "Update complete." changes)
-      "Already up to date.")))
-
-(defn- selector-opts
-  [args]
-  (let [opts {:path    (args "path")
-              :include (args "include")
-              :exclude (args "exclude")
-              :lang    (args "lang")}]
-    (reduce-kv (fn [m k v] (cond-> m v (assoc k v))) {} opts)))
-
-(defn- handle-update [args defaults]
-  (util/validate-string-length! "repo_path" (args "repo_path") max-repo-path-len)
-  (validate-llm-inputs! args)
-  (let [db-dir    (util/resolve-db-dir defaults)
-        {:keys [repo-path db-name]}
-        (repo/resolve-repo (args "repo_path") db-dir {:lookup-uri-fn lookup-repo-uri})
-        conn      (get-or-create-conn db-dir db-name)
-        meta-conn (db/ensure-meta-db db-dir)
-        analyze?  (args "analyze")
-        selector  (selector-opts args)
-        opts      (if analyze?
-                    (let [{:keys [prompt-fn model-id]}
-                          (llm/wrap-as-prompt-fn-from-opts
-                           {:provider (or (args "provider") (:provider defaults))
-                            :model    (or (args "model") (:model defaults))})]
-                      (assoc selector
-                             :concurrency 8 :analyze? true
-                             :meta-db (d/db meta-conn)
-                             :model-id model-id :invoke-llm prompt-fn))
-                    (assoc selector :concurrency 8))
-        result    (sync/update-repo! conn repo-path repo-path opts)]
-    (tool-result (format-update-changes result))))
-
-(defn- handle-ask [args defaults]
-  (util/validate-string-length! "question" (args "question") max-question-len)
-  (validate-llm-inputs! args)
-  (with-conn args defaults
-    (fn [{:keys [db meta-db db-dir db-name]}]
-      (let [{:keys [invoke-fn]}
-            (llm/make-messages-fn-from-opts {:provider    (or (args "provider") (:provider defaults))
-                                             :model       (or (args "model") (:model defaults))
-                                             :temperature 0.3
-                                             :max-tokens  4096})
-            max-iter    (min (or (args "max_iterations") 10) 50)
-            eidx        (embed/get-cached-index db-dir db-name)
-            result      (agent/ask meta-db db (args "question")
-                                   {:invoke-fn      invoke-fn
-                                    :repo-name      db-name
-                                    :embed-index    eidx
-                                    :max-iterations max-iter
-                                    :continue-from  (args "continue_from")})
-            usage       (:usage result)
-            answer      (:answer result)
-            session-id  (:session-id result)]
-        (log! "agent/done"
-              (str "status=" (:status result)
-                   " iterations=" (:iterations usage)
-                   " tokens=" (+ (:input-tokens usage 0) (:output-tokens usage 0))))
-        (if (= :budget-exhausted (:status result))
-          (if answer
-            (tool-result (str answer
-                              "\n\n[Session " session-id " saved — to continue exploring, "
-                              "call noumenon_ask with continue_from=\"" session-id "\"]"))
-            (tool-error (str "Budget exhausted after " max-iter " iterations"
-                             " (" (:input-tokens usage 0) " in / "
-                             (:output-tokens usage 0) " out tokens) with no answer. "
-                             "Try increasing max_iterations or narrowing the question.")))
-          (tool-result (or answer
-                           "The agent completed without finding an answer. Try rephrasing the question or increasing max_iterations.")))))))
-
-(def ^:private valid-reanalyze-scopes
-  #{"all" "prompt-changed" "model-changed" "stale"})
-
-(defn- prepare-reanalysis!
-  "Retract analysis attrs for files matching the reanalyze scope.
-   Returns count of files marked for re-analysis, or nil if no scope given."
-  [conn db reanalyze {:keys [prompt-hash model-id]}]
-  (when reanalyze
-    (let [scope (keyword reanalyze)
-          files (analyze/files-for-reanalysis db scope {:prompt-hash prompt-hash
-                                                        :model-id    model-id})
-          paths (mapv :file/path files)
-          n     (if (seq paths) (sync/retract-analysis! conn paths) 0)]
-      (log! (str "Marked " n " file(s) for re-analysis (scope: " reanalyze ")"))
-      n)))
-
-(defn- handle-analyze [args defaults]
-  (validate-llm-inputs! args)
-  (let [reanalyze (args "reanalyze")]
-    (when (and reanalyze (not (valid-reanalyze-scopes reanalyze)))
-      (throw (ex-info (str "Invalid reanalyze scope: " reanalyze
-                           ". Must be one of: all, prompt-changed, model-changed, stale")
-                      {:scope reanalyze})))
-    (with-conn args defaults
-      (fn [{:keys [conn meta-db repo-path]}]
-        (let [{:keys [prompt-fn model-id provider-kw]}
-              (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                                :model    (or (args "model") (:model defaults))})
-              prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template meta-db)))]
-          (prepare-reanalysis! conn (d/db conn) reanalyze
-                               {:prompt-hash prompt-hash :model-id model-id})
-          (let [concurrency (min (or (args "concurrency") 3) 20)
-                max-files   (args "max_files")
-                selector    (selector-opts args)
-                result      (analyze/analyze-repo! conn repo-path prompt-fn
-                                                   (cond-> (assoc selector
-                                                                  :meta-db meta-db
-                                                                  :model-id model-id
-                                                                  :provider (name provider-kw)
-                                                                  :concurrency concurrency
-                                                                  :no-promote? (boolean (args "no_promote"))
-                                                                  :progress-fn (:progress-fn defaults))
-                                                     max-files (assoc :max-files max-files)))]
-            (tool-result (str "Analysis complete. "
-                              (:files-analyzed result 0) " files analyzed"
-                              (when (pos? (:files-promoted result 0))
-                                (str ", " (:files-promoted result 0) " promoted (cache hit)"))
-                              (when (pos? (:files-parse-errored result 0))
-                                (str ", " (:files-parse-errored result 0) " parse errors"))
-                              (when (pos? (:files-errored result 0))
-                                (str ", " (:files-errored result 0) " errors"))
-                              ". " (get-in result [:total-usage :input-tokens] 0)
-                              " in / " (get-in result [:total-usage :output-tokens] 0) " out tokens"
-                              (when-let [c (get-in result [:total-usage :cost-usd])]
-                                (when (pos? c) (str " ($" (format "%.2f" c) ")")))))))))))
-
-(defn- handle-enrich [args defaults]
-  (with-conn args defaults
-    (fn [{:keys [conn repo-path]}]
-      (let [concurrency (min (or (args "concurrency") 8) 20)
-            selector    (selector-opts args)
-            result      (imports/enrich-repo! conn repo-path
-                                              (assoc selector :concurrency concurrency))]
-        (tool-result (str "Enrich complete. "
-                          (:files-processed result 0) " files processed, "
-                          (:imports-resolved result 0) " imports resolved."))))))
-
-(defn- handle-synthesize [args defaults]
-  (validate-llm-inputs! args)
-  (with-conn args defaults
-    (fn [{:keys [conn meta-conn db-name]}]
-      (artifacts/reseed! meta-conn)
-      (let [meta-db   (d/db meta-conn)
-            {:keys [prompt-fn model-id provider-kw]}
-            (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                              :model    (or (args "model") (:model defaults))})
-            result (synthesize/synthesize-repo!
-                    conn prompt-fn
-                    {:meta-db meta-db :provider (name provider-kw)
-                     :model-id model-id :repo-name db-name})]
-        (tool-result (str "Synthesis complete. "
-                          (:components result 0) " components identified, "
-                          (:files-classified result 0) " files classified"
-                          (when-let [m (:mode result)]
-                            (str " (mode: " (name m)
-                                 (when-let [p (:partitions result)] (str ", " p " partitions"))
-                                 ")"))
-                          (when-let [u (:usage result)]
-                            (str " (" (:input-tokens u 0) " in / "
-                                 (:output-tokens u 0) " out tokens)"))
-                          (when-let [e (:error result)]
-                            (str "\nError: " e))
-                          "."))))))
-
-(defn- format-pipeline-stages
-  "Format pipeline stages as [import:3 analyze:42 enrich:1], or nil."
-  [ops]
-  (let [stages (keep (fn [op]
-                       (when-let [n (ops op)]
-                         (str (name op) ":" n)))
-                     [:import :enrich :analyze :synthesize])]
-    (when (seq stages)
-      (str " [" (str/join " " stages) "]"))))
-
-(defn- handle-list-databases [_args defaults]
-  (let [db-dir (util/resolve-db-dir defaults)
-        names  (db/list-db-dirs db-dir)]
-    (if (seq names)
-      (let [client (db/create-client db-dir)
-            stats  (mapv #(db/db-stats client %) names)]
-        (tool-result
-         (str/join "\n"
-                   (map (fn [{:keys [name commits files dirs cost ops error]}]
-                          (if error
-                            (str name " (error: " error ")")
-                            (str name ": " commits " commits, " files " files, " dirs " dirs"
-                                 (when (pos? cost) (str ", $" (format "%.2f" cost)))
-                                 (format-pipeline-stages ops))))
-                        stats))))
-      (tool-result "No databases found."))))
-
-(defn- handle-llm-providers [_args _defaults]
-  (tool-result (pr-str (llm/provider-catalog))))
-
-(defn- handle-llm-models [args _defaults]
-  (let [provider (or (args "provider") (llm/default-provider-name))]
-    (tool-result (pr-str (llm/discover-provider-models provider)))))
-
-(defn- format-digest-summary
-  "Format digest pipeline results as a human-readable summary string."
-  [r]
-  (str "Digest complete."
-       (when-let [u (:update r)]
-         (str "\nUpdate: " (or (:added u) 0) " added, "
-              (or (:modified u) 0) " modified."))
-       (when-let [a (:analyze r)]
-         (str "\nAnalyze: " (:files-analyzed a 0) " files analyzed"
-              (when-let [c (get-in a [:total-usage :cost-usd])]
-                (when (pos? c) (str " ($" (format "%.2f" c) ")")))))
-       (when-let [b (:benchmark r)]
-         (str "\nBenchmark: run-id=" (:run-id b)
-              (when-let [fm (get-in b [:aggregate :full-mean])]
-                (str ", full=" (format "%.1f%%" (* 100.0 (double fm)))))))))
-
-(defn- handle-digest [args defaults]
-  (validate-llm-inputs! args)
-  (with-conn args defaults
-    (fn [{:keys [conn meta-conn db-dir db-name repo-path]}]
-      (artifacts/reseed! meta-conn)
-      (let [meta-db (d/db meta-conn)
-            {:keys [prompt-fn model-id provider-kw]}
-            (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                              :model    (or (args "model") (:model defaults))})
-            repo-uri (if (str/starts-with? (str repo-path) "db://")
-                       repo-path
-                       (.getCanonicalPath (java.io.File. (str repo-path))))
-            selector (selector-opts args)
-            results  (atom {})]
-        ;; Import + Enrich
-        (when-not (or (args "skip_import") (args "skip_enrich"))
-          (let [r (sync/update-repo! conn repo-path repo-uri
-                                     (assoc selector :concurrency 8))]
-            (swap! results assoc :update r)))
-        ;; Analyze
-        (when-not (args "skip_analyze")
-          (let [r (analyze/analyze-repo! conn repo-path prompt-fn
-                                         (assoc selector
-                                                :meta-db meta-db :model-id model-id
-                                                :provider (name provider-kw)
-                                                :concurrency 3
-                                                :progress-fn (:progress-fn defaults)))]
-            (swap! results assoc :analyze r)))
-        ;; Synthesize
-        (when-not (args "skip_synthesize")
-          (try
-            (let [synth-llm (llm/wrap-as-prompt-fn-from-opts
-                             {:provider (or (args "provider") (:provider defaults))
-                              :model    (or (args "model") (:model defaults))
-                              :max-tokens 16384})
-                  r (synthesize/synthesize-repo!
-                     conn (:prompt-fn synth-llm)
-                     {:meta-db meta-db
-                      :provider (name (:provider-kw synth-llm))
-                      :model-id (:model-id synth-llm)
-                      :repo-name db-name})]
-              (swap! results assoc :synthesize r))
-            (catch Exception e
-              (log! "digest/synthesize" (str "skipped: " (.getMessage e))))))
-        ;; Embed
-        (let [db (d/db conn)]
-          (try
-            (let [idx (embed/build-index! db db-dir db-name)]
-              (swap! results assoc :embed {:entries (count (:entries idx))}))
-            (catch Exception e
-              (log! "digest/embed" (str "skipped: " (.getMessage e))))))
-        ;; Benchmark
-        (when-not (args "skip_benchmark")
-          (let [db     (d/db conn)
-                layers (validate-layers (args "layers"))
-                mode   (cond-> {} layers (assoc :layers layers))
-                model-cfg {:provider (or (args "provider") (:provider defaults))
-                           :model    (or (args "model") (:model defaults))}
-                r      (bench/run-benchmark! db repo-path prompt-fn
-                                             :meta-db meta-db
-                                             :conn conn :mode mode
-                                             :model-config model-cfg
-                                             :budget {:max-questions (args "max_questions")}
-                                             :report? (args "report")
-                                             :concurrency 3
-                                             :progress-fn (:progress-fn defaults)
-                                             :db-dir db-dir :db-name db-name)]
-            (swap! results assoc :benchmark
-                   (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
-        (tool-result (format-digest-summary @results))))))
-
-(defn- handle-reseed [_args defaults]
-  (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir defaults))]
-    (artifacts/reseed! meta-conn)
-    (let [meta-db (d/db meta-conn)]
-      (tool-result (str "Reseeded: " (count (artifacts/list-active-query-names meta-db))
-                        " queries, rules, and prompts.")))))
-
-(defn- handle-artifact-history [args defaults]
-  (let [atype (args "type")
-        aname (args "name")]
-    (when-not (#{"prompt" "rules"} atype)
-      (throw (ex-info "Invalid type" {:user-message "type must be 'prompt' or 'rules'"})))
-    (when (and (= atype "prompt") (nil? aname))
-      (throw (ex-info "Missing name"
-                      {:user-message "name is required when type is 'prompt'. Provide the prompt name to look up."})))
-    (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir defaults))
-          history   (case atype
-                      "prompt" (do (util/validate-string-length! "name" aname 256)
-                                   (artifacts/prompt-history meta-conn aname))
-                      "rules"  (artifacts/rules-history meta-conn))]
-      (tool-result
-       (if (seq history)
-         (->> history
-              (map (fn [{:keys [tx-time source]}]
-                     (str tx-time " [" (name source) "]")))
-              (str/join "\n"))
-         "No history found.")))))
+;; --- Tool dispatch ---
 
 (def ^:private tool-handlers
-  {"noumenon_import"            handle-import
-   "noumenon_status"            handle-status
-   "noumenon_query"             handle-query
-   "noumenon_query_federated"   handle-query-federated
-   "noumenon_list_queries"      handle-list-queries
-   "noumenon_get_schema"        handle-get-schema
-   "noumenon_update"            handle-update
-   "noumenon_ask"               handle-ask
-   "noumenon_search"            handle-search
-   "noumenon_analyze"           handle-analyze
-   "noumenon_enrich"            handle-enrich
-   "noumenon_synthesize"        handle-synthesize
-   "noumenon_list_databases"    handle-list-databases
-   "noumenon_llm_providers"     handle-llm-providers
-   "noumenon_llm_models"        handle-llm-models
-   "noumenon_benchmark_run"     h-bench/handle-benchmark-run
-   "noumenon_benchmark_results" h-bench/handle-benchmark-results
-   "noumenon_benchmark_compare" h-bench/handle-benchmark-compare
-   "noumenon_digest"            handle-digest
+  {"noumenon_import"             h-mut/handle-import
+   "noumenon_status"             h-query/handle-status
+   "noumenon_query"              h-query/handle-query
+   "noumenon_query_federated"    h-query/handle-query-federated
+   "noumenon_list_queries"       h-query/handle-list-queries
+   "noumenon_get_schema"         h-query/handle-get-schema
+   "noumenon_update"             h-mut/handle-update
+   "noumenon_ask"                h-mut/handle-ask
+   "noumenon_search"             h-query/handle-search
+   "noumenon_analyze"            h-mut/handle-analyze
+   "noumenon_enrich"             h-mut/handle-enrich
+   "noumenon_synthesize"         h-mut/handle-synthesize
+   "noumenon_digest"             h-mut/handle-digest
+   "noumenon_list_databases"     h-meta/handle-list-databases
+   "noumenon_llm_providers"      h-meta/handle-llm-providers
+   "noumenon_llm_models"         h-meta/handle-llm-models
+   "noumenon_reseed"             h-meta/handle-reseed
+   "noumenon_artifact_history"   h-meta/handle-artifact-history
+   "noumenon_benchmark_run"      h-bench/handle-benchmark-run
+   "noumenon_benchmark_results"  h-bench/handle-benchmark-results
+   "noumenon_benchmark_compare"  h-bench/handle-benchmark-compare
    "noumenon_introspect"         h-intro/handle-introspect
    "noumenon_introspect_start"   h-intro/handle-introspect-start
    "noumenon_introspect_status"  h-intro/handle-introspect-status
    "noumenon_introspect_stop"    h-intro/handle-introspect-stop
-   "noumenon_introspect_history" h-intro/handle-introspect-history
-   "noumenon_reseed"             handle-reseed
-   "noumenon_artifact_history"   handle-artifact-history})
-
-;; --- MCP method handlers ---
+   "noumenon_introspect_history" h-intro/handle-introspect-history})
 
 (defn- handle-tools-call [params defaults ^java.io.PrintWriter writer]
-  (let [tool-name (get params "name")
-        arguments (or (get params "arguments") {})
-        meta-info (get params "_meta")
+  (let [tool-name      (get params "name")
+        arguments      (or (get params "arguments") {})
+        meta-info      (get params "_meta")
         progress-token (get meta-info "progressToken")
-        progress-fn (protocol/make-mcp-progress-fn writer progress-token)]
+        progress-fn    (protocol/make-mcp-progress-fn writer progress-token)]
     (if-let [handler (tool-handlers tool-name)]
       (try
         (handler arguments (if progress-fn
@@ -875,19 +296,19 @@
           (let [msg (.getMessage e)
                 user-msg (:user-message (ex-data e))]
             (log! "tool/error" tool-name msg)
-            (tool-error (or user-msg
-                            (str "Internal error: " msg)))))
+            (mu/tool-error (or user-msg
+                               (str "Internal error: " msg)))))
         (catch Exception e
           (let [msg (.getMessage e)]
             (log! "tool/error" tool-name msg)
-            (tool-error
+            (mu/tool-error
              (if (and msg (str/includes? msg ".lock"))
                (str "FATAL: Database locked by another process (likely a running daemon). "
                     "DO NOT RETRY — all Noumenon tool calls will fail until the lock is released. "
                     "Tell the user to kill the daemon: ps aux | grep 'noumenon.*daemon' | grep -v grep | awk '{print $2}' | xargs kill")
                (str "Internal error in " tool-name ": " msg
                     ". DO NOT RETRY — report this error to the user."))))))
-      (tool-error (str "Unknown tool: " tool-name)))))
+      (mu/tool-error (str "Unknown tool: " tool-name)))))
 
 (defn- handle-tools-call-proxy
   "Route tools/call to either local handler or remote proxy."
@@ -905,18 +326,18 @@
   (protocol/suppress-datomic-logging!)
   (log! "noumenon MCP server starting")
   (let [{:keys [reader writer]} (protocol/open-stdio)
-        defaults     (cond-> (select-keys opts [:db-dir :provider :model])
-                       (:no-auto-update opts) (assoc :auto-update false))
-        dispatch     (fn [id method params writer]
-                       (case method
-                         "initialize"                (protocol/format-response id (protocol/handle-initialize params))
-                         "notifications/initialized" nil
-                         "tools/list"                (protocol/format-response id (protocol/handle-tools-list tools))
-                         "tools/call"                (protocol/format-response id (handle-tools-call-proxy
-                                                                                   params defaults writer (proxy/resolve-conn)))
-                         "ping"                      (protocol/format-response id {})
-                         "resources/list"            (protocol/format-response id {:resources []})
-                         (protocol/format-error id -32601 (str "Method not found: " method))))]
+        defaults (cond-> (select-keys opts [:db-dir :provider :model])
+                   (:no-auto-update opts) (assoc :auto-update false))
+        dispatch (fn [id method params writer]
+                   (case method
+                     "initialize"                (protocol/format-response id (protocol/handle-initialize params))
+                     "notifications/initialized" nil
+                     "tools/list"                (protocol/format-response id (protocol/handle-tools-list tools))
+                     "tools/call"                (protocol/format-response id (handle-tools-call-proxy
+                                                                               params defaults writer (proxy/resolve-conn)))
+                     "ping"                      (protocol/format-response id {})
+                     "resources/list"            (protocol/format-response id {:resources []})
+                     (protocol/format-error id -32601 (str "Method not found: " method))))]
     (when-let [conn (proxy/resolve-conn)]
       (log! (str "MCP proxy mode: forwarding to " (:host conn)
                  (when-not (proxy/load-connection-config) " (auto-detected local daemon)"))))

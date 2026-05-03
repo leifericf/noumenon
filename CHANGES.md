@@ -5,6 +5,7 @@
 ### Refactoring
 
 - **`benchmark` no longer depends on `cli`** — the benchmarking subsystem pulled in `noumenon.cli` solely to interpolate the program name into one "Resume with: …" log line. The literal is inlined and the require dropped, breaking a small layering inversion (`subsystem` → `api`).
+- **`mcp.clj` split by responsibility** — the 1440-line god namespace is now a 346-line declarative tool schema + dispatch, with sibling namespaces for transport (`mcp/protocol`), remote-proxy mode (`mcp/proxy`), shared infra (`mcp/util`), and per-cluster tool handlers (`mcp/handlers/{query,mutation,benchmark,introspect,meta}`). No behavior change; one file to grep was the bottleneck.
 
 ## 0.8.1
 
