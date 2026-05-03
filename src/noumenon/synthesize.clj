@@ -547,11 +547,11 @@
              :tx/provider (or provider "unknown")
              :tx/model-source model-source
              :tx/model (or resolved-model model-id "unknown")
+             :tx/cost-usd cost
              :prov/prompt-hash prompt-hash
              :prov/analyzed-at (Date.)}
       (:input-tokens usage)  (assoc :tx/input-tokens (:input-tokens usage))
-      (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
-      (pos? cost)            (assoc :tx/cost-usd cost))))
+      (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage)))))
 
 (defn- transact-and-finalize!
   "Retract old synthesis, transact new components, derive deps. Returns result map."

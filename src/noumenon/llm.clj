@@ -85,16 +85,22 @@
 ;; --- Pricing ---
 
 (def model-pricing
-  "Per-token pricing in $/1M tokens. Only for direct Anthropic API models.
-   GLM uses quota-based pricing so is not listed here."
-  {"claude-sonnet-4-6-20250514" {:input 3.0  :output 15.0}
-   "claude-haiku-4-5-20251001"  {:input 0.80 :output 4.0}
-   "claude-opus-4-6-20250514"   {:input 15.0 :output 75.0}})
+  "Per-token pricing in $/1M tokens for direct Anthropic API models.
+   Keys are matched as prefixes against the model id returned by the
+   provider, so both bare names (claude-sonnet-4-6) and date-stamped
+   ids (claude-sonnet-4-6-20250514) hit the same entry. GLM and other
+   quota-priced providers return 0."
+  {"claude-sonnet-4-6" {:input 3.0  :output 15.0}
+   "claude-haiku-4-5"  {:input 0.80 :output 4.0}
+   "claude-opus-4-6"   {:input 15.0 :output 75.0}
+   "claude-opus-4-7"   {:input 15.0 :output 75.0}})
 
 (defn estimate-cost
   "Estimate USD cost for given model and token counts. Returns 0.0 for unknown models."
   [model-id input-tokens output-tokens]
-  (if-let [{:keys [input output]} (model-pricing model-id)]
+  (if-let [{:keys [input output]} (some (fn [[k v]]
+                                          (when (and model-id (str/starts-with? model-id k)) v))
+                                        model-pricing)]
     (+ (* input-tokens (/ input 1e6))
        (* output-tokens (/ output 1e6)))
     0.0))

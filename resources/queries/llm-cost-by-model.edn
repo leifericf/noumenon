@@ -3,6 +3,6 @@
  :query [:find ?model (sum ?in) (sum ?out) (sum ?cost)
          :where
          [?tx :tx/model ?model]
-         [?tx :tx/input-tokens ?in]
-         [?tx :tx/output-tokens ?out]
-         [?tx :tx/cost-usd ?cost]]}
+         [(get-else $ ?tx :tx/input-tokens 0) ?in]
+         [(get-else $ ?tx :tx/output-tokens 0) ?out]
+         [(get-else $ ?tx :tx/cost-usd 0.0) ?cost]]}

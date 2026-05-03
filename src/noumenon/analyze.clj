@@ -315,10 +315,10 @@
              :tx/analyzer        (or analyzer "noumenon.analyze/0.1.0")
              :prov/model-version (or model-version "unknown")
              :prov/prompt-hash   (or prompt-hash-val "")
-             :prov/analyzed-at   (Date.)}
+             :prov/analyzed-at   (Date.)
+             :tx/cost-usd        cost}
       (:input-tokens usage)  (assoc :tx/input-tokens (:input-tokens usage))
-      (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage))
-      (pos? cost)            (assoc :tx/cost-usd cost))))
+      (:output-tokens usage) (assoc :tx/output-tokens (:output-tokens usage)))))
 
 (defn analysis->tx-data
   "Convert a parsed analysis map into Datomic tx-data for a file.
