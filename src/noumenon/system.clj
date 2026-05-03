@@ -46,7 +46,7 @@
 ;; --- HTTP server ---
 
 (defmethod ig/init-key :noumenon/http-server [_ opts]
-  (let [port (http/start! opts)]
+  (let [port (http/start! (dissoc opts ::deps))]
     (log! (str "system: HTTP daemon on port " port))
     {:port port}))
 
@@ -68,7 +68,12 @@
      :noumenon/embed-cache      {}
      :noumenon/completion-cache {}
      :noumenon/agent-sessions   {}
-     :noumenon/http-server      (cond-> {:port (or port 0) :bind (or bind "127.0.0.1")}
+     :noumenon/http-server      (cond-> {:port (or port 0) :bind (or bind "127.0.0.1")
+                                         ::deps [(ig/ref :noumenon/datomic-conns)
+                                                 (ig/ref :noumenon/llm-semaphore)
+                                                 (ig/ref :noumenon/embed-cache)
+                                                 (ig/ref :noumenon/completion-cache)
+                                                 (ig/ref :noumenon/agent-sessions)]}
                                   db-dir   (assoc :db-dir db-dir)
                                   provider (assoc :provider provider)
                                   model    (assoc :model model)
