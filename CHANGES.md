@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0
+
 ### Fixes
 
 - **MCP proxy renders friendly 401/403 messages again** — `interpret-response` was reading the HTTP status from the parsed JSON body (`(get parsed "status")`) instead of the http-kit response's top-level `:status`. The daemon's `error-response` builder doesn't echo the code into the body — only `:ok` and `:error` — so the case branch never matched and a user with an expired token saw the bare `Unauthorized — bearer token required` rather than `Authentication failed. Run \`noum connect <url> --token <new-token>\`…`. The bug pre-dated the http-kit migration and was preserved verbatim through it. `interpret-response` now destructures `:status` from the response map and uses that for the special-case branches.
