@@ -645,54 +645,59 @@ configured :models when discovery is unavailable."}
       (cond-> (assoc result :subcommand sub)
         (:error result) (select-keys [:error :subcommand :flag :value])))))
 
+(defn- parse-layers-arg
+  "Translate `:layers \"raw,full\"` into `:layers [:raw :full]` in opts."
+  [opts]
+  (if-let [s (:layers opts)]
+    (assoc opts :layers (mapv keyword (str/split s #",")))
+    opts))
+
+(defn- introspect-error-filter
+  "Strip everything except the error envelope from a failed introspect parse."
+  [result]
+  (cond-> result
+    (:error result) (select-keys [:error :subcommand :flag :value])))
+
+(def ^:private parse-post-fns
+  "Optional post-processing per subcommand. Applied to a successful parse result."
+  {"digest"     parse-layers-arg
+   "introspect" introspect-error-filter})
+
+(defn- parse-with-registry
+  "Parse `args` for `sub` using the spec in `command-registry`. Tags :subcommand,
+   short-circuits on --help, and applies any post-fn registered for `sub`."
+  [sub args]
+  (cond
+    (contains-help? args)
+    {:help sub}
+
+    :else
+    (if-let [spec (get-in command-registry [sub :spec])]
+      (let [post-fn (get parse-post-fns sub identity)]
+        (-> (parse-command spec args)
+            (assoc :subcommand sub)
+            post-fn))
+      {:error :unknown-subcommand :subcommand sub})))
+
+(def ^:private parser-overrides
+  "Subcommands whose parsing logic doesn't fit the registry-driven default."
+  {"benchmark" parse-benchmark-args
+   "ask"       parse-ask-args})
+
+(def ^:private simple-subcommands
+  #{"import" "status" "show-schema" "analyze" "enrich" "query" "update" "watch"})
+
 (defn parse-args
   "Top-level CLI arg parser. Returns opts map, {:help ...}, or {:error keyword ...}."
   [args]
   (let [first-arg (first args)]
     (cond
-      (empty? args)
-      {:error :no-args}
-
-      (help-flags first-arg)
-      {:help :global}
-
-      (= "--version" first-arg)
-      {:version true}
-
+      (empty? args)             {:error :no-args}
+      (help-flags first-arg)    {:help :global}
+      (= "--version" first-arg) {:version true}
       :else
       (let [[sub & rest-args] args]
-        (case sub
-          "benchmark"      (parse-benchmark-args rest-args)
-          "digest"         (if (contains-help? rest-args)
-                             {:help "digest"}
-                             (let [result (parse-command (get-in command-registry ["digest" :spec]) rest-args)
-                                   result (if-let [ls (:layers result)]
-                                            (assoc result :layers (mapv keyword (str/split ls #",")))
-                                            result)]
-                               (if (:error result) result
-                                   (assoc result :subcommand "digest"))))
-          "ask"            (parse-ask-args rest-args)
-          "serve"          (if (contains-help? rest-args)
-                             {:help "serve"}
-                             (let [result (parse-command (get-in command-registry ["serve" :spec]) rest-args)]
-                               (if (:error result) result
-                                   (assoc result :subcommand "serve"))))
-          "list-databases" (if (contains-help? rest-args)
-                             {:help "list-databases"}
-                             (let [result (parse-command list-databases-command-spec rest-args)]
-                               (if (:error result) result
-                                   (assoc result :subcommand "list-databases"))))
-          "introspect"     (if (contains-help? rest-args)
-                             {:help "introspect"}
-                             (let [result (parse-command introspect-command-spec rest-args)]
-                               (cond-> (assoc result :subcommand "introspect")
-                                 (:error result) (select-keys [:error :subcommand :flag :value]))))
-          (if (#{"import" "status" "show-schema" "analyze" "enrich" "query" "update" "watch"} sub)
-            (parse-simple-args sub rest-args)
-            (if-let [spec (get-in command-registry [sub :spec])]
-              (if (contains-help? rest-args)
-                {:help sub}
-                (let [result (parse-command spec rest-args)]
-                  (if (:error result) result
-                      (assoc result :subcommand sub))))
-              {:error :unknown-subcommand :subcommand sub})))))))
+        (cond
+          (parser-overrides sub)   ((parser-overrides sub) rest-args)
+          (simple-subcommands sub) (parse-simple-args sub rest-args)
+          :else                    (parse-with-registry sub rest-args))))))
