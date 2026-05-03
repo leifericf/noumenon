@@ -34,6 +34,30 @@
   [s]
   (boolean (and (string? s) (re-matches sha-pattern s))))
 
+(defn- apply-status-line
+  "Apply one parsed git --name-status line to the {added modified deleted} accumulator.
+   `fields` is the tab-split line with at least 2 elements."
+  [acc fields]
+  (case (first (first fields))
+    \R (let [old-path (nth fields 1)
+             new-path (nth fields 2 nil)]
+         (cond-> (update acc :deleted conj old-path)
+           new-path (update :added conj new-path)))
+    \C (if-let [new-path (nth fields 2 nil)]
+         (update acc :added conj new-path)
+         acc)
+    (let [path (nth fields 1)]
+      (case (first (first fields))
+        \A      (update acc :added    conj path)
+        \D      (update acc :deleted  conj path)
+        (\M \T) (update acc :modified conj path)
+        acc))))
+
+(defn- parse-status-fields [line]
+  (let [fields (str/split line #"\t")]
+    (when (and (first fields) (>= (count fields) 2))
+      fields)))
+
 (defn changed-files
   "Return {:added [...] :modified [...] :deleted [...]} between old-sha and HEAD.
    Each value is a vector of repo-relative file paths.
@@ -55,27 +79,8 @@
           (throw (ex-info msg {:status 400 :message msg :user-message msg
                                :sha old-sha :exit exit})))
         (->> (str/split-lines out)
-             (remove str/blank?)
-             (reduce (fn [acc line]
-                       (let [fields (str/split line #"\t")
-                             status (first fields)]
-                         (if (and status (>= (count fields) 2))
-                           (case (first status)
-                             \R (let [old-path (nth fields 1)
-                                      new-path (nth fields 2 nil)]
-                                  (cond-> (update acc :deleted conj old-path)
-                                    new-path (update :added conj new-path)))
-                             \C (let [new-path (nth fields 2 nil)]
-                                  (if new-path (update acc :added conj new-path) acc))
-                             (let [path (nth fields 1)
-                                   k    (case (first status)
-                                          \A :added
-                                          \D :deleted
-                                          (\M \T) :modified
-                                          nil)]
-                               (if k (update acc k conj path) acc)))
-                           acc)))
-                     {:added [] :modified [] :deleted []}))))))
+             (keep parse-status-fields)
+             (reduce apply-status-line {:added [] :modified [] :deleted []}))))))
 
 ;; --- Retraction ---
 
@@ -355,6 +360,98 @@
 
 ;; --- Sync orchestration ---
 
+(defn- auto-sync-p4!
+  "If `repo-path` is a local git-p4 clone, pull from Perforce before reading HEAD."
+  [repo-path]
+  (when (and (.isDirectory (java.io.File. (str repo-path)))
+             (git/p4-clone? repo-path))
+    (log! "Detected git-p4 clone, syncing from Perforce...")
+    (git/p4-sync! repo-path)))
+
+(defn- compute-changes
+  "Resolve {:fresh? :changes} from stored vs. current HEAD.
+   Force-pushes / history rewrites surface as a fresh sync rather than an error."
+  [repo-path stored]
+  (let [fresh? (or (nil? stored) (not (valid-sha? stored)))
+        changes (when-not fresh?
+                  (try (changed-files repo-path stored)
+                       (catch clojure.lang.ExceptionInfo e
+                         (log! (str "WARNING: stored HEAD " stored
+                                    " no longer resolves; treating as fresh sync ("
+                                    (.getMessage e) ")"))
+                         nil)))]
+    {:fresh?  (or fresh? (nil? changes))
+     :changes changes}))
+
+(defn- apply-retractions!
+  "Retract analysis on modified files and tombstone/hard-retract deleted files."
+  [conn changes opts]
+  (when (seq (:modified changes))
+    (retract-stale! conn (:modified changes)))
+  (when (seq (:deleted changes))
+    (retract-deleted-files! conn (:deleted changes)
+                            {:delta-db? (:delta-db? opts)})))
+
+(defn- log-incremental-summary! [fresh? changes]
+  (when-not fresh?
+    (log! (str "Incremental sync: "
+               (count (:added changes)) " added, "
+               (count (:modified changes)) " modified, "
+               (count (:deleted changes)) " deleted"))))
+
+(defn- enrich-needed?
+  "Enrichment runs on a fresh import or when any file changed."
+  [fresh? changes]
+  (or fresh?
+      (seq (:added changes))
+      (seq (:modified changes))
+      (seq (:deleted changes))))
+
+(defn- run-pipeline-stages!
+  "Import commits + files, run optional enrich/analyze/calls.
+   Returns {:git-r :files-r :reclass-n :issues-n :post-r :analyze-r :calls-r}."
+  [conn repo-path repo-uri opts fresh? changes]
+  (let [git-r     (git/import-commits! conn repo-path repo-uri)
+        reclass-n (reclassify-commits! conn)
+        _         (when (pos? reclass-n)
+                    (log! (str "Reclassified " reclass-n " commit kinds")))
+        issues-n  (backfill-issue-refs! conn)
+        _         (when (pos? issues-n)
+                    (log! (str "Extracted issue refs for " issues-n " commits")))
+        files-r   (files/import-files! conn repo-path repo-uri)
+        selector  (select-keys opts [:path :include :exclude :lang])
+        post-r    (when (enrich-needed? fresh? changes)
+                    (imports/enrich-repo! conn repo-path
+                                          (assoc selector :concurrency (or (:concurrency opts) 8))))
+        analyze-r (when-let [invoke-llm (:invoke-llm opts)]
+                    (analyze/analyze-repo!
+                     conn repo-path invoke-llm
+                     (assoc selector
+                            :meta-db (:meta-db opts)
+                            :model-id (:model-id opts)
+                            :provider (:provider opts)
+                            :concurrency (or (:analyze-concurrency opts) 3)
+                            :min-delay-ms 0)))
+        calls-r   (when (or post-r analyze-r)
+                    (calls/resolve-calls! conn))]
+    {:git-r git-r :files-r files-r :reclass-n reclass-n :issues-n issues-n
+     :post-r post-r :analyze-r analyze-r :calls-r calls-r}))
+
+(defn- update-result
+  [{:keys [git-r files-r reclass-n post-r analyze-r calls-r]} fresh? changes current elapsed-ms]
+  (cond-> {:status       (if fresh? :fresh-import :synced)
+           :head-sha     current
+           :added        (count (:added changes []))
+           :modified     (count (:modified changes []))
+           :deleted      (count (:deleted changes []))
+           :commits      (:commits-imported git-r 0)
+           :reclassified reclass-n
+           :files        (:files-imported files-r 0)
+           :imports      (:imports-resolved post-r 0)
+           :elapsed-ms   elapsed-ms}
+    analyze-r (assoc :analyzed (:files-analyzed analyze-r 0))
+    calls-r   (assoc :calls-resolved (:resolved calls-r 0))))
+
 (defn update-repo!
   "Update the knowledge graph with the current git state.
    Handles both fresh (no database / no stored SHA) and incremental cases.
@@ -365,80 +462,19 @@
      :model-id    — model identifier for analysis
      :concurrency — worker count for analyze/enrich"
   [conn repo-path repo-uri opts]
-  ;; Auto-sync git-p4 clones before checking for changes
-  (when (and (.isDirectory (java.io.File. (str repo-path)))
-             (git/p4-clone? repo-path))
-    (log! "Detected git-p4 clone, syncing from Perforce...")
-    (git/p4-sync! repo-path))
+  (auto-sync-p4! repo-path)
   (let [start-ms (System/currentTimeMillis)
-        db       (d/db conn)
-        stored   (stored-head-sha db)
+        stored   (stored-head-sha (d/db conn))
         current  (git/head-sha repo-path)]
     (if (and stored (= stored current))
       (do (when-not (:quiet? opts)
             (log! "Already up to date" (str "(HEAD " (subs current 0 7) ")")))
           {:status :up-to-date :head-sha current :elapsed-ms 0})
-      (let [fresh?  (or (nil? stored) (not (valid-sha? stored)))
-            ;; If the stored SHA was orphaned (force-push, history rewrite),
-            ;; `changed-files` now throws. Catch and fall back to a fresh sync
-            ;; rather than erroring the whole update — `update-delta!` keeps
-            ;; the throw-bubble behavior since the basis is user-supplied there.
-            changes (when-not fresh?
-                      (try (changed-files repo-path stored)
-                           (catch clojure.lang.ExceptionInfo e
-                             (log! (str "WARNING: stored HEAD " stored
-                                        " no longer resolves; treating as fresh sync ("
-                                        (.getMessage e) ")"))
-                             nil)))
-            fresh?  (or fresh? (nil? changes))]
-        (when (seq (:modified changes))
-          (retract-stale! conn (:modified changes)))
-        (when (seq (:deleted changes))
-          (retract-deleted-files! conn (:deleted changes)
-                                  {:delta-db? (:delta-db? opts)}))
-        (when-not fresh?
-          (log! (str "Incremental sync: "
-                     (count (:added changes)) " added, "
-                     (count (:modified changes)) " modified, "
-                     (count (:deleted changes)) " deleted")))
-        (let [git-r     (git/import-commits! conn repo-path repo-uri)
-              reclass-n (reclassify-commits! conn)
-              _         (when (pos? reclass-n)
-                          (log! (str "Reclassified " reclass-n " commit kinds")))
-              issues-n  (backfill-issue-refs! conn)
-              _         (when (pos? issues-n)
-                          (log! (str "Extracted issue refs for " issues-n " commits")))
-              files-r   (files/import-files! conn repo-path repo-uri)
-              selector  (select-keys opts [:path :include :exclude :lang])
-              post-r    (when (or fresh?
-                                  (seq (:added changes))
-                                  (seq (:modified changes))
-                                  (seq (:deleted changes)))
-                          (imports/enrich-repo! conn repo-path
-                                                (assoc selector :concurrency (or (:concurrency opts) 8))))
-              analyze-r (when-let [invoke-llm (:invoke-llm opts)]
-                          (analyze/analyze-repo!
-                           conn repo-path invoke-llm
-                           (assoc selector
-                                  :meta-db (:meta-db opts)
-                                  :model-id (:model-id opts)
-                                  :provider (:provider opts)
-                                  :concurrency (or (:analyze-concurrency opts) 3)
-                                  :min-delay-ms 0)))
-              calls-r   (when (or post-r analyze-r)
-                          (calls/resolve-calls! conn))]
-          (update-head-sha! conn repo-path repo-uri)
-          (let [elapsed (- (System/currentTimeMillis) start-ms)]
-            (log! (str "Update complete (" elapsed " ms)"))
-            (cond-> {:status        (if fresh? :fresh-import :synced)
-                     :head-sha      current
-                     :added         (count (:added changes []))
-                     :modified      (count (:modified changes []))
-                     :deleted       (count (:deleted changes []))
-                     :commits       (:commits-imported git-r 0)
-                     :reclassified  reclass-n
-                     :files         (:files-imported files-r 0)
-                     :imports       (:imports-resolved post-r 0)
-                     :elapsed-ms  elapsed}
-              analyze-r (assoc :analyzed (:files-analyzed analyze-r 0))
-              calls-r   (assoc :calls-resolved (:resolved calls-r 0)))))))))
+      (let [{:keys [fresh? changes]} (compute-changes repo-path stored)]
+        (apply-retractions! conn changes opts)
+        (log-incremental-summary! fresh? changes)
+        (let [stages   (run-pipeline-stages! conn repo-path repo-uri opts fresh? changes)
+              _        (update-head-sha! conn repo-path repo-uri)
+              elapsed  (- (System/currentTimeMillis) start-ms)]
+          (log! (str "Update complete (" elapsed " ms)"))
+          (update-result stages fresh? changes current elapsed))))))

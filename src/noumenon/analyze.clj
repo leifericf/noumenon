@@ -144,33 +144,35 @@
 
 (defn- non-blank? [s] (and (string? s) (not (str/blank? s))))
 
+(def ^:private segment-rules
+  "Validation table for segment fields. Each entry: [key pred clean].
+   `pred` decides whether the field is kept; `clean` transforms it before assoc."
+  [[:kind             valid-code-kind             identity]
+   [:line-start       integer?                    identity]
+   [:line-end         integer?                    identity]
+   [:args             non-blank?                  #(clamp %)]
+   [:returns          non-blank?                  #(clamp %)]
+   [:visibility       valid-visibility            identity]
+   [:docstring        non-blank?                  #(clamp %)]
+   [:deprecated       true?                       (constantly true)]
+   [:complexity       valid-segment-complexity    identity]
+   [:smells           #(seq (filter valid-smells %))           #(vec (filter valid-smells %))]
+   [:purpose          non-blank?                  #(clamp %)]
+   [:safety-concerns  #(seq (filter valid-safety-concerns %))  #(vec (filter valid-safety-concerns %))]
+   [:error-handling   valid-error-handling        identity]
+   [:call-names       #(seq (filter non-blank? %))             #(vec (filter non-blank? %))]
+   [:pure             true?                       (constantly true)]
+   [:ai-likelihood    valid-ai-likelihood         identity]])
+
 (defn- validate-segment
   "Validate a segment map. Returns cleaned segment or nil."
-  [{:keys [name kind line-start line-end
-           args returns visibility docstring deprecated
-           complexity smells purpose safety-concerns error-handling
-           call-names pure ai-likelihood]}]
-  (when (non-blank? name)
-    (let [valid-smells'   (seq (filter valid-smells smells))
-          valid-safety    (seq (filter valid-safety-concerns safety-concerns))
-          valid-calls     (seq (filter non-blank? call-names))]
-      (cond-> {:name (clamp name)}
-        (valid-code-kind kind)              (assoc :kind kind)
-        (integer? line-start)               (assoc :line-start line-start)
-        (integer? line-end)                 (assoc :line-end line-end)
-        (non-blank? args)                   (assoc :args (clamp args))
-        (non-blank? returns)                (assoc :returns (clamp returns))
-        (valid-visibility visibility)       (assoc :visibility visibility)
-        (non-blank? docstring)              (assoc :docstring (clamp docstring))
-        (true? deprecated)                  (assoc :deprecated true)
-        (valid-segment-complexity complexity) (assoc :complexity complexity)
-        valid-smells'                       (assoc :smells (vec valid-smells'))
-        (non-blank? purpose)                (assoc :purpose (clamp purpose))
-        valid-safety                        (assoc :safety-concerns (vec valid-safety))
-        (valid-error-handling error-handling) (assoc :error-handling error-handling)
-        valid-calls                         (assoc :call-names (vec valid-calls))
-        (true? pure)                        (assoc :pure true)
-        (valid-ai-likelihood ai-likelihood) (assoc :ai-likelihood ai-likelihood)))))
+  [seg]
+  (when (non-blank? (:name seg))
+    (reduce (fn [acc [k pred clean]]
+              (let [v (get seg k)]
+                (cond-> acc (pred v) (assoc k (clean v)))))
+            {:name (clamp (:name seg))}
+            segment-rules)))
 
 (def ^:private analysis-sanitizers
   {:summary      #(when (string? %) (clamp %))
@@ -378,54 +380,56 @@
 (def ^:private valid-reanalyze-scopes
   #{:all :prompt-changed :model-changed :stale})
 
+(def ^:private reanalysis-scope-clauses
+  "Per-scope tail of the reanalysis query: extra :where clauses + the inputs they bind."
+  {:all
+   {:clauses '[]
+    :inputs  (constantly [])}
+
+   :prompt-changed
+   {:clauses '[[?e :sem/summary _ ?tx]
+               [?tx :prov/prompt-hash ?h]
+               [(not= ?h ?current-hash)]]
+    :inputs  (fn [opts] [(:prompt-hash opts)])
+    :ins     '[?current-hash]}
+
+   :model-changed
+   {:clauses '[[?e :sem/summary _ ?tx]
+               [?tx :prov/model-version ?m]
+               [(not= ?m ?current-model)]]
+    :inputs  (fn [opts] [(:model-id opts)])
+    :ins     '[?current-model]}
+
+   :stale
+   {:clauses '[[?e :sem/summary _ ?tx]
+               [?tx :prov/analyzed-at ?at]
+               [?c :commit/changed-files ?e]
+               [?c :commit/committed-at ?ct]
+               [(> ?ct ?at)]]
+    :inputs  (constantly [])}})
+
+(def ^:private base-reanalysis-clauses
+  '[[?e :file/path ?path]
+    [?e :file/lang ?lang]])
+
+(defn- reanalysis-query
+  "Build a Datalog query map for `scope` by appending the scope's clauses to the base."
+  [scope]
+  (let [{:keys [clauses ins]} (reanalysis-scope-clauses scope)
+        all-where (vec (concat base-reanalysis-clauses
+                               (cond-> clauses (= scope :all) (conj '[?e :sem/summary _]))))]
+    (cond-> {:find '[?path ?lang] :where all-where}
+      (seq ins) (assoc :in (into '[$] ins)))))
+
 (defn files-for-reanalysis
   "Return analyzed files matching `scope` for re-analysis.
    `opts` may include :prompt-hash (for :prompt-changed) and :model-id (for :model-changed).
    Returns [{:file/path ... :file/lang ...}], same shape as `files-needing-analysis`."
   [db scope opts]
   {:pre [(valid-reanalyze-scopes scope)]}
-  (let [raw (case scope
-              :all
-              (d/q '[:find ?path ?lang
-                     :where
-                     [?e :file/path ?path]
-                     [?e :file/lang ?lang]
-                     [?e :sem/summary _]]
-                   db)
-
-              :prompt-changed
-              (d/q '[:find ?path ?lang
-                     :in $ ?current-hash
-                     :where
-                     [?e :file/path ?path]
-                     [?e :file/lang ?lang]
-                     [?e :sem/summary _ ?tx]
-                     [?tx :prov/prompt-hash ?h]
-                     [(not= ?h ?current-hash)]]
-                   db (:prompt-hash opts))
-
-              :model-changed
-              (d/q '[:find ?path ?lang
-                     :in $ ?current-model
-                     :where
-                     [?e :file/path ?path]
-                     [?e :file/lang ?lang]
-                     [?e :sem/summary _ ?tx]
-                     [?tx :prov/model-version ?m]
-                     [(not= ?m ?current-model)]]
-                   db (:model-id opts))
-
-              :stale
-              (d/q '[:find ?path ?lang
-                     :where
-                     [?e :file/path ?path]
-                     [?e :file/lang ?lang]
-                     [?e :sem/summary _ ?tx]
-                     [?tx :prov/analyzed-at ?at]
-                     [?c :commit/changed-files ?e]
-                     [?c :commit/committed-at ?ct]
-                     [(> ?ct ?at)]]
-                   db))
+  (let [{:keys [inputs]} (reanalysis-scope-clauses scope)
+        query (reanalysis-query scope)
+        raw   (apply d/q query db (inputs opts))
         candidates (mapv (fn [[path lang]] {:file/path path :file/lang lang}) raw)
         {sensitive true safe false} (group-by #(files/sensitive-path? (:file/path %))
                                               candidates)]

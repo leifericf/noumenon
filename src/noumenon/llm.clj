@@ -161,6 +161,28 @@
      :model          (:model parsed)
      :resolved-model (:model parsed)}))
 
+(defn- classify-attempt
+  "Classify one HTTP attempt as :ok, :retry, or :fail."
+  [{:keys [status error]} attempt]
+  (let [retryable?    (or error (retryable-status status))
+        last-attempt? (>= attempt *max-retries*)]
+    (cond
+      (and (or error (not= 200 status)) retryable? (not last-attempt?)) :retry
+      (or error (not= 200 status))                                      :fail
+      :else                                                             :ok)))
+
+(defn- retry-reason [{:keys [error status]}]
+  (if error
+    (.getMessage ^Exception error)
+    (str "HTTP " status)))
+
+(defn- failure-ex [{:keys [error status]} attempt]
+  (if error
+    (ex-info (str "API request failed: " (.getMessage ^Exception error))
+             {:error error :attempts attempt})
+    (ex-info (str "API error: HTTP " status)
+             {:status status :attempts attempt})))
+
 (defn invoke-api
   "Invoke Anthropic Messages API directly via http-kit.
    `messages` is [{:role \"user\"/\"assistant\" :content string} ...].
@@ -171,29 +193,13 @@
   (let [req      (build-api-request messages opts)
         start-ms (System/currentTimeMillis)]
     (loop [attempt 1]
-      (let [{:keys [status body error]} @(http/request req)
-            retryable?    (or error (retryable-status status))
-            last-attempt? (>= attempt *max-retries*)
-            retry!        (fn [msg]
-                            (log! (str "  Retry " attempt "/" *max-retries* ": " msg))
-                            (Thread/sleep (get *retry-delays-ms* (dec attempt) 4000)))]
-        (cond
-          (and error retryable? (not last-attempt?))
-          (do (retry! (.getMessage ^Exception error)) (recur (inc attempt)))
-
-          error
-          (throw (ex-info (str "API request failed: " (.getMessage ^Exception error))
-                          {:error error :attempts attempt}))
-
-          (and (not= 200 status) retryable? (not last-attempt?))
-          (do (retry! (str "HTTP " status)) (recur (inc attempt)))
-
-          (not= 200 status)
-          (throw (ex-info (str "API error: HTTP " status)
-                          {:status status :attempts attempt}))
-
-          :else
-          (parse-api-response body start-ms))))))
+      (let [resp (deref (http/request req))]
+        (case (classify-attempt resp attempt)
+          :retry (do (log! (str "  Retry " attempt "/" *max-retries* ": " (retry-reason resp)))
+                     (Thread/sleep (get *retry-delays-ms* (dec attempt) 4000))
+                     (recur (inc attempt)))
+          :fail  (throw (failure-ex resp attempt))
+          :ok    (parse-api-response (:body resp) start-ms))))))
 
 ;; --- Model aliases ---
 

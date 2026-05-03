@@ -18,19 +18,28 @@
   "Maximum seconds for a subprocess import extraction call."
   30)
 
+(defn- split-cmd+opts
+  "Partition `args` into [cmd-strs opts-map]: cmd-strs is the leading non-keyword run,
+   opts is everything after, taken as kw/value pairs."
+  [args]
+  (let [cmd-args (take-while (complement keyword?) args)
+        kvs      (drop (count cmd-args) args)]
+    [(mapv str cmd-args) (apply hash-map kvs)]))
+
+(defn- write-stdin! [^Process proc stdin]
+  (when stdin
+    (with-open [os (.getOutputStream proc)]
+      (.write os (.getBytes (str stdin) "UTF-8")))))
+
 (defn- sh-with-timeout
-  "Like shell/sh but with a timeout. Returns {:exit :out :err} or {:exit 124 :err \"timeout\"}."
+  "Like shell/sh but with a timeout. Returns {:exit :out :err} or {:exit 124 :err \"timeout\"}.
+   Supports trailing `:dir <path>` and `:in <stdin>` keyword arguments."
   [& args]
-  (let [opts      (when (keyword? (last (butlast args))) (apply hash-map (drop-while (complement keyword?) args)))
-        cmd-args  (take-while (complement keyword?) args)
-        pb        (ProcessBuilder. ^java.util.List (vec (map str cmd-args)))
-        _         (when-let [d (:dir opts)] (.directory pb (java.io.File. (str d))))
-        proc      (.start pb)
-        stdin-val (:in opts)]
-    (when stdin-val
-      (let [os (.getOutputStream proc)]
-        (.write os (.getBytes (str stdin-val) "UTF-8"))
-        (.close os)))
+  (let [[cmd-strs {:keys [dir in]}] (split-cmd+opts args)
+        pb (cond-> (ProcessBuilder. ^java.util.List cmd-strs)
+             dir (.directory (java.io.File. (str dir))))
+        proc (.start pb)]
+    (write-stdin! proc in)
     (if (.waitFor proc subprocess-timeout-secs TimeUnit/SECONDS)
       {:exit (.exitValue proc)
        :out  (slurp (.getInputStream proc))
@@ -814,6 +823,50 @@ end")
                  ". Install and re-run enrich to resolve their imports.")))
     files-skipped))
 
+(defn- prepare-c-context
+  "Build the C/C++ extraction context: compile_commands lookup + fallback flags.
+   Returns nil when there are no C files. Logs the path resolution."
+  [repo-path all-paths c-files]
+  (when (seq c-files)
+    (let [cc-path (find-compile-commands repo-path)]
+      (if cc-path
+        (log! (str "  Using compile_commands.json from " cc-path))
+        (log! "  No compile_commands.json found — using auto-detected include dirs"))
+      {:cc-path          cc-path
+       :compile-commands (when cc-path (parse-compile-commands (slurp cc-path) repo-path))
+       :fallback-flags   (include-dirs->flags repo-path (detect-include-dirs all-paths))})))
+
+(defn- log-selection-stats!
+  "Surface filter exclusions and already-enriched counts."
+  [excluded-n skipped-n]
+  (when (pos? excluded-n)
+    (log! (str "Selection filters excluded " excluded-n " file(s).")))
+  (when (pos? skipped-n)
+    (log! (str "  " skipped-n " files already enriched, skipping"))))
+
+(defn- run-c-extraction
+  "Extract C/C++ imports when clang/gcc is available; otherwise log a warning."
+  [repo-path all-paths c-files c-context tools concurrency]
+  (cond
+    (empty? c-files)
+    nil
+
+    (get-in tools [:c :available?])
+    (extract-all-c repo-path all-paths c-context c-files concurrency)
+
+    :else
+    (do (log! (str "  Warning: skipping " (count c-files)
+                   " C/C++ files — no clang or gcc found on PATH"))
+        nil)))
+
+(defn- ensure-enrich-tx!
+  "Always emit at least one :enrich tx so re-runs don't reprocess unchanged files."
+  [conn imports-resolved]
+  (when (zero? imports-resolved)
+    (d/transact conn {:tx-data [{:db/id "datomic.tx"
+                                 :tx/op :enrich
+                                 :tx/source :deterministic}]})))
+
 (defn enrich-repo!
   "Extract cross-file import graph deterministically and transact into Datomic.
    Returns a summary map. `opts` may include :concurrency (default 8)."
@@ -826,13 +879,9 @@ end")
          filters   (selector/normalize repo-path {:path path :include include
                                                   :exclude exclude :lang lang})
          {:keys [files summary]} (selector/apply-filters all-files filters)
-         filtered  files
-         needing   (vec (files-needing-enrichment db filtered))
-         skipped-n (- (count filtered) (count needing))
-         _         (when (pos? (:excluded summary 0))
-                     (log! (str "Selection filters excluded " (:excluded summary) " file(s).")))
-         _         (when (pos? skipped-n)
-                     (log! (str "  " skipped-n " files already enriched, skipping")))
+         needing   (vec (files-needing-enrichment db files))
+         skipped-n (- (count files) (count needing))
+         _         (log-selection-stats! (:excluded summary 0) skipped-n)
          tools     (probe-tools)
          skipped-tools (log-tool-availability! tools (frequencies (map :file/lang needing)))
          {:keys [std-files c-files]} (partition-files-by-lang needing tools)
@@ -840,30 +889,14 @@ end")
          _         (log! (str "  Extracting imports from " total " files"
                               (when (> concurrency 1) (str " (concurrency=" concurrency ")"))
                               "..."))
-         cc-path     (when (seq c-files) (find-compile-commands repo-path))
-         c-context   (when (seq c-files)
-                       {:compile-commands (when cc-path
-                                            (parse-compile-commands (slurp cc-path) repo-path))
-                        :fallback-flags   (include-dirs->flags repo-path
-                                                               (detect-include-dirs all-paths))})
-         _           (when (and (seq c-files) cc-path)
-                       (log! (str "  Using compile_commands.json from " cc-path)))
-         _           (when (and (seq c-files) (not cc-path))
-                       (log! "  No compile_commands.json found — using auto-detected include dirs"))
+         c-context (prepare-c-context repo-path all-paths c-files)
          std-results (extract-all repo-path all-paths std-files concurrency)
-         c-results   (when (and (seq c-files) (get-in tools [:c :available?]))
-                       (extract-all-c repo-path all-paths c-context c-files concurrency))
-         _           (when (and (seq c-files) (not (get-in tools [:c :available?])))
-                       (log! (str "  Warning: skipping " (count c-files)
-                                  " C/C++ files — no clang or gcc found on PATH")))
+         c-results   (run-c-extraction repo-path all-paths c-files c-context tools concurrency)
          _           (when (seq c-results)
-                       (log-c-errors! c-results (count c-files) (some? cc-path)))
+                       (log-c-errors! c-results (count c-files) (some? (:cc-path c-context))))
          final       (-> (tally-and-transact! conn (into std-results c-results))
                          (update :batch #(flush-batch! conn %)))]
-     (when (zero? (:imports-resolved final))
-       (d/transact conn {:tx-data [{:db/id "datomic.tx"
-                                    :tx/op :enrich
-                                    :tx/source :deterministic}]}))
+     (ensure-enrich-tx! conn (:imports-resolved final))
      (when progress-fn
        (progress-fn {:current total :total total :message "enrich complete"}))
      (let [files-skipped (log-enrich-summary! final concurrency skipped-tools)]
