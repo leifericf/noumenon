@@ -6,12 +6,13 @@
   (:require [clojure.data.json :as json]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.java.shell :as shell]
             [clojure.string :as str]
             [noumenon.git :as git]
             [noumenon.mcp.protocol :as protocol]
-            [noumenon.util :as util :refer [log!]])
-  (:import [java.lang ProcessHandle]))
+            [noumenon.util :as util :refer [log!]]
+            [org.httpkit.client :as http])
+  (:import [java.lang ProcessHandle]
+           [java.net URLEncoder]))
 
 (defn load-connection-config
   "Read the active connection from ~/.noumenon/config.edn."
@@ -82,71 +83,81 @@
     "noumenon_introspect_status" "noumenon_introspect_history"
     "noumenon_artifact_history"})
 
-(defn proxy-tool-call
-  "Forward a tool call to the remote HTTP API."
+(defn- url-encode [s] (URLEncoder/encode (str s) "UTF-8"))
+
+(defn- query-string [args]
+  (str/join "&" (map (fn [[k v]] (str (url-encode k) "=" (url-encode v))) args)))
+
+(defn- normalize-host
+  "Prepend https:// to a bare host that lacks a scheme."
+  [host]
+  (if (or (str/starts-with? host "http://")
+          (str/starts-with? host "https://"))
+    host
+    (str "https://" host)))
+
+(defn- build-request-map
+  "Pure: assemble the http-kit request map for `tool-name` against `remote-conn`."
   [tool-name arguments remote-conn]
-  (let [{:keys [path method]} (tool->api-path tool-name)
-        {:keys [host token]} remote-conn]
+  (let [{:keys [path method]} (tool->api-path tool-name)]
     (when-not path
       (throw (ex-info (str "Unknown tool: " tool-name) {})))
-    (when-not (read-only-proxy-tools tool-name)
-      (log! (str "proxy: forwarding admin tool " tool-name " to remote")))
-    (let [db-name   (repo-path->db-name (get arguments "repo_path"))
-          base-url  (if (or (str/starts-with? host "http://")
-                            (str/starts-with? host "https://"))
-                      host
-                      (str "https://" host))
+    (let [{:keys [host token]} remote-conn
+          db-name   (repo-path->db-name (get arguments "repo_path"))
+          base-url  (normalize-host host)
           _         (git/validate-proxy-host! base-url)
-          url-path  (str/replace path ":repo"
-                                 (java.net.URLEncoder/encode (or db-name "") "UTF-8"))
-          url       (str base-url url-path)
-          args      (if db-name
-                      (assoc arguments "repo_path" db-name)
-                      arguments)]
-      (try
-        (let [curl-config (str (when token
-                                 (str "header = \"Authorization: Bearer " token "\"\n"))
-                               "header = \"Content-Type: application/json\"\n")
-              get-url (if (and (= method :get) (seq args))
-                        (str url "?" (str/join "&"
-                                               (map (fn [[k v]]
-                                                      (str (java.net.URLEncoder/encode (str k) "UTF-8")
-                                                           "="
-                                                           (java.net.URLEncoder/encode (str v) "UTF-8")))
-                                                    args)))
-                        url)
-              resp (case method
-                     :get  (shell/sh
-                            "curl" "-s" "--config" "-" "-X" "GET" get-url
-                            :in curl-config)
-                     :post (shell/sh
-                            "curl" "-s" "--config" "-" "-X" "POST" url
-                            "-d" (json/write-str args)
-                            :in curl-config))]
-          (cond
-            (not (zero? (:exit resp)))
-            (protocol/tool-error
-             (str "Cannot reach daemon at " host ". "
-                  (when-let [err (not-empty (str/trim (or (:err resp) "")))]
-                    (str "(" err ") "))
-                  "Start it with `noum daemon`, or update "
-                  "~/.noumenon/config.edn to point at a running host."))
-            (str/blank? (:out resp))
-            (protocol/tool-error
-             (str "Empty response from daemon at " host ". "
-                  "The daemon may be misconfigured or returning no body."))
-            :else
-            (let [body (json/read-str (:out resp))]
-              (if (get body "ok")
-                (protocol/tool-result (json/write-str (get body "data")))
-                (let [error-msg (or (get body "error") "Remote request failed")
-                      status    (get body "status")]
-                  (protocol/tool-error (cond
-                                         (= status 401) "Authentication failed. Run `noum connect <url> --token <new-token>` to update credentials."
-                                         (= status 403) "Permission denied. This operation requires admin access."
-                                         :else error-msg)))))))
-        (catch Exception e
-          (protocol/tool-error (str "Remote proxy error: " (.getMessage e))))))))
+          url-path  (str/replace path ":repo" (url-encode (or db-name "")))
+          base-args (cond-> arguments db-name (assoc "repo_path" db-name))
+          headers   (cond-> {"Content-Type" "application/json"}
+                      token (assoc "Authorization" (str "Bearer " token)))
+          base      {:url     (str base-url url-path)
+                     :method  method
+                     :headers headers
+                     :timeout 300000}]
+      (case method
+        :get  (assoc base :url (cond-> (:url base)
+                                 (seq base-args) (str "?" (query-string base-args))))
+        :post (assoc base :body (json/write-str base-args))))))
+
+(defn- interpret-response
+  "Pure: turn an http-kit response into a tool-result/tool-error map."
+  [{:keys [error body]} host]
+  (cond
+    error
+    (protocol/tool-error
+     (str "Cannot reach daemon at " host ". "
+          (when-let [msg (some-> ^Exception error .getMessage str/trim not-empty)]
+            (str "(" msg ") "))
+          "Start it with `noum daemon`, or update "
+          "~/.noumenon/config.edn to point at a running host."))
+
+    (str/blank? body)
+    (protocol/tool-error
+     (str "Empty response from daemon at " host ". "
+          "The daemon may be misconfigured or returning no body."))
+
+    :else
+    (let [parsed (json/read-str body)]
+      (if (get parsed "ok")
+        (protocol/tool-result (json/write-str (get parsed "data")))
+        (let [error-msg (or (get parsed "error") "Remote request failed")
+              status    (get parsed "status")]
+          (protocol/tool-error
+           (case status
+             401 "Authentication failed. Run `noum connect <url> --token <new-token>` to update credentials."
+             403 "Permission denied. This operation requires admin access."
+             error-msg)))))))
+
+(defn proxy-tool-call
+  "Forward a tool call to the remote HTTP API via http-kit."
+  [tool-name arguments remote-conn]
+  (when-not (read-only-proxy-tools tool-name)
+    (log! (str "proxy: forwarding admin tool " tool-name " to remote")))
+  (try
+    (let [req (build-request-map tool-name arguments remote-conn)]
+      (interpret-response @(http/request req) (:host remote-conn)))
+    (catch Exception e
+      (protocol/tool-error (str "Remote proxy error: " (.getMessage e))))))
 
 (defn resolve-conn
   "Pick the active proxy connection: explicit config first, then auto-detected daemon."
