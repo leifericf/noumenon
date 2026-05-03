@@ -2,7 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.test :refer [deftest is testing]]
-            [noumenon.mcp :as mcp]))
+            [noumenon.mcp.proxy :as mcp]))
 
 (deftest repo-path->db-name-uses-local-derivation-for-directories
   (let [tmp-root (.toFile (java.nio.file.Files/createTempDirectory "noumenon-mcp-test" (make-array java.nio.file.attribute.FileAttribute 0)))

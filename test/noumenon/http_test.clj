@@ -3,6 +3,7 @@
             [clojure.test :refer [deftest is testing]]
             [noumenon.auth :as auth]
             [noumenon.http :as http]
+            [noumenon.http.handlers.query]
             [noumenon.repo-manager :as repo-mgr]))
 
 (deftest health-endpoint
@@ -394,7 +395,7 @@
           (is (re-find #"exceeds maximum length" (str error)) error))))))
 
 (deftest federated-delta-opts-derives-parent-metadata
-  (let [opts-fn @#'http/federated-delta-opts]
+  (let [opts-fn @#'noumenon.http.handlers.query/federated-delta-opts]
     (is (= {:parent-db-name "myrepo"
             :branch-name    "feat"
             :parent-host    "noum.example.com:8765"}
