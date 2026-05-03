@@ -12,115 +12,107 @@
             [noumenon.sessions :as sessions]
             [noumenon.util :as util]))
 
+(defn- parse-allowed-targets
+  "Translate a comma-separated --target string into a set of valid keywords."
+  [target-str]
+  (when target-str
+    (->> (str/split target-str #",")
+         (keep (comp mu/allowed-introspect-targets keyword str/trim))
+         set)))
+
+(defn- introspect-llms
+  "Make the optimizer invoker (temp 0.7) and a factory for evaluator invokers (temp 0.0)."
+  [provider model]
+  (let [base-opts {:provider provider :model model}]
+    {:invoke-fn (:invoke-fn (llm/make-messages-fn-from-opts
+                             (assoc base-opts :temperature 0.7 :max-tokens 8192)))
+     :invoke-fn-factory (fn []
+                          (:invoke-fn (llm/make-messages-fn-from-opts
+                                       (assoc base-opts :temperature 0.0 :max-tokens 4096))))}))
+
+(defn- build-introspect-opts
+  "Assemble the option map shared between handle-introspect and handle-introspect-start.
+   `extras` may include :stop-flag, :progress-fn, :run-id."
+  [args defaults {:keys [db meta-conn db-name db-dir repo-path]} & {:as extras}]
+  (let [provider  (or (args "provider") (:provider defaults))
+        model     (or (args "model") (:model defaults))
+        {:keys [invoke-fn invoke-fn-factory]} (introspect-llms provider model)
+        extra-repos (mu/resolve-extra-repos (args "extra_repos") db-dir)
+        targets     (parse-allowed-targets (args "target"))]
+    (cond-> (merge {:db                  db
+                    :repo-name           db-name
+                    :repo-path           repo-path
+                    :meta-conn           meta-conn
+                    :invoke-fn-factory   invoke-fn-factory
+                    :optimizer-invoke-fn invoke-fn
+                    :max-iterations      (or (args "max_iterations") 10)
+                    :max-hours           (args "max_hours")
+                    :max-cost            (args "max_cost")
+                    :eval-runs           (or (args "eval_runs") 1)
+                    :git-commit?         (and (args "git_commit") (not (:read-only defaults)))
+                    :model-config        {:provider provider :model model}}
+                   extras)
+      (seq extra-repos) (assoc :extra-repos extra-repos)
+      targets           (assoc :allowed-targets targets))))
+
 (defn handle-introspect [args defaults]
   (mu/validate-llm-inputs! args)
   (mu/with-conn args defaults
-    (fn [{:keys [db meta-conn db-name db-dir repo-path]}]
-      (let [provider (or (args "provider") (:provider defaults))
-            model    (or (args "model") (:model defaults))
-            {:keys [invoke-fn]}
-            (llm/make-messages-fn-from-opts
-             {:provider provider :model model
-              :temperature 0.7 :max-tokens 8192})
-            invoke-fn-factory
-            (fn []
-              (:invoke-fn
-               (llm/make-messages-fn-from-opts
-                {:provider provider :model model
-                 :temperature 0.0 :max-tokens 4096})))
-            extra-repos (mu/resolve-extra-repos (args "extra_repos") db-dir)
-            result (introspect/run-loop!
-                    (cond-> {:db                  db
-                             :repo-name           db-name
-                             :repo-path           repo-path
-                             :meta-conn           meta-conn
-                             :invoke-fn-factory   invoke-fn-factory
-                             :optimizer-invoke-fn invoke-fn
-                             :max-iterations      (or (args "max_iterations") 10)
-                             :max-hours           (args "max_hours")
-                             :max-cost            (args "max_cost")
-                             :eval-runs           (or (args "eval_runs") 1)
-                             :git-commit?         (and (args "git_commit")
-                                                       (not (:read-only defaults)))
-                             :model-config        {:provider provider :model model}
-                             :progress-fn         (:progress-fn defaults)}
-                      (seq extra-repos)
-                      (assoc :extra-repos extra-repos)
-                      (args "target")
-                      (assoc :allowed-targets
-                             (set (map keyword (str/split (args "target") #","))))))]
+    (fn [ctx]
+      (let [run-opts (build-introspect-opts args defaults ctx
+                                            :progress-fn (:progress-fn defaults))
+            result   (introspect/run-loop! run-opts)]
         (mu/tool-result (str "Introspect complete: " (:improvements result)
                              " improvements in " (:iterations result)
                              " iterations (final score: "
                              (format "%.3f" (:final-score result))
                              ", run-id: " (:run-id result) ")"))))))
 
-(defn handle-introspect-start [args defaults]
-  (mu/validate-llm-inputs! args)
+(defn- track-introspect-future!
+  "Run the introspect loop in a future and shuttle its terminal state into the session store."
+  [run-id stop-flag run-opts]
+  (let [progress-fn (fn [{:keys [current total message]}]
+                      (sessions/update-session!
+                       run-id #(assoc % :progress
+                                      {:current current :total total :message message})))
+        fut (future
+              (try
+                (let [result (introspect/run-loop!
+                              (assoc run-opts :run-id run-id :progress-fn progress-fn))
+                      final-status (if @stop-flag :stopped :completed)]
+                  (sessions/update-session! run-id
+                                            #(merge % {:status final-status :result result
+                                                       :completed-at (System/currentTimeMillis)}))
+                  result)
+                (catch Exception e
+                  (sessions/update-session! run-id
+                                            #(merge % {:status :error :error (.getMessage e)
+                                                       :completed-at (System/currentTimeMillis)})))))]
+    (sessions/update-session! run-id #(assoc % :future fut))))
+
+(defn- ensure-session-capacity!
+  "Throw with a user-facing message if the introspect session pool is full."
+  []
   (sessions/evict-stale!)
   (when (>= (sessions/running-count) sessions/max-sessions)
     (throw (ex-info "Too many active introspect sessions"
                     {:user-message (str "Maximum " sessions/max-sessions
-                                        " concurrent sessions. Stop one first.")})))
+                                        " concurrent sessions. Stop one first.")}))))
+
+(defn handle-introspect-start [args defaults]
+  (mu/validate-llm-inputs! args)
+  (ensure-session-capacity!)
   (mu/with-conn args defaults
-    (fn [{:keys [db meta-conn db-name db-dir repo-path]}]
-      (let [provider  (or (args "provider") (:provider defaults))
-            model     (or (args "model") (:model defaults))
-            stop-flag (atom false)
-            {:keys [invoke-fn]}
-            (llm/make-messages-fn-from-opts
-             {:provider provider :model model :temperature 0.7 :max-tokens 8192})
-            invoke-fn-factory
-            (fn []
-              (:invoke-fn
-               (llm/make-messages-fn-from-opts
-                {:provider provider :model model :temperature 0.0 :max-tokens 4096})))
-            extra-repos (mu/resolve-extra-repos (args "extra_repos") db-dir)
-            run-opts  (cond-> {:db db :repo-name db-name :repo-path repo-path
-                               :meta-conn meta-conn
-                               :invoke-fn-factory invoke-fn-factory
-                               :optimizer-invoke-fn invoke-fn
-                               :max-iterations (or (args "max_iterations") 10)
-                               :max-hours (args "max_hours")
-                               :max-cost (args "max_cost")
-                               :eval-runs (or (args "eval_runs") 1)
-                               :git-commit? (args "git_commit")
-                               :model-config {:provider provider :model model}
-                               :stop-flag stop-flag}
-                        (seq extra-repos)
-                        (assoc :extra-repos extra-repos)
-                        (args "target")
-                        (assoc :allowed-targets
-                               (->> (str/split (args "target") #",")
-                                    (keep (comp mu/allowed-introspect-targets keyword str/trim))
-                                    set)))
-            run-id    (str (System/currentTimeMillis) "-" (java.util.UUID/randomUUID))
-            now       (System/currentTimeMillis)]
-        (when (>= (sessions/running-count) sessions/max-sessions)
-          (throw (ex-info "Too many active introspect sessions"
-                          {:user-message (str "Maximum " sessions/max-sessions
-                                              " concurrent sessions. Stop one first.")})))
-        (sessions/register! run-id {:status :running :stop-flag stop-flag :started-at now})
-        (let [progress-fn (fn [{:keys [current total message]}]
-                            (sessions/update-session!
-                             run-id #(assoc % :progress
-                                            {:current current :total total :message message})))
-              fut (future
-                    (try
-                      (let [result (introspect/run-loop!
-                                    (assoc run-opts :run-id run-id :progress-fn progress-fn))
-                            final-status (if @stop-flag :stopped :completed)]
-                        (sessions/update-session! run-id
-                                                  #(merge % {:status final-status :result result
-                                                             :completed-at (System/currentTimeMillis)}))
-                        result)
-                      (catch Exception e
-                        (sessions/update-session! run-id
-                                                  #(merge % {:status :error :error (.getMessage e)
-                                                             :completed-at (System/currentTimeMillis)})))))]
-          (sessions/update-session! run-id #(assoc % :future fut))
-          (mu/tool-result (str "Introspect started. Run ID: " run-id
-                               "\nUse noumenon_introspect_status to check progress.")))))))
+    (fn [ctx]
+      (let [stop-flag (atom false)
+            run-opts  (build-introspect-opts args defaults ctx :stop-flag stop-flag)
+            run-id    (str (System/currentTimeMillis) "-" (java.util.UUID/randomUUID))]
+        (ensure-session-capacity!)
+        (sessions/register! run-id {:status :running :stop-flag stop-flag
+                                    :started-at (System/currentTimeMillis)})
+        (track-introspect-future! run-id stop-flag run-opts)
+        (mu/tool-result (str "Introspect started. Run ID: " run-id
+                             "\nUse noumenon_introspect_status to check progress."))))))
 
 (defn handle-introspect-status [args _defaults]
   (let [run-id (args "run_id")]

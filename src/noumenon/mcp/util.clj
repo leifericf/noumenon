@@ -39,6 +39,15 @@
   (when-let [m (args "model")] (util/validate-string-length! "model" m max-model-len))
   (when-let [p (args "provider")] (util/validate-string-length! "provider" p max-provider-len)))
 
+(defn provider+model
+  "Resolve {:provider :model} from MCP args, falling back to defaults.
+   Optional `extra` is merged in last (e.g. `{:max-tokens 16384}`)."
+  ([args defaults] (provider+model args defaults nil))
+  ([args defaults extra]
+   (merge {:provider (or (args "provider") (:provider defaults))
+           :model    (or (args "model") (:model defaults))}
+          extra)))
+
 (defn validate-layers
   "Parse and validate a comma-separated layers string. Returns keyword vector or nil."
   [layers-str]

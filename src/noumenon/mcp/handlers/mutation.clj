@@ -57,9 +57,7 @@
         selector  (mu/selector-opts args)
         opts      (if analyze?
                     (let [{:keys [prompt-fn model-id]}
-                          (llm/wrap-as-prompt-fn-from-opts
-                           {:provider (or (args "provider") (:provider defaults))
-                            :model    (or (args "model") (:model defaults))})]
+                          (llm/wrap-as-prompt-fn-from-opts (mu/provider+model args defaults))]
                       (assoc selector
                              :concurrency 8 :analyze? true
                              :meta-db (d/db meta-conn)
@@ -68,42 +66,53 @@
         result    (sync/update-repo! conn repo-path repo-path opts)]
     (mu/tool-result (format-update-changes result))))
 
+(defn- format-ask-result
+  "Pure: turn an agent/ask result into {:kind :ok|:error :text \"…\"}."
+  [{:keys [status answer session-id usage]} max-iter]
+  (cond
+    (and (= :budget-exhausted status) answer)
+    {:kind :ok
+     :text (str answer
+                "\n\n[Session " session-id " saved — to continue exploring, "
+                "call noumenon_ask with continue_from=\"" session-id "\"]")}
+
+    (= :budget-exhausted status)
+    {:kind :error
+     :text (str "Budget exhausted after " max-iter " iterations"
+                " (" (:input-tokens usage 0) " in / "
+                (:output-tokens usage 0) " out tokens) with no answer. "
+                "Try increasing max_iterations or narrowing the question.")}
+
+    :else
+    {:kind :ok
+     :text (or answer
+               "The agent completed without finding an answer. Try rephrasing the question or increasing max_iterations.")}))
+
 (defn handle-ask [args defaults]
   (util/validate-string-length! "question" (args "question") mu/max-question-len)
   (mu/validate-llm-inputs! args)
   (mu/with-conn args defaults
     (fn [{:keys [db meta-db db-dir db-name]}]
-      (let [{:keys [invoke-fn]}
-            (llm/make-messages-fn-from-opts {:provider    (or (args "provider") (:provider defaults))
-                                             :model       (or (args "model") (:model defaults))
-                                             :temperature 0.3
-                                             :max-tokens  4096})
-            max-iter    (min (or (args "max_iterations") 10) 50)
-            eidx        (embed/get-cached-index db-dir db-name)
-            result      (agent/ask meta-db db (args "question")
-                                   {:invoke-fn      invoke-fn
-                                    :repo-name      db-name
-                                    :embed-index    eidx
-                                    :max-iterations max-iter
-                                    :continue-from  (args "continue_from")})
-            usage       (:usage result)
-            answer      (:answer result)
-            session-id  (:session-id result)]
+      (let [{:keys [invoke-fn]} (llm/make-messages-fn-from-opts
+                                 (mu/provider+model args defaults
+                                                    {:temperature 0.3 :max-tokens 4096}))
+            max-iter (min (or (args "max_iterations") 10) 50)
+            eidx     (embed/get-cached-index db-dir db-name)
+            result   (agent/ask meta-db db (args "question")
+                                {:invoke-fn      invoke-fn
+                                 :repo-name      db-name
+                                 :embed-index    eidx
+                                 :max-iterations max-iter
+                                 :continue-from  (args "continue_from")})
+            {:keys [status usage]} result]
         (log! "agent/done"
-              (str "status=" (:status result)
+              (str "status=" status
                    " iterations=" (:iterations usage)
                    " tokens=" (+ (:input-tokens usage 0) (:output-tokens usage 0))))
-        (if (= :budget-exhausted (:status result))
-          (if answer
-            (mu/tool-result (str answer
-                                 "\n\n[Session " session-id " saved — to continue exploring, "
-                                 "call noumenon_ask with continue_from=\"" session-id "\"]"))
-            (mu/tool-error (str "Budget exhausted after " max-iter " iterations"
-                                " (" (:input-tokens usage 0) " in / "
-                                (:output-tokens usage 0) " out tokens) with no answer. "
-                                "Try increasing max_iterations or narrowing the question.")))
-          (mu/tool-result (or answer
-                              "The agent completed without finding an answer. Try rephrasing the question or increasing max_iterations.")))))))
+        (let [{:keys [kind text]} (format-ask-result result max-iter)]
+          (case kind
+            :ok    (mu/tool-result text)
+            :error (mu/tool-error  text)))))))
 
 (def ^:private valid-reanalyze-scopes
   #{"all" "prompt-changed" "model-changed" "stale"})
@@ -131,8 +140,7 @@
     (mu/with-conn args defaults
       (fn [{:keys [conn meta-db repo-path]}]
         (let [{:keys [prompt-fn model-id provider-kw]}
-              (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                                :model    (or (args "model") (:model defaults))})
+              (llm/wrap-as-prompt-fn-from-opts (mu/provider+model args defaults))
               prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template meta-db)))]
           (prepare-reanalysis! conn (d/db conn) reanalyze
                                {:prompt-hash prompt-hash :model-id model-id})
@@ -179,8 +187,7 @@
       (artifacts/reseed! meta-conn)
       (let [meta-db   (d/db meta-conn)
             {:keys [prompt-fn model-id provider-kw]}
-            (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                              :model    (or (args "model") (:model defaults))})
+            (llm/wrap-as-prompt-fn-from-opts (mu/provider+model args defaults))
             result (synthesize/synthesize-repo!
                     conn prompt-fn
                     {:meta-db meta-db :provider (name provider-kw)
@@ -215,68 +222,88 @@
               (when-let [fm (get-in b [:aggregate :full-mean])]
                 (str ", full=" (format "%.1f%%" (* 100.0 (double fm)))))))))
 
+(defn- repo->uri
+  "Translate a repo-path argument to a stable :repo/uri (canonical FS path or db:// URI)."
+  [repo-path]
+  (if (str/starts-with? (str repo-path) "db://")
+    repo-path
+    (.getCanonicalPath (java.io.File. (str repo-path)))))
+
+(defn- digest-update-step [conn repo-path repo-uri selector args]
+  (when-not (or (args "skip_import") (args "skip_enrich"))
+    (sync/update-repo! conn repo-path repo-uri (assoc selector :concurrency 8))))
+
+(defn- digest-analyze-step [conn repo-path prompt-fn selector
+                            {:keys [meta-db model-id provider-kw progress-fn]} args]
+  (when-not (args "skip_analyze")
+    (analyze/analyze-repo! conn repo-path prompt-fn
+                           (assoc selector
+                                  :meta-db meta-db :model-id model-id
+                                  :provider (name provider-kw)
+                                  :concurrency 3
+                                  :progress-fn progress-fn))))
+
+(defn- digest-synthesize-step [conn meta-db db-name args defaults]
+  (when-not (args "skip_synthesize")
+    (try
+      (let [{:keys [prompt-fn model-id provider-kw]}
+            (llm/wrap-as-prompt-fn-from-opts (mu/provider+model args defaults {:max-tokens 16384}))]
+        (synthesize/synthesize-repo!
+         conn prompt-fn
+         {:meta-db meta-db :provider (name provider-kw)
+          :model-id model-id :repo-name db-name}))
+      (catch Exception e
+        (log! "digest/synthesize" (str "skipped: " (.getMessage e)))
+        nil))))
+
+(defn- digest-embed-step [db db-dir db-name]
+  (try
+    (let [idx (embed/build-index! db db-dir db-name)]
+      {:entries (count (:entries idx))})
+    (catch Exception e
+      (log! "digest/embed" (str "skipped: " (.getMessage e)))
+      nil)))
+
+(defn- digest-benchmark-step
+  [conn db repo-path prompt-fn meta-db db-dir db-name args defaults progress-fn]
+  (when-not (args "skip_benchmark")
+    (let [layers    (mu/validate-layers (args "layers"))
+          mode      (cond-> {} layers (assoc :layers layers))
+          model-cfg (mu/provider+model args defaults)
+          r         (bench/run-benchmark! db repo-path prompt-fn
+                                          :meta-db meta-db :conn conn :mode mode
+                                          :model-config model-cfg
+                                          :budget {:max-questions (args "max_questions")}
+                                          :report? (args "report")
+                                          :concurrency 3
+                                          :progress-fn progress-fn
+                                          :db-dir db-dir :db-name db-name)]
+      (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
+
 (defn handle-digest [args defaults]
   (mu/validate-llm-inputs! args)
   (mu/with-conn args defaults
     (fn [{:keys [conn meta-conn db-dir db-name repo-path]}]
       (artifacts/reseed! meta-conn)
-      (let [meta-db (d/db meta-conn)
-            {:keys [prompt-fn model-id provider-kw]}
-            (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                              :model    (or (args "model") (:model defaults))})
-            repo-uri (if (str/starts-with? (str repo-path) "db://")
-                       repo-path
-                       (.getCanonicalPath (java.io.File. (str repo-path))))
-            selector (mu/selector-opts args)
-            results  (atom {})]
-        (when-not (or (args "skip_import") (args "skip_enrich"))
-          (let [r (sync/update-repo! conn repo-path repo-uri
-                                     (assoc selector :concurrency 8))]
-            (swap! results assoc :update r)))
-        (when-not (args "skip_analyze")
-          (let [r (analyze/analyze-repo! conn repo-path prompt-fn
-                                         (assoc selector
-                                                :meta-db meta-db :model-id model-id
-                                                :provider (name provider-kw)
-                                                :concurrency 3
-                                                :progress-fn (:progress-fn defaults)))]
-            (swap! results assoc :analyze r)))
-        (when-not (args "skip_synthesize")
-          (try
-            (let [synth-llm (llm/wrap-as-prompt-fn-from-opts
-                             {:provider (or (args "provider") (:provider defaults))
-                              :model    (or (args "model") (:model defaults))
-                              :max-tokens 16384})
-                  r (synthesize/synthesize-repo!
-                     conn (:prompt-fn synth-llm)
-                     {:meta-db meta-db
-                      :provider (name (:provider-kw synth-llm))
-                      :model-id (:model-id synth-llm)
-                      :repo-name db-name})]
-              (swap! results assoc :synthesize r))
-            (catch Exception e
-              (log! "digest/synthesize" (str "skipped: " (.getMessage e))))))
-        (let [db (d/db conn)]
-          (try
-            (let [idx (embed/build-index! db db-dir db-name)]
-              (swap! results assoc :embed {:entries (count (:entries idx))}))
-            (catch Exception e
-              (log! "digest/embed" (str "skipped: " (.getMessage e))))))
-        (when-not (args "skip_benchmark")
-          (let [db     (d/db conn)
-                layers (mu/validate-layers (args "layers"))
-                mode   (cond-> {} layers (assoc :layers layers))
-                model-cfg {:provider (or (args "provider") (:provider defaults))
-                           :model    (or (args "model") (:model defaults))}
-                r      (bench/run-benchmark! db repo-path prompt-fn
-                                             :meta-db meta-db
-                                             :conn conn :mode mode
-                                             :model-config model-cfg
-                                             :budget {:max-questions (args "max_questions")}
-                                             :report? (args "report")
-                                             :concurrency 3
-                                             :progress-fn (:progress-fn defaults)
-                                             :db-dir db-dir :db-name db-name)]
-            (swap! results assoc :benchmark
-                   (select-keys r [:run-id :aggregate :stop-reason :report-path]))))
-        (mu/tool-result (format-digest-summary @results))))))
+      (let [meta-db     (d/db meta-conn)
+            llm-opts    (llm/wrap-as-prompt-fn-from-opts (mu/provider+model args defaults))
+            prompt-fn   (:prompt-fn   llm-opts)
+            repo-uri    (repo->uri repo-path)
+            selector    (mu/selector-opts args)
+            progress-fn (:progress-fn defaults)
+            update-r    (digest-update-step conn repo-path repo-uri selector args)
+            analyze-r   (digest-analyze-step conn repo-path prompt-fn selector
+                                             (assoc llm-opts :meta-db meta-db
+                                                    :progress-fn progress-fn) args)
+            synth-r     (digest-synthesize-step conn meta-db db-name args defaults)
+            embed-r     (digest-embed-step (d/db conn) db-dir db-name)
+            bench-r     (digest-benchmark-step conn (d/db conn) repo-path prompt-fn
+                                               meta-db db-dir db-name args defaults progress-fn)]
+        (mu/tool-result
+         (format-digest-summary
+          (cond-> {}
+            update-r  (assoc :update    update-r)
+            analyze-r (assoc :analyze   analyze-r)
+            synth-r   (assoc :synthesize synth-r)
+            embed-r   (assoc :embed     embed-r)
+            bench-r   (assoc :benchmark bench-r))))))))
