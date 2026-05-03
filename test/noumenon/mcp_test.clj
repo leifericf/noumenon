@@ -59,3 +59,55 @@
             (str "msg names the host; got: " msg))
         (is (not (re-find #"end-of-file|EOF" msg))
             (str "msg does not mention JSON-parse internals; got: " msg))))))
+
+(deftest proxy-tool-call-401-renders-reauth-message
+  (testing "An HTTP 401 from the daemon should be translated into a
+            user-facing remediation that names the `noum connect` command,
+            even though the daemon's JSON body does not echo the status
+            code (only :ok and :error)."
+    (with-redefs [http/request (mock-response
+                                {:status 401
+                                 :body   "{\"ok\":false,\"error\":\"Unauthorized — bearer token required\"}"})]
+      (let [result (#'mcp/proxy-tool-call
+                    "noumenon_status"
+                    {"repo_path" "mino"}
+                    {:host "http://127.0.0.1:7892" :token nil})
+            msg    (error-text result)]
+        (is (true? (:isError result)))
+        (is (re-find #"(?i)authentication failed" msg)
+            (str "401 produces the friendly auth message; got: " msg))
+        (is (re-find #"noum connect" msg)
+            (str "msg names the remediation command; got: " msg))))))
+
+(deftest proxy-tool-call-403-renders-permission-message
+  (testing "An HTTP 403 should be translated into the admin-required message,
+            independent of any :status field in the JSON body."
+    (with-redefs [http/request (mock-response
+                                {:status 403
+                                 :body   "{\"ok\":false,\"error\":\"Forbidden — admin token required for this operation\"}"})]
+      (let [result (#'mcp/proxy-tool-call
+                    "noumenon_status"
+                    {"repo_path" "mino"}
+                    {:host "http://127.0.0.1:7892" :token nil})
+            msg    (error-text result)]
+        (is (true? (:isError result)))
+        (is (re-find #"(?i)permission denied" msg)
+            (str "403 produces the friendly permission message; got: " msg))
+        (is (re-find #"(?i)admin" msg)
+            (str "msg explains admin requirement; got: " msg))))))
+
+(deftest proxy-tool-call-non-special-error-falls-through-to-body-message
+  (testing "For an HTTP error that doesn't have a special case (e.g. 500),
+            the daemon's `:error` text is surfaced verbatim — no friendly
+            remediation, but no swallowing of detail either."
+    (with-redefs [http/request (mock-response
+                                {:status 500
+                                 :body   "{\"ok\":false,\"error\":\"boom: something exploded\"}"})]
+      (let [result (#'mcp/proxy-tool-call
+                    "noumenon_status"
+                    {"repo_path" "mino"}
+                    {:host "http://127.0.0.1:7892" :token nil})
+            msg    (error-text result)]
+        (is (true? (:isError result)))
+        (is (re-find #"boom: something exploded" msg)
+            (str "non-special status surfaces the daemon's error verbatim; got: " msg))))))

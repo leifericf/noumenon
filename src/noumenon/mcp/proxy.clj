@@ -120,8 +120,11 @@
         :post (assoc base :body (json/write-str base-args))))))
 
 (defn- interpret-response
-  "Pure: turn an http-kit response into a tool-result/tool-error map."
-  [{:keys [error body]} host]
+  "Pure: turn an http-kit response into a tool-result/tool-error map.
+   The HTTP status code is taken from the response top level (`:status`),
+   not from the JSON body — the daemon's `error-response` builds bodies
+   as `{:ok false :error msg}` without echoing the code."
+  [{:keys [error status body]} host]
   (cond
     error
     (protocol/tool-error
@@ -140,8 +143,7 @@
     (let [parsed (json/read-str body)]
       (if (get parsed "ok")
         (protocol/tool-result (json/write-str (get parsed "data")))
-        (let [error-msg (or (get parsed "error") "Remote request failed")
-              status    (get parsed "status")]
+        (let [error-msg (or (get parsed "error") "Remote request failed")]
           (protocol/tool-error
            (case status
              401 "Authentication failed. Run `noum connect <url> --token <new-token>` to update credentials."
