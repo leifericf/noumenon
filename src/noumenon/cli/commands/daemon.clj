@@ -29,6 +29,8 @@
     (log! (str "Daemon running on port " (get-in sys [:noumenon/http-server :port])
                ". Press Ctrl+C to stop."))
     (.addShutdownHook (Runtime/getRuntime)
-                      (Thread. ^Runnable #(system/halt! sys)))
+                      (Thread. ^Runnable
+                       #(let [done (future (system/halt! sys))]
+                          (deref done 5000 :timeout))))
     @(promise)
     {:exit 0}))
