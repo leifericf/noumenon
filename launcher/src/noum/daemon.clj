@@ -4,7 +4,7 @@
             [babashka.http-client :as http]
             [babashka.process :as proc]
             [clojure.edn :as edn]
-            [clojure.java.io :as io]
+            [clojure.string :as str]
             [noum.paths :as paths]
             [noum.tui.core :as tui]
             [noum.tui.spinner :as spinner]))
@@ -38,6 +38,21 @@
     (when (and (process-alive? pid) (healthy? port))
       {:port port})))
 
+(defn- tail-log
+  "Last n lines of the daemon log, or empty string if unreadable."
+  [n]
+  (try
+    (->> (slurp paths/daemon-log)
+         str/split-lines
+         (take-last n)
+         (str/join "\n"))
+    (catch Exception _ "")))
+
+(defn- failure-message [headline]
+  (str headline
+       "\n\nLast lines of " paths/daemon-log ":\n"
+       (tail-log 30)))
+
 (defn start!
   "Start the JVM daemon. Returns {:port N} or throws."
   [{:keys [jre-path jar-path db-dir provider model token]}]
@@ -53,16 +68,27 @@
           env      (cond-> (into {} (System/getenv))
                      token (assoc "NOUMENON_TOKEN" token))
           s        (spinner/start "Starting Noumenon daemon...")
-          _        (proc/process {:cmd args
-                                  :env env
-                                  :out (io/writer paths/daemon-log :append true)
-                                  :err (io/writer paths/daemon-log :append true)})]
+          jvm      (:proc (proc/process {:cmd args
+                                         :env env
+                                         :out [:append paths/daemon-log]
+                                         :err [:append paths/daemon-log]}))]
       (loop [attempts 0]
         (Thread/sleep 500)
         (cond
-          (> attempts 60)
+          (not (.isAlive jvm))
           (do ((:stop s) "Daemon failed to start")
-              (throw (ex-info "Daemon failed to start within 30 seconds" {})))
+              (throw (ex-info (failure-message
+                               (str "Daemon JVM exited (code "
+                                    (.exitValue jvm)
+                                    ") before becoming healthy."))
+                              {:exit-code (.exitValue jvm)})))
+
+          (> attempts 60)
+          (do (.destroy jvm)
+              ((:stop s) "Daemon failed to start")
+              (throw (ex-info (failure-message
+                               "Daemon failed to start within 30 seconds.")
+                              {})))
 
           (running?)
           (let [{:keys [port]} (read-daemon-info)]
