@@ -171,11 +171,15 @@
 
 (defn judge-prompt
   "Build a judge prompt from the rubric template.
-   Single-pass replacement prevents cascading expansion from LLM output."
+   Single-pass replacement prevents cascading expansion from LLM output;
+   each binding is also passed through `escape-double-mustache` so a
+   literal `{{…}}` in question/rubric/answer (especially answer, which is
+   LLM-produced and adversarial) cannot survive into the rendered prompt
+   as template syntax for a downstream pass."
   [template question rubric answer]
-  (let [bindings {"question" question
-                  "rubric"   rubric
-                  "answer"   (str answer)}]
+  (let [bindings {"question" (escape-double-mustache question)
+                  "rubric"   (escape-double-mustache rubric)
+                  "answer"   (escape-double-mustache (str answer))}]
     (str/replace template #"\{\{([^}]+)\}\}"
                  (fn [[match key]] (get bindings key match)))))
 
