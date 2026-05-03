@@ -11,7 +11,7 @@
             [noumenon.http :as http]
             [noumenon.http.handlers.query :as h-query]
             [noumenon.sessions :as sessions]
-            [noumenon.util :refer [log!]]))
+            [noumenon.util :as util :refer [log!]]))
 
 ;; --- Datomic connections ---
 
@@ -59,18 +59,20 @@
   "Build the Integrant config map for a daemon process. opts mirrors the
    shape passed to http/start! plus :max-llm-concurrency for the LLM
    semaphore."
-  [{:keys [port bind db-dir provider model token max-llm-concurrency]
-    :or   {max-llm-concurrency 10}}]
-  {:noumenon/datomic-conns    {}
-   :noumenon/llm-semaphore    {:max-permits max-llm-concurrency}
-   :noumenon/embed-cache      {}
-   :noumenon/completion-cache {}
-   :noumenon/agent-sessions   {}
-   :noumenon/http-server      (cond-> {:port (or port 0) :bind (or bind "127.0.0.1")}
-                                db-dir   (assoc :db-dir db-dir)
-                                provider (assoc :provider provider)
-                                model    (assoc :model model)
-                                token    (assoc :token token))})
+  [{:keys [port bind db-dir provider model token max-llm-concurrency]}]
+  (let [max-permits (or max-llm-concurrency
+                        (util/env-int "NOUMENON_MAX_LLM_CONCURRENCY")
+                        10)]
+    {:noumenon/datomic-conns    {}
+     :noumenon/llm-semaphore    {:max-permits max-permits}
+     :noumenon/embed-cache      {}
+     :noumenon/completion-cache {}
+     :noumenon/agent-sessions   {}
+     :noumenon/http-server      (cond-> {:port (or port 0) :bind (or bind "127.0.0.1")}
+                                  db-dir   (assoc :db-dir db-dir)
+                                  provider (assoc :provider provider)
+                                  model    (assoc :model model)
+                                  token    (assoc :token token))}))
 
 (defn init
   "Build and start the daemon system. Returns the running system map."

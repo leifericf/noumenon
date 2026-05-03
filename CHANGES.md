@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Daemon LLM semaphore honors `NOUMENON_MAX_LLM_CONCURRENCY`** — when the new Integrant lifecycle landed, the LLM semaphore was being initialized twice during `noum daemon` boot: once by `http/start!` (which read the env var) and once by the `:noumenon/llm-semaphore` Integrant init-key (which used the system-config default of 10). Integrant happened to run last, so the env var was silently clobbered and every daemon ran with permits = 10 regardless of configuration. The `system/config` builder now reads `NOUMENON_MAX_LLM_CONCURRENCY` itself and `http/start!` no longer touches the semaphore, so there is one source of truth and the env var actually takes effect.
+
 ### Refactoring
 
 - **`benchmark` no longer depends on `cli`** — the benchmarking subsystem pulled in `noumenon.cli` solely to interpolate the program name into one "Resume with: …" log line. The literal is inlined and the require dropped, breaking a small layering inversion (`subsystem` → `api`).

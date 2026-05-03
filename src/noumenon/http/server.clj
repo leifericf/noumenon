@@ -3,7 +3,6 @@
    resolve-server-config. `start!` and `stop!` are the public surface."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [noumenon.concurrency :as cc]
             [noumenon.db :as db]
             [noumenon.http.routes :as routes]
             [noumenon.util :as util :refer [log!]]
@@ -39,8 +38,7 @@
 (defn- resolve-server-config
   "Merge CLI flags with env-var fallbacks. CLI flags take precedence."
   [{:keys [port bind db-dir provider model token read-only
-           max-ask-sessions max-llm-concurrency log-format
-           webhook-secret poll-interval]}]
+           max-ask-sessions log-format webhook-secret poll-interval]}]
   (let [resolved-token   (not-empty (or token (util/env "NOUMENON_TOKEN")))
         resolved-bind    (or bind (System/getenv "NOUMENON_BIND") "127.0.0.1")
         resolved-port    (or port (util/env-int "NOUMENON_PORT") 0)]
@@ -53,7 +51,6 @@
      :token              resolved-token
      :read-only          (or read-only (util/env-bool "NOUMENON_READ_ONLY"))
      :max-ask-sessions   (or max-ask-sessions (util/env-int "NOUMENON_MAX_ASK_SESSIONS") 50)
-     :max-llm-concurrency (or max-llm-concurrency (util/env-int "NOUMENON_MAX_LLM_CONCURRENCY") 10)
      :log-format         (or log-format (System/getenv "NOUMENON_LOG_FORMAT") "text")
      :webhook-secret     (or webhook-secret (util/env "NOUMENON_WEBHOOK_SECRET"))
      :poll-interval      (or poll-interval (util/env-int "NOUMENON_POLL_INTERVAL") 5)
@@ -71,7 +68,6 @@
                                  "Remote access requires authentication.")
                             {})))
         meta-conn   (db/ensure-meta-db (:db-dir config))
-        _           (cc/init-llm-semaphore! (:max-llm-concurrency config))
         config      (assoc config :meta-conn meta-conn)
         handler     (routes/make-handler config)
         srv         (server/run-server handler {:ip bind :port (:port config)})
