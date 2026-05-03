@@ -392,7 +392,7 @@
   (let [paths #{"src/myapp/core.clj" "src/myapp/db.clj" "src/myapp/util.clj"
                 "test/myapp/core_test.clj"}
         read-fixture (fn [path]
-                       (slurp (str "test-fixtures/clojure/" path)))
+                       (slurp (str "test/fixtures/clojure/" path)))
         result-core  (imports/enrich-file :clojure (read-fixture "src/myapp/core.clj")
                                           "src/myapp/core.clj" paths)
         result-db    (imports/enrich-file :clojure (read-fixture "src/myapp/db.clj")
@@ -412,7 +412,7 @@
 
 (deftest enrich-fixture-python-test
   (let [paths #{"myapp/core.py" "myapp/db.py" "myapp/util.py" "myapp/__init__.py"}
-        read-fixture (fn [path] (slurp (str "test-fixtures/python/" path)))
+        read-fixture (fn [path] (slurp (str "test/fixtures/python/" path)))
         result (imports/enrich-file :python (read-fixture "myapp/core.py")
                                     "myapp/core.py" paths)]
     (when (seq (imports/extract-imports :python "import os"))  ; skip if python3 unavailable
@@ -421,7 +421,7 @@
 
 (deftest enrich-fixture-javascript-test
   (let [paths #{"src/app.js" "src/db.js" "src/util.js" "src/config.js"}
-        read-fixture (fn [path] (slurp (str "test-fixtures/javascript/" path)))
+        read-fixture (fn [path] (slurp (str "test/fixtures/javascript/" path)))
         result (imports/enrich-file :javascript (read-fixture "src/app.js")
                                     "src/app.js" paths)]
     (when (seq (imports/extract-imports :javascript "import x from './y';"))
@@ -430,7 +430,7 @@
 
 (deftest enrich-fixture-rust-test
   (let [paths #{"src/main.rs" "src/parser.rs" "src/lexer/mod.rs"}
-        read-fixture (fn [path] (slurp (str "test-fixtures/rust/" path)))
+        read-fixture (fn [path] (slurp (str "test/fixtures/rust/" path)))
         result (imports/enrich-file :rust (read-fixture "src/main.rs")
                                     "src/main.rs" paths)]
     (testing "main declares parser and lexer modules"
@@ -438,7 +438,7 @@
 
 (deftest enrich-fixture-java-test
   (let [paths #{"com/example/Main.java" "com/example/Foo.java"}
-        read-fixture (fn [path] (slurp (str "test-fixtures/java/" path)))
+        read-fixture (fn [path] (slurp (str "test/fixtures/java/" path)))
         result (imports/enrich-file :java (read-fixture "com/example/Main.java")
                                     "com/example/Main.java" paths)]
     (testing "Main imports Foo, skips stdlib"
@@ -446,7 +446,7 @@
 
 (deftest enrich-fixture-elixir-test
   (let [paths #{"lib/my_app.ex" "lib/my_app/accounts.ex" "lib/my_app/repo.ex"}
-        read-fixture (fn [path] (slurp (str "test-fixtures/elixir/" path)))
+        read-fixture (fn [path] (slurp (str "test/fixtures/elixir/" path)))
         result-app   (imports/enrich-file :elixir (read-fixture "lib/my_app.ex")
                                           "lib/my_app.ex" paths)
         result-accts (imports/enrich-file :elixir (read-fixture "lib/my_app/accounts.ex")
@@ -463,7 +463,7 @@
 
 (deftest enrich-fixture-erlang-test
   (let [paths #{"src/my_server.erl" "include/my_header.hrl"}
-        read-fixture (fn [path] (slurp (str "test-fixtures/erlang/" path)))
+        read-fixture (fn [path] (slurp (str "test/fixtures/erlang/" path)))
         result (imports/enrich-file :erlang (read-fixture "src/my_server.erl")
                                     "src/my_server.erl" paths)]
     (testing "my_server includes my_header"
@@ -472,7 +472,7 @@
 (deftest enrich-fixture-lua-test
   (let [paths #{"main.lua" "mylib/core.lua" "mylib/utils.lua"
                 "mylib/init.lua" "config.lua" "scripts/helper.lua"}
-        read-fixture (fn [path] (slurp (str "test-fixtures/lua/" path)))
+        read-fixture (fn [path] (slurp (str "test/fixtures/lua/" path)))
         result-main   (imports/enrich-file :lua (read-fixture "main.lua")
                                            "main.lua" paths)
         result-core   (imports/enrich-file :lua (read-fixture "mylib/core.lua")
@@ -501,7 +501,7 @@
 (deftest enrich-fixture-csharp-test
   (let [paths #{"src/MyApp/Program.cs" "src/MyApp/Models/User.cs"
                 "src/MyApp/Services/UserService.cs"}
-        read-fixture (fn [path] (slurp (str "test-fixtures/csharp/" path)))
+        read-fixture (fn [path] (slurp (str "test/fixtures/csharp/" path)))
         result-prog (imports/enrich-file :csharp (read-fixture "src/MyApp/Program.cs")
                                          "src/MyApp/Program.cs" paths)
         result-user (imports/enrich-file :csharp (read-fixture "src/MyApp/Models/User.cs")
@@ -519,7 +519,7 @@
 
 (deftest enrich-fixture-msbuild-test
   (let [paths #{"src/MyApp/MyApp.csproj" "test/MyApp.Tests/MyApp.Tests.csproj"}
-        read-fixture (fn [path] (slurp (str "test-fixtures/csharp/" path)))
+        read-fixture (fn [path] (slurp (str "test/fixtures/csharp/" path)))
         result-sln   (imports/enrich-file :msbuild-solution
                                           (read-fixture "MyApp.sln")
                                           "MyApp.sln" paths)
@@ -534,7 +534,7 @@
 
 (deftest enrich-fixture-vcxproj-test
   (let [paths #{"src/main.cpp" "src/util.cpp" "include/util.h" "MyProject.vcxproj"}
-        read-fixture (fn [path] (slurp (str "test-fixtures/cpp/" path)))
+        read-fixture (fn [path] (slurp (str "test/fixtures/cpp/" path)))
         result (imports/enrich-file :msbuild-project
                                     (read-fixture "MyProject.vcxproj")
                                     "MyProject.vcxproj" paths)]
@@ -594,7 +594,7 @@
     (let [extract-one-c #'imports/extract-one-c
           abs           (fn [rel] (str (System/getProperty "user.dir") "/" rel))]
       (testing "C fixture: resolves include/util.h via auto-detected -I flags"
-        (let [repo    (abs "test-fixtures/c")
+        (let [repo    (abs "test/fixtures/c")
               paths   #{"src/main.c" "src/util.c" "include/util.h"}
               flags   (imports/include-dirs->flags repo (imports/detect-include-dirs paths))
               context {:fallback-flags flags :compile-commands nil}
@@ -603,7 +603,7 @@
           (is (some #(= [:file/path "include/util.h"] %) (:file/imports result)))))
 
       (testing "C++ fixture: resolves include/util.h via auto-detected -I flags"
-        (let [repo    (abs "test-fixtures/cpp")
+        (let [repo    (abs "test/fixtures/cpp")
               paths   #{"src/main.cpp" "src/util.cpp" "include/util.h"}
               flags   (imports/include-dirs->flags repo (imports/detect-include-dirs paths))
               context {:fallback-flags flags :compile-commands nil}
