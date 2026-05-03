@@ -100,41 +100,44 @@
       (str/replace "</file-content>" "&lt;/file-content&gt;")
       escape-double-mustache))
 
+(defn- escape-html-attr [s]
+  (-> s
+      (str/replace "&" "&amp;")
+      (str/replace "\"" "&quot;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")))
+
+(defn- ls-tree-files [repo-path]
+  (let [{:keys [exit out err]} (shell/sh "git" "-C" (str repo-path)
+                                         "ls-tree" "-r" "--name-only" "HEAD")]
+    (when (not= 0 exit)
+      (throw (ex-info (str "git ls-tree failed: " (str/trim (or err "")))
+                      {:exit exit})))
+    (->> (str/split-lines out) (remove str/blank?) vec)))
+
+(defn- render-file-content [repo-path path]
+  (str "<file-content path=\"" (escape-html-attr path) "\">\n"
+       (sanitize-file-content (:out (shell/sh "git" "-C" (str repo-path)
+                                              "show" (str "HEAD:" path))))
+       "\n</file-content>"))
+
 (defn raw-context
   "Concatenate all source files from repo-path as context for the raw condition.
    Reads files from git HEAD. File content is wrapped in delimiters, truncated,
    and template variables are escaped to mitigate prompt injection.
    Total output is capped at max-total-context-chars."
   [repo-path]
-  (let [{:keys [exit out err]} (shell/sh "git" "-C" (str repo-path)
-                                         "ls-tree" "-r" "--name-only" "HEAD")]
-    (when (not= 0 exit)
-      (throw (ex-info (str "git ls-tree failed: " (str/trim (or err "")))
-                      {:exit exit})))
-    (let [files (->> (str/split-lines out)
-                     (remove str/blank?))]
-      (loop [remaining files
-             parts     []
-             total     0]
-        (if-not (seq remaining)
-          (str/join "\n" parts)
-          (let [path (first remaining)
-                {:keys [out]} (shell/sh "git" "-C" (str repo-path)
-                                        "show" (str "HEAD:" path))
-                escaped-path (-> path
-                                 (str/replace "&" "&amp;")
-                                 (str/replace "\"" "&quot;")
-                                 (str/replace "<" "&lt;")
-                                 (str/replace ">" "&gt;"))
-                part (str "<file-content path=\"" escaped-path "\">\n"
-                          (sanitize-file-content out)
-                          "\n</file-content>")
-                new-total (+ total (count part))]
-            (if (> new-total max-total-context-chars)
-              (do (log! (str "  raw-context: truncated at " (count parts) "/" (count files)
-                             " files (" total " chars)"))
-                  (str/join "\n" (conj parts "[... context truncated to fit API limits]")))
-              (recur (rest remaining) (conj parts part) new-total))))))))
+  (let [files (ls-tree-files repo-path)
+        accumulate (fn [{:keys [parts total]} path]
+                     (let [part (render-file-content repo-path path)
+                           total' (+ total (count part))]
+                       (if (> total' max-total-context-chars)
+                         (do (log! (str "  raw-context: truncated at " (count parts) "/" (count files)
+                                        " files (" total " chars)"))
+                             (reduced {:parts (conj parts "[... context truncated to fit API limits]")}))
+                         {:parts (conj parts part) :total total'})))
+        {:keys [parts]} (reduce accumulate {:parts [] :total 0} files)]
+    (str/join "\n" parts)))
 
 (defn embed-context
   "Build context from TF-IDF search results for the embedded layer.
@@ -564,69 +567,100 @@
    :multi-hop      1.5
    :architectural  2.0})
 
+(defn- mean
+  "Arithmetic mean of a finite seq. Empty seq returns 0.0."
+  [xs]
+  (let [v (vec xs)]
+    (if (seq v) (/ (apply + v) (count v)) 0.0)))
+
+(defn- weighted-mean
+  "Category-weighted mean. `score-fn` returns the score (or nil to skip).
+   Weight comes from `category-weights` keyed by `(:category r)`."
+  [rs score-fn]
+  (let [pairs   (keep (fn [r]
+                        (when-let [s (score-fn r)]
+                          [(get category-weights (:category r) 1.0) s]))
+                      rs)
+        total-w (apply + (map first pairs))]
+    (if (zero? total-w)
+      0.0
+      (/ (apply + (map (fn [[w s]] (* w s)) pairs)) total-w))))
+
+(defn- score-key         [layer] (keyword (str (name layer) "-score")))
+(defn- mean-key          [layer] (keyword (str (name layer) "-mean")))
+(defn- weighted-mean-key [layer] (keyword (str "weighted-" (name layer) "-mean")))
+(defn- context-chars-key [layer] (keyword (str (name layer) "-context-chars")))
+
+(defn- layer-score-value
+  "Numeric score for `r` at `layer`, or nil if the layer wasn't run / scored."
+  [r layer]
+  (when (contains? r (score-key layer))
+    (score-value (get r (score-key layer)))))
+
+(defn- layer-mean  [layer rs] (mean (keep #(layer-score-value % layer) rs)))
+(defn- layer-wmean [layer rs] (weighted-mean (filter #(some? (layer-score-value % layer)) rs)
+                                             #(layer-score-value % layer)))
+
+(defn- assoc-layer-aggregates
+  "For each layer, set both :<layer>-mean and :weighted-<layer>-mean on `m`."
+  [m results layers]
+  (reduce (fn [acc layer]
+            (-> acc
+                (assoc (mean-key layer)          (layer-mean layer results))
+                (assoc (weighted-mean-key layer) (layer-wmean layer results))))
+          m layers))
+
+(defn- per-category-aggregate
+  "Per-category breakdown: count + per-layer means for each category."
+  [results layers]
+  (->> (group-by :category results)
+       (into {} (map (fn [[cat rs]]
+                       [cat (reduce (fn [m layer]
+                                      (assoc m (mean-key layer) (layer-mean layer rs)))
+                                    {:count (count rs)}
+                                    layers)])))))
+
+(defn- empty-context-count
+  "Count results whose non-raw layers had near-empty (<100 char) context."
+  [results layers]
+  (count (filter (fn [r]
+                   (some (fn [layer]
+                           (when-not (= :raw layer)
+                             (when-let [cc (get r (context-chars-key layer))]
+                               (< cc 100))))
+                         layers))
+                 results)))
+
+(defn- canonical-run?
+  "A canonical run covers the original 4 layers and didn't skip the judge."
+  [layers mode]
+  (and (every? (set layers) canonical-layers)
+       (not (:skip-judge mode))))
+
+(defn- primary-layer
+  "Layer used for the deterministic/llm-judged headline means."
+  [layers]
+  (if (some #{:full} layers) :full (last layers)))
+
 (defn aggregate-scores
   "Compute aggregate statistics from a seq of result maps.
    Results have per-layer scores keyed as :<layer>-score.
    When mode is provided, sets :canonical flag."
   ([results] (aggregate-scores results nil))
   ([results mode]
-   (let [layers     (resolve-layers (or mode {}))
-         mean       (fn [xs] (let [v (vec xs)] (if (seq v) (/ (apply + v) (count v)) 0.0)))
-         wmean      (fn [rs score-fn]
-                      (let [pairs (keep (fn [r]
-                                          (when-let [s (score-fn r)]
-                                            [(get category-weights (:category r) 1.0) s]))
-                                        rs)
-                            total-w (apply + (map first pairs))]
-                        (if (zero? total-w) 0.0
-                            (/ (apply + (map (fn [[w s]] (* w s)) pairs)) total-w))))
-         layer-key  (fn [layer] (keyword (str (name layer) "-score")))
-         layer-mean (fn [layer rs]
-                      (let [scored (filterv #(contains? % (layer-key layer)) rs)
-                            vals   (keep #(score-value (get % (layer-key layer))) scored)]
-                        (mean vals)))
-         layer-wmean (fn [layer rs]
-                       (let [scored (filterv #(and (contains? % (layer-key layer))
-                                                   (some? (score-value (get % (layer-key layer)))))
-                                             rs)]
-                         (wmean scored #(score-value (get % (layer-key layer))))))
-         by-cat     (group-by :category results)
-         det-rs     (filterv #(= :deterministic (:scoring %)) results)
-         llm-rs     (filterv #(not= :deterministic (:scoring %)) results)
-         ;; Canonical if at least the original 4 layers and no skip flags
-         canonical? (and (every? (set layers) canonical-layers)
-                         (not (:skip-judge mode)))
-         ;; Use :full layer for deterministic/llm-judged means (primary benchmark metric)
-         primary-layer (if (some #{:full} layers) :full (last layers))]
-     (reduce (fn [agg layer]
-               (assoc agg (keyword (str (name layer) "-mean"))
-                      (layer-mean layer results)
-                      (keyword (str "weighted-" (name layer) "-mean"))
-                      (layer-wmean layer results)))
-             {:question-count      (count results)
-              :canonical           canonical?
-              :deterministic-count (count det-rs)
-              :deterministic-mean  (let [scored (filterv #(contains? % (layer-key primary-layer)) det-rs)]
-                                     (mean (keep #(score-value (get % (layer-key primary-layer))) scored)))
-              :llm-judged-count    (count llm-rs)
-              :llm-judged-mean     (let [scored (filterv #(contains? % (layer-key primary-layer)) llm-rs)]
-                                     (mean (keep #(score-value (get % (layer-key primary-layer))) scored)))
-              :empty-context-count (count (filter (fn [r]
-                                                    (some (fn [layer]
-                                                            (when-not (= :raw layer)
-                                                              (when-let [cc (get r (keyword (str (name layer) "-context-chars")))]
-                                                                (< cc 100))))
-                                                          layers))
-                                                  results))
-              :per-category        (into {}
-                                         (map (fn [[cat rs]]
-                                                [cat (reduce (fn [m layer]
-                                                               (assoc m (keyword (str (name layer) "-mean"))
-                                                                      (layer-mean layer rs)))
-                                                             {:count (count rs)}
-                                                             layers)]))
-                                         by-cat)}
-             layers))))
+   (let [layers  (resolve-layers (or mode {}))
+         primary (primary-layer layers)
+         det-rs  (filterv #(= :deterministic (:scoring %)) results)
+         llm-rs  (filterv #(not= :deterministic (:scoring %)) results)]
+     (-> {:question-count      (count results)
+          :canonical           (canonical-run? layers mode)
+          :deterministic-count (count det-rs)
+          :deterministic-mean  (layer-mean primary det-rs)
+          :llm-judged-count    (count llm-rs)
+          :llm-judged-mean     (layer-mean primary llm-rs)
+          :empty-context-count (empty-context-count results layers)
+          :per-category        (per-category-aggregate results layers)}
+         (assoc-layer-aggregates results layers)))))
 
 ;; --- Usage tracking ---
 
@@ -644,6 +678,71 @@
        (keep :resolved-model)
        first))
 
+(defn- result-entity
+  "Build one :bench.result entity for a single question result."
+  [layers r]
+  (reduce (fn [entity layer]
+            (let [score-k    (score-key layer)
+                  reasoning-k (keyword (str (name layer) "-reasoning"))]
+              (cond-> entity
+                (get r score-k)
+                (assoc (keyword "bench.result" (str (name layer) "-score"))
+                       (get r score-k))
+                (get r reasoning-k)
+                (assoc (keyword "bench.result" (str (name layer) "-reasoning"))
+                       (get r reasoning-k)))))
+          (cond-> {:bench.result/question-id (:id r)
+                   :bench.result/category    (:category r)
+                   :bench.result/query-name  (or (:query-name r) "")}
+            (:scoring r)  (assoc :bench.result/scoring (:scoring r))
+            (:question r) (assoc :bench.result/question-text (:question r)))
+          layers))
+
+(defn- run-status [stop-reason]
+  (cond
+    (nil? stop-reason)     :completed
+    (= :error stop-reason) :error
+    :else                  :stopped))
+
+(def ^:private optional-run-fields
+  "Drives optional :bench.run/* fields. Each entry: [aggregate-key dest-attr cast-fn pred].
+   `pred` (optional) overrides the default `(get aggregate src-key)` truthiness check."
+  [[:completed-count     :bench.run/completed-count     long    nil]
+   [:empty-context-count :bench.run/empty-context-count long    pos?]
+   [:raw-mean            :bench.run/raw-mean            double  nil]
+   [:import-mean         :bench.run/import-mean         double  nil]
+   [:enrich-mean         :bench.run/enrich-mean         double  nil]
+   [:full-mean           :bench.run/full-mean           double  nil]
+   [:embedded-mean       :bench.run/embedded-mean       double  nil]
+   [:weighted-raw-mean      :bench.run/weighted-raw-mean      double nil]
+   [:weighted-import-mean   :bench.run/weighted-import-mean   double nil]
+   [:weighted-enrich-mean   :bench.run/weighted-enrich-mean   double nil]
+   [:weighted-full-mean     :bench.run/weighted-full-mean     double nil]
+   [:weighted-embedded-mean :bench.run/weighted-embedded-mean double nil]])
+
+(defn- assoc-optional-aggregate-fields [m aggregate]
+  (reduce (fn [acc [src dest cast-fn pred]]
+            (let [v (get aggregate src)]
+              (if (and v (or (nil? pred) (pred v)))
+                (assoc acc dest (cast-fn v))
+                acc)))
+          m optional-run-fields))
+
+(defn- assoc-usage-fields [m total-usage]
+  (cond-> m
+    (:input-tokens total-usage)  (assoc :bench.run/input-tokens  (long (:input-tokens total-usage)))
+    (:output-tokens total-usage) (assoc :bench.run/output-tokens (long (:output-tokens total-usage)))
+    (:cost-usd total-usage)      (assoc :bench.run/cost-usd      (double (:cost-usd total-usage)))))
+
+(defn- assoc-scoring-method-fields [m aggregate]
+  (cond-> m
+    (:deterministic-count aggregate)
+    (assoc :bench.run/deterministic-count (long (:deterministic-count aggregate))
+           :bench.run/deterministic-mean  (double (:deterministic-mean aggregate)))
+    (:llm-judged-count aggregate)
+    (assoc :bench.run/llm-judged-count (long (:llm-judged-count aggregate))
+           :bench.run/llm-judged-mean  (double (:llm-judged-mean aggregate)))))
+
 (defn benchmark-run->tx-data
   "Convert finalized benchmark results + metadata to Datomic tx-data.
    Pure function: data in, tx-data out."
@@ -651,128 +750,33 @@
    {:keys [repo-path commit-sha model-config started-at mode
            question-set-hash rubric-hash answer-prompt-hash db-basis-t
            concurrency stages]}]
-  (let [layers (resolve-layers (or mode {}))
-        result-entities
-        (mapv (fn [r]
-                (reduce (fn [entity layer]
-                          (let [score-key    (keyword (str (name layer) "-score"))
-                                reasoning-key (keyword (str (name layer) "-reasoning"))]
-                            (cond-> entity
-                              (get r score-key)
-                              (assoc (keyword "bench.result" (str (name layer) "-score"))
-                                     (get r score-key))
-                              (get r reasoning-key)
-                              (assoc (keyword "bench.result" (str (name layer) "-reasoning"))
-                                     (get r reasoning-key)))))
-                        (cond-> {:bench.result/question-id (:id r)
-                                 :bench.result/category   (:category r)
-                                 :bench.result/query-name (or (:query-name r) "")}
-                          (:scoring r) (assoc :bench.result/scoring (:scoring r))
-                          (:question r) (assoc :bench.result/question-text (:question r)))
-                        layers))
-              results)
-        status (cond
-                 (nil? stop-reason) :completed
-                 (= :error stop-reason) :error
-                 :else :stopped)
+  (let [layers         (resolve-layers (or mode {}))
         resolved-model (first-resolved-model (or stages {}))
-        run-entity
-        (cond->
-         {:bench.run/id              run-id
-          :bench.run/repo-path       (str repo-path)
-          :bench.run/commit-sha      (or commit-sha "unknown")
-          :bench.run/started-at      (or started-at (java.util.Date.))
-          :bench.run/completed-at    (java.util.Date.)
-          :bench.run/status          status
-          :bench.run/model-config    (pr-str model-config)
-          :bench.run/layers          (pr-str layers)
-          :bench.run/mode            (pr-str mode)
-          :bench.run/question-count  (long (:question-count aggregate 0))
-          :bench.run/results         result-entities
-          :bench.run/checkpoint-path (str checkpoint-path)}
-
-          (:canonical aggregate)
-          (assoc :bench.run/canonical? true)
-
-          (not (:canonical aggregate))
-          (assoc :bench.run/canonical? false)
-
-          (:completed-count aggregate)
-          (assoc :bench.run/completed-count (long (:completed-count aggregate)))
-
-          (pos? (:empty-context-count aggregate 0))
-          (assoc :bench.run/empty-context-count (long (:empty-context-count aggregate)))
-
-          stop-reason
-          (assoc :bench.run/stop-reason stop-reason)
-
-          resolved-model
-          (assoc :bench.run/resolved-model resolved-model)
-
-          concurrency
-          (assoc :bench.run/concurrency (long concurrency))
-
-          question-set-hash
-          (assoc :bench.run/question-set-hash question-set-hash)
-
-          rubric-hash
-          (assoc :bench.run/rubric-hash rubric-hash)
-
-          answer-prompt-hash
-          (assoc :bench.run/answer-prompt-hash answer-prompt-hash)
-
-          db-basis-t
-          (assoc :bench.run/db-basis-t (long db-basis-t))
-
-          (:input-tokens total-usage)
-          (assoc :bench.run/input-tokens (long (:input-tokens total-usage)))
-
-          (:output-tokens total-usage)
-          (assoc :bench.run/output-tokens (long (:output-tokens total-usage)))
-
-          (:cost-usd total-usage)
-          (assoc :bench.run/cost-usd (double (:cost-usd total-usage)))
-
-          ;; Per-layer means
-          (:raw-mean aggregate)
-          (assoc :bench.run/raw-mean (double (:raw-mean aggregate)))
-
-          (:import-mean aggregate)
-          (assoc :bench.run/import-mean (double (:import-mean aggregate)))
-
-          (:enrich-mean aggregate)
-          (assoc :bench.run/enrich-mean (double (:enrich-mean aggregate)))
-
-          (:full-mean aggregate)
-          (assoc :bench.run/full-mean (double (:full-mean aggregate)))
-
-          (:embedded-mean aggregate)
-          (assoc :bench.run/embedded-mean (double (:embedded-mean aggregate)))
-
-          ;; Weighted per-layer means
-          (:weighted-raw-mean aggregate)
-          (assoc :bench.run/weighted-raw-mean (double (:weighted-raw-mean aggregate)))
-
-          (:weighted-import-mean aggregate)
-          (assoc :bench.run/weighted-import-mean (double (:weighted-import-mean aggregate)))
-
-          (:weighted-enrich-mean aggregate)
-          (assoc :bench.run/weighted-enrich-mean (double (:weighted-enrich-mean aggregate)))
-
-          (:weighted-full-mean aggregate)
-          (assoc :bench.run/weighted-full-mean (double (:weighted-full-mean aggregate)))
-
-          (:weighted-embedded-mean aggregate)
-          (assoc :bench.run/weighted-embedded-mean (double (:weighted-embedded-mean aggregate)))
-
-          (:deterministic-count aggregate)
-          (assoc :bench.run/deterministic-count (long (:deterministic-count aggregate))
-                 :bench.run/deterministic-mean (double (:deterministic-mean aggregate)))
-
-          (:llm-judged-count aggregate)
-          (assoc :bench.run/llm-judged-count (long (:llm-judged-count aggregate))
-                 :bench.run/llm-judged-mean (double (:llm-judged-mean aggregate))))]
-
+        base           {:bench.run/id              run-id
+                        :bench.run/repo-path       (str repo-path)
+                        :bench.run/commit-sha      (or commit-sha "unknown")
+                        :bench.run/started-at      (or started-at (java.util.Date.))
+                        :bench.run/completed-at    (java.util.Date.)
+                        :bench.run/status          (run-status stop-reason)
+                        :bench.run/model-config    (pr-str model-config)
+                        :bench.run/layers          (pr-str layers)
+                        :bench.run/mode            (pr-str mode)
+                        :bench.run/question-count  (long (:question-count aggregate 0))
+                        :bench.run/canonical?      (boolean (:canonical aggregate))
+                        :bench.run/results         (mapv #(result-entity layers %) results)
+                        :bench.run/checkpoint-path (str checkpoint-path)}
+        run-entity     (-> base
+                           (cond->
+                            stop-reason         (assoc :bench.run/stop-reason         stop-reason)
+                            resolved-model      (assoc :bench.run/resolved-model      resolved-model)
+                            concurrency         (assoc :bench.run/concurrency         (long concurrency))
+                            question-set-hash   (assoc :bench.run/question-set-hash   question-set-hash)
+                            rubric-hash         (assoc :bench.run/rubric-hash         rubric-hash)
+                            answer-prompt-hash  (assoc :bench.run/answer-prompt-hash  answer-prompt-hash)
+                            db-basis-t          (assoc :bench.run/db-basis-t          (long db-basis-t)))
+                           (assoc-usage-fields total-usage)
+                           (assoc-optional-aggregate-fields aggregate)
+                           (assoc-scoring-method-fields aggregate))]
     [run-entity
      {:db/id "datomic.tx" :tx/op :benchmark}]))
 
@@ -1338,6 +1342,135 @@
   (let [d (- (double b) (double a))]
     (str (if (pos? d) "+" "") (format "%.1f" (* 100.0 d)) "pp")))
 
+(defn- duration-ms-key   [layer] (keyword (str (name layer) "-duration-ms")))
+(defn- input-tokens-key  [layer] (keyword (str (name layer) "-input-tokens")))
+
+(defn- avg-key
+  "Average values found at `k` across `rs`. nil when no values."
+  [k rs]
+  (let [vs (keep k rs)]
+    (when (seq vs)
+      (long (/ (apply + vs) (count vs))))))
+
+(defn- run-status-string [stop-reason]
+  (cond
+    (nil? stop-reason)     "Completed"
+    (= :error stop-reason) "Error"
+    :else                  (str "Stopped (" (name stop-reason) ")")))
+
+(defn- format-date [^java.util.Date d]
+  (when d (.format (java.text.SimpleDateFormat. "yyyy-MM-dd HH:mm:ss") d)))
+
+(defn- header-section
+  [{:keys [date repo-path commit-sha model provider layers mode status]}]
+  (str "# Noumenon Benchmark Report\n\n"
+       "**Date:** " (or date "unknown") "\n"
+       "**Repository:** " repo-path "\n"
+       "**Commit:** `" (or commit-sha "unknown") "`\n"
+       "**Model:** " model " (via " provider ")\n"
+       "**Layers:** " (str/join ", " (map name layers)) "\n"
+       "**Mode:** " (pr-str mode) "\n"
+       "**Status:** " status "\n"))
+
+(defn- summary-section [aggregate layers]
+  (let [raw-base (when (some #{:raw} layers) (:raw-mean aggregate))
+        row      (fn [layer]
+                   (when-let [m (get aggregate (mean-key layer))]
+                     (let [w (get aggregate (weighted-mean-key layer))]
+                       (str "| " (name layer)
+                            " | " (format-pct m)
+                            " | " (if w (format-pct w) "—")
+                            " | " (if (and raw-base (not= layer :raw))
+                                    (format-delta raw-base m) "—")
+                            " |\n"))))]
+    (str "\n## Summary\n\n"
+         "| Condition | Mean | Weighted Mean | Delta vs Raw |\n"
+         "|-----------|------|--------------|-------------|\n"
+         (str/join (keep row layers)))))
+
+(defn- scoring-method-section [aggregate]
+  (str "\n## Results by Scoring Method\n\n"
+       "| Method | Mean Score | Count |\n"
+       "|--------|-----------|-------|\n"
+       "| Deterministic | " (format-pct (:deterministic-mean aggregate))
+       " | " (:deterministic-count aggregate) " |\n"
+       (when (pos? (:llm-judged-count aggregate 0))
+         (str "| LLM-judged | " (format-pct (:llm-judged-mean aggregate))
+              " | " (:llm-judged-count aggregate) " |\n"))))
+
+(defn- per-category-section [aggregate layers]
+  (when-let [per-cat (:per-category aggregate)]
+    (let [cell (fn [stats layer]
+                 (if-let [v (get stats (mean-key layer))] (format-pct v) "—"))
+          row  (fn [[cat stats]]
+                 (str "| " (name cat) " | " (:count stats) " | "
+                      (str/join " | " (map #(cell stats %) layers)) " |\n"))]
+      (str "\n## Results by Category\n\n"
+           "| Category | Count | " (str/join " | " (map name layers)) " |\n"
+           "|----------|-------|" (str/join "|" (repeat (count layers) "------")) "|\n"
+           (str/join (map row (sort-by key per-cat)))))))
+
+(defn- per-question-section [results layers]
+  (let [score-cell (fn [r layer]
+                     (get score-symbol (get r (score-key layer)) "—"))
+        row        (fn [r]
+                     (str "| " (name (:id r))
+                          " | " (name (or (:category r) :unknown))
+                          " | " (name (or (:scoring r) :llm))
+                          " | " (str/join " | " (map #(score-cell r %) layers)) " |\n"))]
+    (str "\n## Per-Question Results\n\n"
+         "| # | Category | Scoring | " (str/join " | " (map name layers)) " |\n"
+         "|---|----------|---------|" (str/join "|" (repeat (count layers) "------")) "|\n"
+         (str/join (map row (sort-by :id results))))))
+
+(defn- context-efficiency-section [results layers]
+  (when (> (count layers) 1)
+    (let [row (fn [layer]
+                (let [ac (avg-key (context-chars-key layer) results)
+                      ai (avg-key (input-tokens-key layer) results)
+                      ad (avg-key (duration-ms-key layer) results)]
+                  (when (or ac ai ad)
+                    (str "| " (name layer)
+                         " | " (or ac "—")
+                         " | " (or ai "—")
+                         " | " (or ad "—") " |\n"))))]
+      (str "\n## Context & Efficiency\n\n"
+           "| Layer | Avg Context (chars) | Avg Input Tokens | Avg Latency (ms) |\n"
+           "|-------|--------------------:|------------------:|------------------:|\n"
+           (str/join (keep row layers))))))
+
+(defn- usage-section [total-usage]
+  (str "\n## Usage\n\n"
+       "| Metric | Value |\n"
+       "|--------|-------|\n"
+       "| Input tokens | "  (or (:input-tokens  total-usage) 0) " |\n"
+       "| Output tokens | " (or (:output-tokens total-usage) 0) " |\n"
+       "| Estimated cost | $" (format "%.4f" (double (or (:cost-usd total-usage) 0.0))) " |\n"))
+
+(defn- validity-section [aggregate status]
+  (str "\n## Validity\n\n"
+       "| Check | Value |\n"
+       "|-------|-------|\n"
+       "| Status | " status " |\n"
+       "| Questions scored | " (:question-count aggregate) " |\n"
+       "| Canonical | " (if (:canonical aggregate) "Yes" "No") " |\n"))
+
+(defn- reproducibility-section
+  [{:keys [run-id commit-sha db-basis-t question-set-hash rubric-hash answer-prompt-hash checkpoint-path]}]
+  (let [optional [["DB basis-t"        db-basis-t        identity]
+                  ["Question set hash" question-set-hash #(str "`" % "`")]
+                  ["Rubric hash"       rubric-hash       #(str "`" % "`")]
+                  ["Prompt hash"       answer-prompt-hash #(str "`" % "`")]]]
+    (str "\n## Reproducibility\n\n"
+         "| Artifact | Value |\n"
+         "|----------|-------|\n"
+         "| Run ID | `" run-id "` |\n"
+         "| Git SHA | `" (or commit-sha "unknown") "` |\n"
+         (str/join (keep (fn [[label v render]]
+                           (when v (str "| " label " | " (render v) " |\n")))
+                         optional))
+         "| Checkpoint | `" checkpoint-path "` |\n")))
+
 (defn generate-report
   "Generate a Markdown benchmark report. Pure function: data in, string out."
   [{:keys [results aggregate total-usage run-id checkpoint-path stop-reason]}
@@ -1345,130 +1478,28 @@
            question-set-hash rubric-hash answer-prompt-hash db-basis-t
            resolved-model layers]}]
   (let [layers (or layers (resolve-layers (or mode {})))
-        date   (when started-at
-                 (.format (java.text.SimpleDateFormat. "yyyy-MM-dd HH:mm:ss") started-at))
-        model  (or resolved-model (:model model-config) "unknown")
-        provider (or (:provider model-config) "unknown")
-        status (cond (nil? stop-reason) "Completed"
-                     (= :error stop-reason) "Error"
-                     :else (str "Stopped (" (name stop-reason) ")"))
-        raw-base (when (some #{:raw} layers)
-                   (:raw-mean aggregate))
-        sb     (StringBuilder.)]
-    (doto sb
-      (.append "# Noumenon Benchmark Report\n\n")
-      (.append (str "**Date:** " (or date "unknown") "\n"))
-      (.append (str "**Repository:** " repo-path "\n"))
-      (.append (str "**Commit:** `" (or commit-sha "unknown") "`\n"))
-      (.append (str "**Model:** " model " (via " provider ")\n"))
-      (.append (str "**Layers:** " (str/join ", " (map name layers)) "\n"))
-      (.append (str "**Mode:** " (pr-str mode) "\n"))
-      (.append (str "**Status:** " status "\n"))
-      (.append "\n## Summary\n\n")
-      (.append "| Condition | Mean | Weighted Mean | Delta vs Raw |\n")
-      (.append "|-----------|------|--------------|-------------|\n"))
-    (doseq [layer layers]
-      (let [mean-key  (keyword (str (name layer) "-mean"))
-            wmean-key (keyword (str "weighted-" (name layer) "-mean"))
-            mean-val  (get aggregate mean-key)
-            wmean-val (get aggregate wmean-key)]
-        (when mean-val
-          (.append sb (str "| " (name layer)
-                           " | " (format-pct mean-val)
-                           " | " (if wmean-val (format-pct wmean-val) "—")
-                           " | " (if (and raw-base (not= layer :raw))
-                                   (format-delta raw-base mean-val)
-                                   "—")
-                           " |\n")))))
-    (.append sb "\n## Results by Scoring Method\n\n")
-    (.append sb "| Method | Mean Score | Count |\n")
-    (.append sb "|--------|-----------|-------|\n")
-    (.append sb (str "| Deterministic | "
-                     (format-pct (:deterministic-mean aggregate))
-                     " | " (:deterministic-count aggregate) " |\n"))
-    (when (pos? (:llm-judged-count aggregate 0))
-      (.append sb (str "| LLM-judged | "
-                       (format-pct (:llm-judged-mean aggregate))
-                       " | " (:llm-judged-count aggregate) " |\n")))
-    (when-let [per-cat (:per-category aggregate)]
-      (.append sb "\n## Results by Category\n\n")
-      (.append sb (str "| Category | Count | "
-                       (str/join " | " (map name layers)) " |\n"))
-      (.append sb (str "|----------|-------|"
-                       (str/join "|" (repeat (count layers) "------")) "|\n"))
-      (doseq [[cat stats] (sort-by key per-cat)]
-        (.append sb (str "| " (name cat) " | " (:count stats)
-                         " | " (str/join " | "
-                                         (map (fn [layer]
-                                                (let [mk (keyword (str (name layer) "-mean"))]
-                                                  (if-let [v (get stats mk)]
-                                                    (format-pct v) "—")))
-                                              layers))
-                         " |\n"))))
-    (.append sb "\n## Per-Question Results\n\n")
-    (.append sb (str "| # | Category | Scoring | "
-                     (str/join " | " (map name layers)) " |\n"))
-    (.append sb (str "|---|----------|---------|"
-                     (str/join "|" (repeat (count layers) "------")) "|\n"))
-    (doseq [r (sort-by :id results)]
-      (.append sb (str "| " (name (:id r))
-                       " | " (name (or (:category r) :unknown))
-                       " | " (name (or (:scoring r) :llm))
-                       " | "
-                       (str/join " | "
-                                 (map (fn [layer]
-                                        (let [score (get r (keyword (str (name layer) "-score")))]
-                                          (get score-symbol score "—")))
-                                      layers))
-                       " |\n")))
-    (when (> (count layers) 1)
-      (let [ctx-key  (fn [layer] (keyword (str (name layer) "-context-chars")))
-            dur-key  (fn [layer] (keyword (str (name layer) "-duration-ms")))
-            in-key   (fn [layer] (keyword (str (name layer) "-input-tokens")))
-            avg      (fn [k rs] (let [vs (keep k rs)]
-                                  (when (seq vs)
-                                    (long (/ (apply + vs) (count vs))))))]
-        (.append sb "\n## Context & Efficiency\n\n")
-        (.append sb "| Layer | Avg Context (chars) | Avg Input Tokens | Avg Latency (ms) |\n")
-        (.append sb "|-------|--------------------:|------------------:|------------------:|\n")
-        (doseq [layer layers]
-          (let [ac (avg (ctx-key layer) results)
-                ai (avg (in-key layer) results)
-                ad (avg (dur-key layer) results)]
-            (when (or ac ai ad)
-              (.append sb (str "| " (name layer)
-                               " | " (or ac "—")
-                               " | " (or ai "—")
-                               " | " (or ad "—")
-                               " |\n")))))))
-    (.append sb "\n## Usage\n\n")
-    (.append sb "| Metric | Value |\n")
-    (.append sb "|--------|-------|\n")
-    (.append sb (str "| Input tokens | " (or (:input-tokens total-usage) 0) " |\n"))
-    (.append sb (str "| Output tokens | " (or (:output-tokens total-usage) 0) " |\n"))
-    (.append sb (str "| Estimated cost | $"
-                     (format "%.4f" (double (or (:cost-usd total-usage) 0.0))) " |\n"))
-    (.append sb "\n## Validity\n\n")
-    (.append sb "| Check | Value |\n")
-    (.append sb "|-------|-------|\n")
-    (.append sb (str "| Status | " status " |\n"))
-    (.append sb (str "| Questions scored | " (:question-count aggregate) " |\n"))
-    (.append sb (str "| Canonical | " (if (:canonical aggregate) "Yes" "No") " |\n"))
-    (.append sb "\n## Reproducibility\n\n")
-    (.append sb "| Artifact | Value |\n")
-    (.append sb "|----------|-------|\n")
-    (.append sb (str "| Run ID | `" run-id "` |\n"))
-    (.append sb (str "| Git SHA | `" (or commit-sha "unknown") "` |\n"))
-    (when db-basis-t
-      (.append sb (str "| DB basis-t | " db-basis-t " |\n")))
-    (when question-set-hash
-      (.append sb (str "| Question set hash | `" question-set-hash "` |\n")))
-    (when rubric-hash
-      (.append sb (str "| Rubric hash | `" rubric-hash "` |\n")))
-    (when answer-prompt-hash
-      (.append sb (str "| Prompt hash | `" answer-prompt-hash "` |\n")))
-    (.append sb (str "| Checkpoint | `" checkpoint-path "` |\n"))
-    (.toString sb)))
+        status (run-status-string stop-reason)
+        header {:date      (format-date started-at)
+                :repo-path repo-path
+                :commit-sha commit-sha
+                :model     (or resolved-model (:model model-config) "unknown")
+                :provider  (or (:provider model-config) "unknown")
+                :layers    layers
+                :mode      mode
+                :status    status}
+        repro  {:run-id run-id :commit-sha commit-sha :db-basis-t db-basis-t
+                :question-set-hash question-set-hash :rubric-hash rubric-hash
+                :answer-prompt-hash answer-prompt-hash :checkpoint-path checkpoint-path}]
+    (str/join (keep identity
+                    [(header-section header)
+                     (summary-section aggregate layers)
+                     (scoring-method-section aggregate)
+                     (per-category-section aggregate layers)
+                     (per-question-section results layers)
+                     (context-efficiency-section results layers)
+                     (usage-section total-usage)
+                     (validity-section aggregate status)
+                     (reproducibility-section repro)]))))
 
 (defn compare-runs
   "Compare two benchmark runs pulled from Datomic. Returns a delta map.
@@ -1586,16 +1617,66 @@
        :report-path     report-path
        :stop-reason     stop-reason})))
 
+(defn- mode-label [mode]
+  (cond
+    (:deterministic-only mode) "fast"
+    (:skip-judge mode)         "no-judge"
+    :else                      "full"))
+
+(defn- log-run-start!
+  [{:keys [run-id questions layers total mode resuming? initial-stages
+           concurrency min-delay-ms budget]}]
+  (log! (str "bench/run-start run-id=" run-id
+             " questions=" (count questions)
+             " layers=" (str/join "," (map name layers))
+             " stages=" total
+             " mode=" (mode-label mode)
+             (when (:skip-judge mode) " skip-judge")
+             (when (:deterministic-only mode) " deterministic-only")
+             (when resuming?
+               (str " resume-from=" (count initial-stages) "/" total))
+             (when (> concurrency 1) (str " concurrency=" concurrency))
+             (when (pos? min-delay-ms) (str " min-delay=" min-delay-ms "ms"))
+             (when (:max-questions budget) (str " max-questions=" (:max-questions budget)))
+             (when (:stop-after-ms budget) (str " stop-after=" (:stop-after-ms budget) "ms")))))
+
+(defn- load-run-context
+  "Build the per-run context for non-already-completed stages: an isolated LLM (for :raw),
+   the raw-context string, and an embed index. Skipped when nothing remains to run."
+  [{:keys [layers has-remaining? model-config repo-path db-dir db-name]}]
+  (let [has-raw?      (some #{:raw} layers)
+        has-embedded? (some #{:embedded} layers)]
+    {:isolated-llm (when has-raw?
+                     (llm/make-isolated-prompt-fn (select-keys model-config [:provider :model])))
+     :raw-ctx      (when (and has-remaining? has-raw?) (raw-context repo-path))
+     :embed-ctx    (when (and has-remaining? has-embedded?)
+                     (embed/get-cached-index db-dir db-name))}))
+
+(defn- build-shared-state
+  [{:keys [meta-db db rubric-map run-context checkpoint cp-path
+           invoke-llm judge-llm session-cost budget start-ms stop-flag
+           error-atom rate-gate min-delay-ms run-id total mode
+           max-question-stages progress-fn]}]
+  (merge {:rubric-map  rubric-map  :meta-db meta-db :db db
+          :checkpoint  checkpoint  :cp-path cp-path
+          :invoke-llm  invoke-llm  :judge-llm judge-llm
+          :session-cost session-cost :budget budget :start-ms start-ms
+          :stop-flag    stop-flag    :error-atom error-atom
+          :rate-gate    rate-gate    :min-delay-ms min-delay-ms
+          :run-id       run-id       :total total :mode mode
+          :max-question-stages max-question-stages
+          :progress-fn  progress-fn}
+         run-context))
+
 (defn run-benchmark!
   "Run the full benchmark with per-stage checkpointing, resume, and budget controls.
    Returns {:results [...] :aggregate {...} :total-usage {...} :run-id str :checkpoint-path str :stop-reason kw-or-nil}."
   [db repo-path invoke-llm & {:keys [meta-db resume-checkpoint canary conn report?] :as opts}]
-  (let [targets        (pick-benchmark-targets meta-db db)
-        all-questions  (resolve-question-params (load-questions) targets)
+  (let [{:keys [checkpoint-dir budget judge-llm model-config
+                concurrency min-delay-ms mode]} (normalize-run-options opts invoke-llm)
         rubric-map     (load-rubric)
-        {:keys [checkpoint-dir budget judge-llm model-config
-                concurrency min-delay-ms mode]}
-        (normalize-run-options opts invoke-llm)
+        targets        (pick-benchmark-targets meta-db db)
+        all-questions  (resolve-question-params (load-questions) targets)
         questions      (if (:deterministic-only mode)
                          (filterv #(= :deterministic (:scoring %)) all-questions)
                          all-questions)
@@ -1603,67 +1684,41 @@
         run-id         (if resuming? (:run-id resume-checkpoint) (generate-run-id))
         cp-path        (str (io/file checkpoint-dir (str run-id ".edn")))
         start-ms       (System/currentTimeMillis)
-        session-cost   (atom 0.0)
-        stop-flag      (or (:stop-flag opts) (atom nil))
-        error-atom     (atom nil)
-        rate-gate      (atom 0)
         initial-stages (if resuming? (:stages resume-checkpoint) {})
         {:keys [total has-remaining? layers]}
         (build-stage-plan {:questions questions :mode mode :initial-stages initial-stages})
-        ;; Compute exact stage count for max-questions budget check
-        max-question-stages
-        (when-let [mq (:max-questions budget)]
-          (count (all-stage-keys (take mq questions) mode)))
-        has-raw?       (some #{:raw} layers)
-        has-embedded?  (some #{:embedded} layers)
-        isolated-llm   (when has-raw? (llm/make-isolated-prompt-fn
-                                       (select-keys model-config [:provider :model])))
-        raw-ctx        (when (and has-remaining? has-raw?) (raw-context repo-path))
-        embed-ctx      (when (and has-remaining? has-embedded?)
-                         (embed/get-cached-index (:db-dir opts) (:db-name opts)))
+        max-question-stages (when-let [mq (:max-questions budget)]
+                              (count (all-stage-keys (take mq questions) mode)))
+        run-context    (load-run-context {:layers layers :has-remaining? has-remaining?
+                                          :model-config model-config :repo-path repo-path
+                                          :db-dir (:db-dir opts) :db-name (:db-name opts)})
         checkpoint     (atom (make-initial-checkpoint
                               (build-run-metadata
-                               {:resume-checkpoint resume-checkpoint
-                                :run-id run-id
-                                :repo-path repo-path
-                                :questions questions
-                                :rubric-map rubric-map
-                                :model-config model-config
-                                :mode mode
-                                :budget budget})))
-        pairs          (for [q questions, layer layers] [(:id q) layer q])
-        shared         {:rubric-map rubric-map :meta-db meta-db :db db
-                        :raw-ctx raw-ctx :embed-ctx embed-ctx
-                        :checkpoint checkpoint :cp-path cp-path
-                        :invoke-llm invoke-llm :isolated-llm isolated-llm :judge-llm judge-llm
-                        :session-cost session-cost :budget budget :start-ms start-ms
-                        :stop-flag stop-flag :error-atom error-atom
-                        :rate-gate rate-gate :min-delay-ms min-delay-ms
-                        :run-id run-id :total total :mode mode
-                        :max-question-stages max-question-stages
-                        :progress-fn (:progress-fn opts)}]
-    (log! (str "bench/run-start run-id=" run-id
-               " questions=" (count questions)
-               " layers=" (str/join "," (map name layers))
-               " stages=" total
-               " mode=" (cond
-                          (:deterministic-only mode) "fast"
-                          (:skip-judge mode)         "no-judge"
-                          :else                      "full")
-               (when (:skip-judge mode) " skip-judge")
-               (when (:deterministic-only mode) " deterministic-only")
-               (when resuming?
-                 (str " resume-from=" (count initial-stages) "/" total))
-               (when (> concurrency 1) (str " concurrency=" concurrency))
-               (when (pos? min-delay-ms) (str " min-delay=" min-delay-ms "ms"))
-               (when (:max-questions budget) (str " max-questions=" (:max-questions budget)))
-               (when (:stop-after-ms budget) (str " stop-after=" (:stop-after-ms budget) "ms"))))
+                               {:resume-checkpoint resume-checkpoint :run-id run-id
+                                :repo-path repo-path :questions questions
+                                :rubric-map rubric-map :model-config model-config
+                                :mode mode :budget budget})))
+        stop-flag      (or (:stop-flag opts) (atom nil))
+        shared         (build-shared-state
+                        {:meta-db meta-db :db db :rubric-map rubric-map
+                         :run-context run-context :checkpoint checkpoint :cp-path cp-path
+                         :invoke-llm invoke-llm :judge-llm judge-llm
+                         :session-cost (atom 0.0) :budget budget :start-ms start-ms
+                         :stop-flag stop-flag :error-atom (atom nil)
+                         :rate-gate (atom 0) :min-delay-ms min-delay-ms
+                         :run-id run-id :total total :mode mode
+                         :max-question-stages max-question-stages
+                         :progress-fn (:progress-fn opts)})
+        pairs          (for [q questions, layer layers] [(:id q) layer q])]
+    (log-run-start! {:run-id run-id :questions questions :layers layers :total total
+                     :mode mode :resuming? resuming? :initial-stages initial-stages
+                     :concurrency concurrency :min-delay-ms min-delay-ms :budget budget})
     (log-cost-estimate! total model-config)
     (if canary
       (run-canary-phases! questions layers shared checkpoint stop-flag concurrency mode run-id)
       (run-pairs! pairs shared concurrency))
     (finalize-benchmark! {:questions questions :checkpoint checkpoint :cp-path cp-path
                           :run-id run-id :start-ms start-ms :mode mode
-                          :error-atom error-atom :stop-flag stop-flag
+                          :error-atom (:error-atom shared) :stop-flag stop-flag
                           :repo-path repo-path :conn conn :db db
                           :concurrency concurrency :report? report?})))
