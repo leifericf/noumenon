@@ -15,7 +15,7 @@ launcher/resources/version.edn
 .datomic/
 
 # Editor / IDE
-.clj-kondo/
+.clj-kondo/.cache/
 .lsp/
 .idea/
 *.iml

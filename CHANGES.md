@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.1
+
+### Fixes
+
+- **CI lint excludes test fixtures** — moving `test-fixtures/` to `test/fixtures/` in 0.10.0 brought the per-language fixture tree under the `clojure -M:lint` scan path (`src test`). One Clojure fixture (`test/fixtures/clojure/test/myapp/core_test.clj`) requires `myapp.core` without using it — intentional, since the fixture imitates an "imports unused namespace" pattern that the import-extraction logic is supposed to detect — but clj-kondo flagged it as a warning and exited with code 2. New `.clj-kondo/config.edn` adds `{:output {:exclude-files ["test/fixtures/.*"]}}` so all language fixtures are skipped uniformly.
+
 ## 0.10.0
 
 ### Changed
