@@ -35,9 +35,6 @@ Thumbs.db
 .claude/
 .mcp.json
 
-# Test repos
-test-repos/
-
 # Noumenon data
 data/
 noumenon-demo-*.tar.gz
