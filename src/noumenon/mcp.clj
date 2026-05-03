@@ -14,6 +14,7 @@
             [noumenon.imports :as imports]
             [noumenon.introspect :as introspect]
             [noumenon.llm :as llm]
+            [noumenon.mcp.handlers.benchmark :as h-bench]
             [noumenon.mcp.protocol :as protocol]
             [noumenon.mcp.proxy :as proxy]
             [noumenon.query :as query]
@@ -45,6 +46,7 @@
 (def ^:private max-layers-len 64)
 (def ^:private allowed-layers #{:raw :import :enrich :full :embedded})
 (def ^:private allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
+(def ^:private max-run-id-len 256)
 
 (defn- validate-llm-inputs!
   "Validate model and provider string lengths when present."
@@ -712,112 +714,6 @@
   (let [provider (or (args "provider") (llm/default-provider-name))]
     (tool-result (pr-str (llm/discover-provider-models provider)))))
 
-(defn- handle-benchmark-run [args defaults]
-  (validate-llm-inputs! args)
-  (with-conn args defaults
-    (fn [{:keys [conn meta-db db db-dir db-name repo-path]}]
-      (let [{:keys [prompt-fn]}
-            (llm/wrap-as-prompt-fn-from-opts {:provider (or (args "provider") (:provider defaults))
-                                              :model    (or (args "model") (:model defaults))})
-            layers      (validate-layers (args "layers"))
-            mode        (cond-> {}
-                          layers (assoc :layers layers))
-            model-cfg   {:provider (or (args "provider") (:provider defaults))
-                         :model    (or (args "model") (:model defaults))}
-            result      (bench/run-benchmark! db repo-path prompt-fn
-                                              :meta-db meta-db
-                                              :conn conn
-                                              :mode mode
-                                              :model-config model-cfg
-                                              :budget {:max-questions (args "max_questions")}
-                                              :report? (args "report")
-                                              :progress-fn (:progress-fn defaults)
-                                              :concurrency 3
-                                              :db-dir db-dir :db-name db-name)]
-        (tool-result
-         (str "Benchmark complete. Run ID: " (:run-id result)
-              "\nQuestions: " (get-in result [:aggregate :question-count])
-              (when-let [fm (get-in result [:aggregate :full-mean])]
-                (str "\nFull mean: " (format "%.1f%%" (* 100.0 (double fm)))))
-              (when-let [rm (get-in result [:aggregate :raw-mean])]
-                (str "\nRaw mean: " (format "%.1f%%" (* 100.0 (double rm)))))
-              (when-let [rp (:report-path result)]
-                (str "\nReport: " rp))))))))
-
-(def ^:private max-run-id-len 256)
-
-(defn- find-run
-  "Find a benchmark run by ID, or the latest run if no ID given."
-  [db run-id]
-  (let [runs (if run-id
-               (d/q '[:find (pull ?r [*]) :in $ ?id
-                      :where [?r :bench.run/id ?id]]
-                    db run-id)
-               (d/q '[:find (pull ?r [*])
-                      :where [?r :bench.run/id _]]
-                    db))]
-    (->> runs (map first) (sort-by :bench.run/started-at) last)))
-
-(defn- format-run-summary
-  "Format a benchmark run as a human-readable summary string."
-  [run detail?]
-  (let [base (str "Run: " (:bench.run/id run)
-                  "\nStatus: " (name (:bench.run/status run))
-                  "\nCommit: " (:bench.run/commit-sha run)
-                  "\nQuestions: " (:bench.run/question-count run)
-                  (when-let [fm (:bench.run/full-mean run)]
-                    (str "\nFull mean: " (format "%.1f%%" (* 100.0 (double fm)))))
-                  (when-let [rm (:bench.run/raw-mean run)]
-                    (str "\nRaw mean: " (format "%.1f%%" (* 100.0 (double rm)))))
-                  (when (:bench.run/canonical? run) "\nCanonical: true"))]
-    (if-not detail?
-      base
-      (str base "\n\nPer-question results:\n"
-           (str/join "\n"
-                     (map (fn [r]
-                            (str (name (:bench.result/question-id r))
-                                 " " (name (or (:bench.result/category r) :unknown))
-                                 " full=" (name (or (:bench.result/full-score r) :n/a))
-                                 " raw=" (name (or (:bench.result/raw-score r) :n/a))))
-                          (sort-by :bench.result/question-id
-                                   (:bench.run/results run))))))))
-
-(defn- handle-benchmark-results [args defaults]
-  (when-let [rid (args "run_id")]
-    (util/validate-string-length! "run_id" rid max-run-id-len))
-  (with-conn args defaults
-    (fn [{:keys [db]}]
-      (if-let [run (find-run db (args "run_id"))]
-        (tool-result (format-run-summary run (args "detail")))
-        (tool-error "No benchmark runs found.")))))
-
-(defn- handle-benchmark-compare [args defaults]
-  (util/validate-string-length! "run_id_a" (args "run_id_a") max-run-id-len)
-  (util/validate-string-length! "run_id_b" (args "run_id_b") max-run-id-len)
-  (with-conn args defaults
-    (fn [{:keys [db]}]
-      (let [id-a (args "run_id_a")
-            id-b (args "run_id_b")
-            pull-run (fn [id]
-                       (ffirst (d/q '[:find (pull ?r [*]) :in $ ?id
-                                      :where [?r :bench.run/id ?id]]
-                                    db id)))
-            run-a (pull-run id-a)
-            run-b (pull-run id-b)]
-        (cond
-          (not run-a) (tool-error (str "Run not found: " id-a))
-          (not run-b) (tool-error (str "Run not found: " id-b))
-          :else
-          (let [{:keys [deltas]} (bench/compare-runs run-a run-b)]
-            (tool-result
-             (str "Comparing " id-a " vs " id-b "\n\n"
-                  (str/join "\n"
-                            (map (fn [[k v]]
-                                   (str (name k) ": "
-                                        (if (pos? v) "+" "")
-                                        (format "%.1f" (* 100.0 v)) "pp"))
-                                 (sort-by key deltas)))))))))))
-
 (defn- format-digest-summary
   "Format digest pipeline results as a human-readable summary string."
   [r]
@@ -1117,9 +1013,9 @@
    "noumenon_list_databases"    handle-list-databases
    "noumenon_llm_providers"     handle-llm-providers
    "noumenon_llm_models"        handle-llm-models
-   "noumenon_benchmark_run"     handle-benchmark-run
-   "noumenon_benchmark_results" handle-benchmark-results
-   "noumenon_benchmark_compare" handle-benchmark-compare
+   "noumenon_benchmark_run"     h-bench/handle-benchmark-run
+   "noumenon_benchmark_results" h-bench/handle-benchmark-results
+   "noumenon_benchmark_compare" h-bench/handle-benchmark-compare
    "noumenon_digest"            handle-digest
    "noumenon_introspect"          handle-introspect
    "noumenon_introspect_start"   handle-introspect-start
