@@ -123,17 +123,42 @@
 
           :else (recur (inc attempts)))))))
 
+(defn- wait-for-exit
+  "Poll process-alive? every 500ms up to (timeout-ms/500) attempts. Returns
+   true if the process is gone within the deadline, false if still alive."
+  [pid timeout-ms]
+  (loop [attempts (quot timeout-ms 500)]
+    (cond
+      (not (process-alive? pid)) true
+      (zero? attempts)           false
+      :else (do (Thread/sleep 500) (recur (dec attempts))))))
+
 (defn stop!
-  "Stop the running daemon."
+  "Stop the daemon recorded in daemon.edn. SIGTERM, wait up to 5s, then
+   SIGKILL with another 2s wait. Only delete daemon.edn after the process
+   is confirmed gone — leaving the file in place lets the next stop! see
+   an unkillable daemon, rather than orphaning a JVM with no record."
   []
-  (when-let [{:keys [pid]} (read-daemon-info)]
-    (try
-      (proc/shell "kill" (str pid))
-      (tui/eprintln "Daemon stopped.")
-      (catch Exception _
-        (tui/eprintln "Daemon process not found.")))
-    (when (fs/exists? paths/daemon-file)
-      (fs/delete paths/daemon-file))))
+  (if-let [{:keys [pid]} (read-daemon-info)]
+    (do
+      (try (proc/shell {:out :string :err :string} "kill" (str pid))
+           (catch Exception _))
+      (cond
+        (wait-for-exit pid 5000)
+        (do (fs/delete-if-exists paths/daemon-file)
+            (tui/eprintln (str "Daemon stopped (PID " pid ").")))
+
+        :else
+        (do
+          (try (proc/shell {:out :string :err :string} "kill" "-9" (str pid))
+               (catch Exception _))
+          (if (wait-for-exit pid 2000)
+            (do (fs/delete-if-exists paths/daemon-file)
+                (tui/eprintln (str "Daemon force-killed (PID " pid ").")))
+            (throw (ex-info (str "Daemon (PID " pid ") refused to die after SIGKILL. "
+                                 "Leaving daemon.edn in place for inspection.")
+                            {:pid pid}))))))
+    (tui/eprintln "No managed daemon to stop.")))
 
 (defn ensure!
   "Ensure the daemon is running. Start it if not. Returns {:port N}."
