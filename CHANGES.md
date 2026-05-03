@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+### Refactoring
+
 ## 0.8.1
 
 ### Fixes
