@@ -510,14 +510,18 @@
                                     c  (:components pr)]
                                 [(:name c) (:files c)]))
         resolved (when-let [comps (get-in merge-result [:parsed :components])]
-                   {:components
-                    (mapv (fn [c]
-                            (let [sources  (:source-components c)
-                                  files    (if (seq sources)
-                                             (vec (distinct (mapcat #(get part-comp-index % []) sources)))
-                                             (:files c))]
-                              (-> c (assoc :files files) (dissoc :source-components))))
-                          comps)})]
+                   (let [resolved-comps (mapv (fn [c]
+                                                (let [sources (:source-components c)
+                                                      files   (if (seq sources)
+                                                                (vec (distinct (mapcat #(get part-comp-index % []) sources)))
+                                                                (:files c))]
+                                                  (-> c (assoc :files files) (dissoc :source-components))))
+                                              comps)
+                         {kept true dropped false} (group-by #(boolean (seq (:files %))) resolved-comps)]
+                     (when (seq dropped)
+                       (log! "synthesize" (str "merge dropped " (count dropped) " components with no files: "
+                                               (str/join ", " (map :name dropped)))))
+                     {:components (vec kept)}))]
     (log! "synthesize" (str "merge resolved: " (count (:components resolved)) " components, "
                             (count (distinct (mapcat :files (:components resolved)))) " files"))
     {:parsed         (or resolved (:parsed merge-result))
