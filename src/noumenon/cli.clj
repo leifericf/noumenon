@@ -594,22 +594,23 @@ configured :models when discovery is unavailable."}
           result (if-let [layers-str (:layers result)]
                    (assoc result :layers (mapv keyword (str/split layers-str #",")))
                    result)]
-      (cond
-        (and (= :no-repo-path (:error result))
-             (:resume result)
-             (str/starts-with? (str (:resume result)) "/"))
-        (assoc result :error :resume-consumed-repo-path)
+      (-> (cond
+            (and (= :no-repo-path (:error result))
+                 (:resume result)
+                 (str/starts-with? (str (:resume result)) "/"))
+            (assoc result :error :resume-consumed-repo-path)
 
-        (:error result) result
-        ;; --fast: deterministic only, full layer only (cheapest mode)
-        (:fast result)  (-> result
-                            (assoc :skip-judge true :deterministic-only true
-                                   :layers [:full])
-                            (dissoc :fast :full))
-        ;; --full: all questions, default layers (most expensive)
-        (:full result)  (dissoc result :full)
-        ;; Default: deterministic only, default layers
-        :else           (assoc result :deterministic-only true)))))
+            (:error result) result
+            ;; --fast: deterministic only, full layer only (cheapest mode)
+            (:fast result)  (-> result
+                                (assoc :skip-judge true :deterministic-only true
+                                       :layers [:full])
+                                (dissoc :fast :full))
+            ;; --full: all questions, default layers (most expensive)
+            (:full result)  (dissoc result :full)
+            ;; Default: deterministic only, default layers
+            :else           (assoc result :deterministic-only true))
+          (assoc :subcommand "benchmark")))))
 
 (defn- validate-ask-question
   "Ensure ask opts include :question. Returns opts or {:error ...}."
@@ -622,9 +623,8 @@ configured :models when discovery is unavailable."}
   (if (contains-help? args)
     {:help "ask"}
     (let [result (parse-command ask-command-spec args)]
-      (if (:error result)
-        result
-        (validate-ask-question result)))))
+      (-> (if (:error result) result (validate-ask-question result))
+          (assoc :subcommand "ask")))))
 
 (defn parse-simple-args
   "Parse args for import/status/analyze/query subcommands."
