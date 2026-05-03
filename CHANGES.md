@@ -4,6 +4,8 @@
 
 ### Refactoring
 
+- **`benchmark` no longer depends on `cli`** — the benchmarking subsystem pulled in `noumenon.cli` solely to interpolate the program name into one "Resume with: …" log line. The literal is inlined and the require dropped, breaking a small layering inversion (`subsystem` → `api`).
+
 ## 0.8.1
 
 ### Fixes

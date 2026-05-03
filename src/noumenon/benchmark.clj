@@ -5,7 +5,6 @@
             [clojure.set :as set]
             [clojure.string :as str]
             [datomic.client.api :as d]
-            [noumenon.cli :as cli]
             [noumenon.embed :as embed]
             [noumenon.llm :as llm]
             [noumenon.pipeline :as pipeline]
@@ -1578,7 +1577,7 @@
                 (log! (str "bench/report-error " (.getMessage e)))
                 nil)))]
       (when stop-reason
-        (log! (str "Resume with: " cli/program-name " benchmark " repo-path " --resume")))
+        (log! (str "Resume with: noum benchmark " repo-path " --resume")))
       {:results         results
        :aggregate       agg
        :total-usage     total-usage
