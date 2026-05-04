@@ -35,6 +35,18 @@
   [kw-params]
   (util/validate-params! kw-params))
 
+(def ^:private default-result-limit 500)
+(def ^:private max-result-limit 10000)
+
+(defn clamp-limit
+  "Coerce a request `limit` into the inclusive range [1, 10000].
+   Missing / unparseable values fall back to 500. A negative limit
+   used to silently produce an empty `:results` vector while reporting
+   a non-zero `:total`, masking 'your limit is bogus' as 'no data'."
+  [v]
+  (let [parsed (or (some-> v str parse-long) default-result-limit)]
+    (-> parsed (max 1) (min max-result-limit))))
+
 (def ^:private max-exclude-paths 1000)
 
 (defn validate-exclude-paths!

@@ -6,6 +6,7 @@
             [noumenon.auth :as auth]
             [noumenon.http :as http]
             [noumenon.http.handlers.query]
+            [noumenon.http.middleware]
             [noumenon.repo-manager :as repo-mgr]
             [noumenon.util :as util]))
 
@@ -432,6 +433,22 @@
     (sh "git" "add" "a.txt")
     (sh "git" "commit" "-q" "-m" "init")
     dir))
+
+(deftest clamp-limit-floors-and-caps
+  (testing "Negative limits silently produced empty result lists
+            because `(min -5 10000)` is -5 and `(take -5 …)` returns
+            []. Total stays accurate, results don't, scripted clients
+            misread it as 'no data'. Clamp now floors at 1 and caps at
+            10000."
+    (let [clamp @#'noumenon.http.middleware/clamp-limit]
+      (is (= 500 (clamp nil)) "default when missing")
+      (is (= 1 (clamp -5)) "negative floors to 1")
+      (is (= 1 (clamp 0)) "zero floors to 1")
+      (is (= 1 (clamp 1)))
+      (is (= 42 (clamp 42)))
+      (is (= 10000 (clamp 10001)) "cap holds")
+      (is (= 500 (clamp "abc")) "unparseable string falls back to default")
+      (is (= 7 (clamp "7")) "string-encoded integers parse"))))
 
 (deftest reader-can-post-session-feedback
   (testing "Reader role must be allowed to attach feedback to its own

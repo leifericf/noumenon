@@ -85,7 +85,7 @@
                                                    {:exclude-paths exclude-paths})]
           (if (:ok result)
             (let [rows  (:ok result)
-                  limit (min (or (some-> (:limit params) str parse-long) 500) 10000)]
+                  limit (mw/clamp-limit (:limit params))]
               (mw/ok {:query            query-name
                       :total            (count rows)
                       :federation-safe? (:federation-safe? result)
@@ -97,7 +97,7 @@
     (mw/with-repo params (:db-dir config)
       (fn [{:keys [db]}]
         (let [query-edn (:query params)
-              limit     (min (or (some-> (:limit params) str parse-long) 500) 10000)]
+              limit     (mw/clamp-limit (:limit params))]
           (when-not query-edn
             (throw (ex-info "Missing query" {:status 400 :message "query is required (EDN string)"})))
           (mw/validate-string-length! "query" query-edn mw/max-param-value-len)
@@ -148,7 +148,7 @@
           (let [query-name    (:query_name params)
                 kw-params     (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
                 exclude-paths (mw/validate-exclude-paths! (:exclude_paths params))
-                limit         (min (or (some-> (:limit params) str parse-long) 500) 10000)
+                limit         (mw/clamp-limit (:limit params))
                 db            (d/as-of (d/db conn) as-of-inst)
                 result        (query/run-named-query meta-db db query-name kw-params
                                                      {:exclude-paths exclude-paths})]
@@ -203,7 +203,7 @@
               delta-conn (delta/ensure-delta-db! repo-path basis-sha delta-opts)
               _          (delta/update-delta! delta-conn repo-path basis-sha delta-opts)
               delta-db   (d/db delta-conn)
-              limit      (min (or (some-> (:limit params) str parse-long) 500) 10000)
+              limit      (mw/clamp-limit (:limit params))
               result     (query/run-federated-query meta-db db delta-db query-name kw-params)]
           (if (:error result)
             (mw/error-response 400 (:error result))
