@@ -64,18 +64,23 @@
 
 (defn- validate-url-host!
   "Validate that a Git URL does not resolve to a private/loopback address.
-   Throws ex-info on blocked addresses."
+   Throws ex-info with `:status 400` on blocked addresses so HTTP callers
+   surface the rejection as a clean 400 instead of bare 500."
   [url]
   (when-let [host (extract-hostname url)]
     (try
       (let [addrs (java.net.InetAddress/getAllByName host)]
         (doseq [^java.net.InetAddress addr addrs]
           (when (blocked-address? addr)
-            (throw (ex-info "Blocked: URL resolves to private/loopback address"
-                            {:url url :host host :ip (.getHostAddress addr)})))))
+            (let [msg "Blocked: URL resolves to private/loopback address"]
+              (throw (ex-info msg
+                              {:status 400 :message msg
+                               :url url :host host :ip (.getHostAddress addr)}))))))
       (catch java.net.UnknownHostException _
-        (throw (ex-info (str "Cannot resolve hostname: " host)
-                        {:url url :host host}))))))
+        (let [msg (str "Cannot resolve hostname: " host)]
+          (throw (ex-info msg
+                          {:status 400 :message msg
+                           :url url :host host})))))))
 
 (defn- validate-clone-url!
   "Validate that a URL is safe to pass to `git clone`. Two gates:
@@ -86,12 +91,15 @@
    regex-based hostname extractor returns nil for those, so its
    `when-let` would otherwise short-circuit and leave the URL
    unchecked. Perforce depot paths follow a different code path
-   (`p4-clone!`) and never reach this validator."
+   (`p4-clone!`) and never reach this validator.
+
+   Both throws carry `:status 400` so HTTP handlers render bad URLs as
+   400, not as the route handler's default 500 fallback."
   [url]
   (when-not (git-url? url)
-    (throw (ex-info (str "Blocked: invalid URL scheme (only https://, http://, "
-                         "and git@host:path are allowed): " url)
-                    {:url url})))
+    (let [msg (str "Blocked: invalid URL scheme (only https://, http://, "
+                   "and git@host:path are allowed): " url)]
+      (throw (ex-info msg {:status 400 :message msg :url url}))))
   (validate-url-host! url))
 
 (defn validate-proxy-host!

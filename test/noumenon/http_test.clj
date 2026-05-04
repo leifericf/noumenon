@@ -433,6 +433,37 @@
     (sh "git" "commit" "-q" "-m" "init")
     dir))
 
+(deftest repos-register-rejects-bad-urls-with-400
+  (testing "POST /api/repos with file://, http://localhost, http://127.0.0.1
+            (and other URLs that fail git/validate-clone-url!) used to
+            surface as a bare 500 'Internal server error' because the
+            validator's ex-info didn't carry :status. The handler now
+            renders these as 400 with the actual rejection reason, so
+            HTTP clients can tell invalid input from a server fault."
+    (let [tmp     (str "/tmp/noumenon-repos-test-" (System/currentTimeMillis))
+          handler (http/make-handler {:db-dir tmp})
+          send    (fn [url]
+                    (let [resp (handler (post-with-body "/api/repos" {:url url}))
+                          body (json/read-str (:body resp) :key-fn keyword)]
+                      {:status (:status resp) :error (:error body)}))]
+      (testing "file:// scheme is rejected as 400"
+        (let [{:keys [status error]} (send "file:///tmp/x")]
+          (is (= 400 status))
+          (is (re-find #"(?i)scheme|invalid url" (str error))
+              (str "expected scheme-rejection wording, got: " error))
+          (is (not (re-find #"(?i)internal server error" (str error)))
+              (str "must not surface as generic 500, got: " error))))
+      (testing "http://localhost is rejected as 400"
+        (let [{:keys [status error]} (send "http://localhost/x.git")]
+          (is (= 400 status))
+          (is (re-find #"(?i)private|loopback" (str error))
+              (str "expected loopback-rejection wording, got: " error))))
+      (testing "http://127.0.0.1 is rejected as 400"
+        (let [{:keys [status error]} (send "http://127.0.0.1/x.git")]
+          (is (= 400 status))
+          (is (re-find #"(?i)private|loopback" (str error))
+              (str "expected loopback-rejection wording, got: " error)))))))
+
 (deftest http-import-writes-head-sha
   (testing "POST /api/import populates :repo/head-sha so a follow-up
             GET /api/status/<db-name> returns the actual SHA. MCP
