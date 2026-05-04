@@ -106,7 +106,9 @@
 
 (defn sync!
   "Bring an existing clj-p4 clone at `repo-path` up to date with Perforce.
-   Derives the stream from the most recent commit's `git-p4:` trailer."
+   Derives the stream from the most recent commit's `git-p4:` trailer.
+   Applies the same default `p4-excludes.edn` policy `clone!` uses, so
+   files excluded at clone time stay excluded on every subsequent sync."
   [repo-path]
   (let [stream (-> (last-commit-message repo-path) stream-from-trailer)]
     (when-not stream
@@ -117,6 +119,7 @@
     (api/sync! {:conn        (conn-from-env)
                 :stream      stream
                 :target      (str repo-path)
+                :exclude     (compile-excludes {})
                 :progress-fn progress-fn})
     (log! "clj-p4: sync complete")
     true))

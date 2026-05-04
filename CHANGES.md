@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- **`noumenon.p4/sync!` applies the same exclude policy as `clone!`** — `clone!` filtered binary noise (`*.fbx`, `*.uasset`, etc. from `resources/p4-excludes.edn`) but `sync!` was building its `clj-p4.api/sync!` request without an `:exclude` field, so any new changelist that added an excluded file type would silently include it on the next sync. Sync now computes the same default exclude vector and passes it through, keeping the imported history aligned with the policy across both the initial clone and every subsequent incremental import.
+
 ## 0.10.3
 
 ### Fixes
