@@ -7,7 +7,9 @@
             [noumenon.analyze :as analyze]
             [noumenon.artifacts :as artifacts]
             [noumenon.benchmark :as bench]
+            [noumenon.calls :as calls]
             [noumenon.delta :as delta]
+            [noumenon.embed :as embed]
             [noumenon.files :as files]
             [noumenon.git :as git]
             [noumenon.http.middleware :as mw]
@@ -180,6 +182,9 @@
                                                                           :no-promote? (boolean (:no_promote params))
                                                                           :progress-fn (step-fn "analyze")))]
                                       (select-keys r [:files-analyzed :files-promoted :total-usage]))))
+        calls-r   (when-not (:skip_analyze params)
+                    (step-progress "resolve calls"
+                                   #(calls/resolve-calls! conn)))
         synth-r   (when-not (:skip_synthesize params)
                     (step-progress "synthesize"
                                    #(let [synth-llm (llm/wrap-as-prompt-fn-from-opts
@@ -189,6 +194,8 @@
                                        conn (:prompt-fn synth-llm)
                                        {:meta-db meta-db :provider (name provider-kw) :model-id model-id
                                         :repo-name (last (str/split repo-path #"/"))}))))
+        embed-r   (step-progress "embed"
+                                 #(embed/build-index! (d/db conn) db-dir db-name))
         bench-r   (when-not (:skip_benchmark params)
                     (step-progress "benchmark"
                                    #(let [db     (d/db conn)
@@ -205,7 +212,9 @@
     (cond-> {}
       update-r  (assoc :update update-r)
       analyze-r (assoc :analyze analyze-r)
+      calls-r   (assoc :calls calls-r)
       synth-r   (assoc :synthesize synth-r)
+      embed-r   (assoc :embed embed-r)
       bench-r   (assoc :benchmark bench-r))))
 
 (defn handle-digest [request config]

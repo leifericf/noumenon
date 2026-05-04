@@ -6,6 +6,8 @@
             [noumenon.analyze]
             [noumenon.artifacts]
             [noumenon.auth :as auth]
+            [noumenon.calls]
+            [noumenon.embed]
             [noumenon.http :as http]
             [noumenon.http.handlers.query]
             [noumenon.http.middleware]
@@ -824,6 +826,72 @@
       (is (some #(= 16384 (:max-tokens %)) @seen)
           (str "expected at least one wrap-as-prompt-fn-from-opts call "
                "with :max-tokens 16384; saw: " (pr-str @seen))))))
+
+(deftest http-digest-runs-calls-and-embed-steps
+  (testing "POST /api/digest must run calls/resolve-calls! after analyze
+            and embed/build-index! unconditionally — matching the CLI
+            digest pipeline. Without these steps a daemon-mode digest
+            produces a graph with no cross-segment call edges and no
+            TF-IDF index, so noumenon_search and segment-callers /
+            uncalled-segments queries return empty."
+    (let [calls-runs (atom 0)
+          embed-runs (atom 0)
+          repo-path  (make-tmp-git-repo! "digest-pipeline")
+          db-dir     (str "/tmp/noumenon-digest-pipeline-" (System/currentTimeMillis))
+          handler    (http/make-handler {:db-dir db-dir})]
+      (handler (post-with-body "/api/import" {:repo_path repo-path}))
+      (with-redefs [noumenon.llm/wrap-as-prompt-fn-from-opts
+                    (fn [_] {:prompt-fn (fn [_] {:text "{}" :usage {}})
+                             :model-id "stub" :provider-kw :stub})
+                    noumenon.analyze/analyze-repo!
+                    (fn [& _] {:files-analyzed 0 :files-promoted 0
+                               :files-skipped 0 :files-errored 0
+                               :files-parse-errored 0
+                               :total-usage {:input-tokens 0 :output-tokens 0
+                                             :cost-usd 0 :duration-ms 0}})
+                    noumenon.synthesize/synthesize-repo!
+                    (fn [_ _ _] {:components 0})
+                    noumenon.calls/resolve-calls!
+                    (fn [_conn] (swap! calls-runs inc) {:resolved 0})
+                    noumenon.embed/build-index!
+                    (fn [_db _db-dir _db-name]
+                      (swap! embed-runs inc) {:vocab-size 0})]
+        (handler (post-with-body "/api/digest"
+                                 {:repo_path repo-path
+                                  :skip_benchmark true})))
+      (is (pos? @calls-runs)
+          (str "expected calls/resolve-calls! to run after analyze; got: "
+               @calls-runs))
+      (is (pos? @embed-runs)
+          (str "expected embed/build-index! to run unconditionally; got: "
+               @embed-runs)))))
+
+(deftest http-digest-skip-analyze-also-skips-calls-step
+  (testing "When --skip_analyze is set, calls/resolve-calls! must also
+            be skipped — matching CLI digest where the calls step is
+            gated on skip-analyze. Without this, a digest that skips
+            analyze would still try to resolve calls against possibly
+            empty segment data."
+    (let [calls-runs (atom 0)
+          repo-path  (make-tmp-git-repo! "digest-skip-analyze")
+          db-dir     (str "/tmp/noumenon-digest-skip-analyze-" (System/currentTimeMillis))
+          handler    (http/make-handler {:db-dir db-dir})]
+      (handler (post-with-body "/api/import" {:repo_path repo-path}))
+      (with-redefs [noumenon.llm/wrap-as-prompt-fn-from-opts
+                    (fn [_] {:prompt-fn (fn [_] {:text "{}" :usage {}})
+                             :model-id "stub" :provider-kw :stub})
+                    noumenon.synthesize/synthesize-repo!
+                    (fn [_ _ _] {:components 0})
+                    noumenon.calls/resolve-calls!
+                    (fn [_conn] (swap! calls-runs inc) {:resolved 0})
+                    noumenon.embed/build-index!
+                    (fn [_ _ _] {:vocab-size 0})]
+        (handler (post-with-body "/api/digest"
+                                 {:repo_path repo-path
+                                  :skip_analyze true
+                                  :skip_benchmark true})))
+      (is (zero? @calls-runs)
+          (str "calls step must skip when analyze skips; got: " @calls-runs)))))
 
 (deftest http-digest-synth-step-uses-raised-max-tokens
   (testing "Inside POST /api/digest, the synthesize step must build a
