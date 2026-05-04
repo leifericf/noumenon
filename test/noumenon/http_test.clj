@@ -3,11 +3,14 @@
             [clojure.java.shell :as shell]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [noumenon.analyze]
             [noumenon.auth :as auth]
             [noumenon.http :as http]
             [noumenon.http.handlers.query]
             [noumenon.http.middleware]
+            [noumenon.llm]
             [noumenon.repo-manager :as repo-mgr]
+            [noumenon.sync]
             [noumenon.util :as util]))
 
 (deftest health-endpoint
@@ -617,6 +620,68 @@
           (is (= 400 status))
           (is (re-find #"(?i)private|loopback" (str error))
               (str "expected loopback-rejection wording, got: " error)))))))
+
+(deftest http-analyze-honors-reanalyze-scope
+  (testing "POST /api/analyze with `reanalyze: \"all\"` (or any other
+            valid scope) must retract the matching files' analysis
+            attrs BEFORE running analyze-repo!. The CLI and MCP both
+            do this; without it, `noum analyze . --reanalyze stale`
+            silently no-ops because everything is already analyzed."
+    (let [retract-calls (atom [])
+          analyze-calls (atom 0)
+          repo-path     (make-tmp-git-repo! "reanalyze")
+          db-dir        (str "/tmp/noumenon-reanalyze-test-" (System/currentTimeMillis))
+          handler       (http/make-handler {:db-dir db-dir})]
+      ;; Import + initial analyze (mocked) to populate the DB.
+      (handler (post-with-body "/api/import" {:repo_path repo-path}))
+      (with-redefs [noumenon.analyze/files-for-reanalysis
+                    (fn [_db _scope _opts]
+                      [{:file/path "a.txt"}])
+                    noumenon.sync/retract-analysis!
+                    (fn [_conn paths]
+                      (swap! retract-calls conj (vec paths))
+                      (count paths))
+                    noumenon.analyze/load-prompt-template
+                    (fn [_meta-db] {:template "stub" :name "analyze-file"})
+                    noumenon.analyze/prompt-hash
+                    (fn [_t] "stub-hash")
+                    noumenon.llm/wrap-as-prompt-fn-from-opts
+                    (fn [_]
+                      {:prompt-fn   (fn [_] {:text "" :usage {}})
+                       :model-id    "stub-model"
+                       :provider-kw :stub})
+                    noumenon.analyze/analyze-repo!
+                    (fn [& _args]
+                      (swap! analyze-calls inc)
+                      {:files-analyzed 0 :files-promoted 0 :files-skipped 0
+                       :files-errored 0 :files-parse-errored 0
+                       :total-usage {:input-tokens 0 :output-tokens 0
+                                     :cost-usd 0 :duration-ms 0}})]
+        (testing "reanalyze=\"all\" routes through retract-analysis!"
+          (let [resp (handler (post-with-body "/api/analyze"
+                                              {:repo_path repo-path
+                                               :reanalyze "all"}))]
+            (is (= 200 (:status resp)))
+            (is (= 1 (count @retract-calls))
+                "retract-analysis! should have been invoked exactly once")
+            (is (= ["a.txt"] (first @retract-calls))
+                "retract should have received the path returned by files-for-reanalysis")
+            (is (= 1 @analyze-calls)
+                "analyze-repo! must still run after retraction")))
+        (testing "no `reanalyze` field — retract-analysis! is NOT called"
+          (reset! retract-calls [])
+          (reset! analyze-calls 0)
+          (handler (post-with-body "/api/analyze" {:repo_path repo-path}))
+          (is (= [] @retract-calls)
+              "retract-analysis! must not run when no reanalyze scope is given")
+          (is (= 1 @analyze-calls)))
+        (testing "invalid reanalyze scope returns 400"
+          (let [resp (handler (post-with-body "/api/analyze"
+                                              {:repo_path repo-path
+                                               :reanalyze "everything"}))
+                body (json/read-str (:body resp) :key-fn keyword)]
+            (is (= 400 (:status resp)))
+            (is (re-find #"(?i)reanalyze" (str (:error body))) (:error body))))))))
 
 (deftest http-import-writes-head-sha
   (testing "POST /api/import populates :repo/head-sha so a follow-up

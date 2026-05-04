@@ -114,26 +114,13 @@
             :ok    (mu/tool-result text)
             :error (mu/tool-error  text)))))))
 
-(def ^:private valid-reanalyze-scopes
-  #{"all" "prompt-changed" "model-changed" "stale"})
-
-(defn- prepare-reanalysis!
-  "Retract analysis attrs for files matching the reanalyze scope.
-   Returns count of files marked for re-analysis, or nil if no scope given."
-  [conn db reanalyze {:keys [prompt-hash model-id]}]
-  (when reanalyze
-    (let [scope (keyword reanalyze)
-          files (analyze/files-for-reanalysis db scope {:prompt-hash prompt-hash
-                                                        :model-id    model-id})
-          paths (mapv :file/path files)
-          n     (if (seq paths) (sync/retract-analysis! conn paths) 0)]
-      (log! (str "Marked " n " file(s) for re-analysis (scope: " reanalyze ")"))
-      n)))
+;; Reanalyze scope set + retract helper live in noumenon.sync so the
+;; CLI, HTTP, and MCP surfaces all share one definition.
 
 (defn handle-analyze [args defaults]
   (mu/validate-llm-inputs! args)
   (let [reanalyze (args "reanalyze")]
-    (when (and reanalyze (not (valid-reanalyze-scopes reanalyze)))
+    (when (and reanalyze (not (sync/valid-reanalyze-scopes reanalyze)))
       (throw (ex-info (str "Invalid reanalyze scope: " reanalyze
                            ". Must be one of: all, prompt-changed, model-changed, stale")
                       {:scope reanalyze})))
@@ -142,8 +129,8 @@
         (let [{:keys [prompt-fn model-id provider-kw]}
               (llm/wrap-as-prompt-fn-from-opts (mu/provider+model args defaults))
               prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template meta-db)))]
-          (prepare-reanalysis! conn (d/db conn) reanalyze
-                               {:prompt-hash prompt-hash :model-id model-id})
+          (sync/prepare-reanalysis! conn (d/db conn) reanalyze
+                                    {:prompt-hash prompt-hash :model-id model-id})
           (let [concurrency (min (or (args "concurrency") 3) 20)
                 max-files   (args "max_files")
                 selector    (mu/selector-opts args)

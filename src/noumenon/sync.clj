@@ -172,6 +172,26 @@
                                                (retract-code-segments db eid))))]
       (transact-retractions! conn results))))
 
+(def valid-reanalyze-scopes
+  "Reanalyze scope strings accepted by every analyze surface (CLI, MCP, HTTP)."
+  #{"all" "prompt-changed" "model-changed" "stale"})
+
+(defn prepare-reanalysis!
+  "Retract analysis attrs for files matching the reanalyze scope. Returns
+   the count of files marked for re-analysis (so the next analyze step
+   picks them up via `files-needing-analysis`), or nil if no scope was
+   given. Shared across CLI `do-analyze`, MCP `handle-analyze`, and HTTP
+   `run-analyze` so all three surfaces agree on the contract."
+  [conn db reanalyze {:keys [prompt-hash model-id]}]
+  (when reanalyze
+    (let [scope (keyword reanalyze)
+          files (analyze/files-for-reanalysis db scope {:prompt-hash prompt-hash
+                                                        :model-id    model-id})
+          paths (mapv :file/path files)
+          n     (if (seq paths) (retract-analysis! conn paths) 0)]
+      (log! (str "Marked " n " file(s) for re-analysis (scope: " reanalyze ")"))
+      n)))
+
 (defn- retract-inbound-imports
   "Build retraction tx-data for :file/imports refs pointing at the given entity."
   [db eid]

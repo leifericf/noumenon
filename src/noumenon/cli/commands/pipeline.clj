@@ -39,20 +39,8 @@
                         {:db-path    (cu/db-path ctx)
                          :next-step  (str cli/program-name " enrich " repo-path)})}))))
 
-(def ^:private valid-reanalyze-scopes
-  #{"all" "prompt-changed" "model-changed" "stale"})
-
-(defn- prepare-reanalysis!
-  "Retract analysis attrs for files matching the reanalyze scope."
-  [conn db reanalyze {:keys [prompt-hash model-id]}]
-  (when reanalyze
-    (let [scope (keyword reanalyze)
-          files (analyze/files-for-reanalysis db scope {:prompt-hash prompt-hash
-                                                        :model-id    model-id})
-          paths (mapv :file/path files)
-          n     (if (seq paths) (sync/retract-analysis! conn paths) 0)]
-      (log! (str "Marked " n " file(s) for re-analysis (scope: " reanalyze ")"))
-      n)))
+;; Reanalyze scope set + retract helper live in noumenon.sync so the
+;; CLI, HTTP, and MCP surfaces all share one definition.
 
 (defn- build-analyze-opts
   "Build the options map for analyze-repo! from CLI opts."
@@ -72,7 +60,7 @@
 (defn do-analyze
   "Run the analyze subcommand."
   [{:keys [repo-path model provider reanalyze] :as opts}]
-  (when (and reanalyze (not (valid-reanalyze-scopes reanalyze)))
+  (when (and reanalyze (not (sync/valid-reanalyze-scopes reanalyze)))
     (cu/print-error! (str "Invalid --reanalyze scope: " reanalyze
                           ". Must be one of: all, prompt-changed, model-changed, stale"))
     (System/exit 1))
@@ -86,8 +74,8 @@
             (let [{:keys [prompt-fn model-id provider-kw]}
                   (llm/wrap-as-prompt-fn-from-opts {:provider provider :model model})
                   prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template meta-db)))]
-              (prepare-reanalysis! conn (d/db conn) reanalyze
-                                   {:prompt-hash prompt-hash :model-id model-id})
+              (sync/prepare-reanalysis! conn (d/db conn) reanalyze
+                                        {:prompt-hash prompt-hash :model-id model-id})
               (let [result (analyze/analyze-repo! conn repo-path prompt-fn
                                                   (build-analyze-opts opts model-id (name provider-kw) meta-db))]
                 (log! (str "Next: run '" cli/program-name " query <query-name> " repo-path

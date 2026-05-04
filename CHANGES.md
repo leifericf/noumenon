@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- **HTTP `POST /api/analyze` honors the `reanalyze` parameter** — `noum analyze . --reanalyze stale` (and any other scope) silently produced zero analyzed files because the daemon's HTTP handler never called the retraction step that the CLI and MCP handlers both did. The `:reanalyze` field on the JSON body was dropped on the floor; the user only saw `digest` work because its `update` step retracted analysis on changed files via a different code path. The two near-identical local copies of `prepare-reanalysis!` (one in `cli/commands/pipeline.clj`, one in `mcp/handlers/mutation.clj`) are lifted to a single `noumenon.sync/prepare-reanalysis!` plus a shared `valid-reanalyze-scopes` set; the HTTP handler now calls it before `analyze-repo!` and returns 400 on an invalid scope. CLI, HTTP, and MCP now agree on the contract.
+
 ## 0.10.2
 
 ### Fixes

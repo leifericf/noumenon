@@ -40,6 +40,9 @@
 (defn- run-analyze [{:keys [conn meta-db repo-path]} params config progress-fn]
   (let [{:keys [prompt-fn model-id provider-kw]}
         (llm/wrap-as-prompt-fn-from-opts (mw/resolve-provider params config))
+        prompt-hash (analyze/prompt-hash (:template (analyze/load-prompt-template meta-db)))
+        _           (sync/prepare-reanalysis! conn (d/db conn) (:reanalyze params)
+                                              {:prompt-hash prompt-hash :model-id model-id})
         concurrency (min (or (:concurrency params) 3) 20)
         selector    (select-keys params [:path :include :exclude :lang])
         result      (analyze/analyze-repo! conn repo-path prompt-fn
@@ -57,7 +60,13 @@
                          :total-usage])))
 
 (defn handle-analyze [request config]
-  (let [params (mw/parse-json-body request)]
+  (let [params    (mw/parse-json-body request)
+        reanalyze (:reanalyze params)]
+    (when (and reanalyze (not (sync/valid-reanalyze-scopes reanalyze)))
+      (let [msg (str "Invalid reanalyze scope: " reanalyze
+                     ". Must be one of: all, prompt-changed, model-changed, stale")]
+        (throw (ex-info msg {:status 400 :message msg :user-message msg
+                             :field "reanalyze"}))))
     (mw/with-repo params (:db-dir config)
       (fn [ctx]
         (if (mw/wants-sse? request)
