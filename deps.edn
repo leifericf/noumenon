@@ -12,12 +12,18 @@
 
  :aliases
  {:test
+  ;; -d / :dirs limits namespace discovery to test/noumenon. Without it,
+  ;; the runner walks every .clj under test/ — including the per-language
+  ;; fixture sources at test/fixtures/clojure/test/myapp/core_test.clj
+  ;; whose declared ns name doesn't match its filesystem location, so
+  ;; require fails with FileNotFoundException before any test runs.
   {:extra-paths ["test"]
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1"
                  :git/sha "dfb30dd"}}
-   :main-opts ["-m" "cognitect.test-runner"]
-   :exec-fn cognitect.test-runner.api/test}
+   :main-opts ["-m" "cognitect.test-runner" "-d" "test/noumenon"]
+   :exec-fn cognitect.test-runner.api/test
+   :exec-args {:dirs ["test/noumenon"]}}
 
   :lint
   {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2024.11.14"}}
