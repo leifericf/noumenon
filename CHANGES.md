@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Removed
+
+- **Dead `mcp.handlers.*` namespace tree** — `fd43977 refactor(mcp): make the MCP server a pure proxy` (2026-04-30) made the bridge forward every `tools/call` to the daemon over HTTP and removed the in-process handler dispatch. The five handler namespaces (`mcp.handlers.{query,mutation,benchmark,introspect,meta}`) and their support helpers in `mcp/util.clj` (`with-conn`, `lookup-repo-uri`, `resolve-extra-repos`, `selector-opts`, `validate-llm-inputs!`, `provider+model`, `validate-layers`, length-cap defs, `allowed-layers`/`allowed-introspect-targets` sets) have been carrying no live callers since then. Deletion is no behavior change — the actual MCP behavior is whatever the HTTP daemon does. Audit findings about MCP-vs-HTTP drift in those handlers were false positives against dead code; this removes the surface area so future audits see only live code paths.
+- **`--no-auto-update` flag on `noum serve`** — the only consumer of the `:auto-update` setting was `mcp.util/with-conn`'s auto-update branch, deleted alongside the handler tree. The serve command's epilog text is updated to reflect that the bridge is stateless and forwards to the daemon.
+
 ### Fixes
 
 - **HTTP `POST /api/analyze` honors the `reanalyze` parameter** — `noum analyze . --reanalyze stale` (and any other scope) silently produced zero analyzed files because the daemon's HTTP handler never called the retraction step that the CLI and MCP handlers both did. The `:reanalyze` field on the JSON body was dropped on the floor; the user only saw `digest` work because its `update` step retracted analysis on changed files via a different code path. The two near-identical local copies of `prepare-reanalysis!` (one in `cli/commands/pipeline.clj`, one in `mcp/handlers/mutation.clj`) are lifted to a single `noumenon.sync/prepare-reanalysis!` plus a shared `valid-reanalyze-scopes` set; the HTTP handler now calls it before `analyze-repo!` and returns 400 on an invalid scope. CLI, HTTP, and MCP now agree on the contract.

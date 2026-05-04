@@ -414,14 +414,12 @@ configured :models when discovery is unavailable."}
                                 :error-missing :missing-provider-value}
                                {:flag "--model" :key :model :parse :string
                                 :desc "Default model alias"
-                                :error-missing :missing-model-value}
-                               {:flag "--no-auto-update" :key :no-auto-update :parse :bool
-                                :desc "Disable automatic update before queries (default: enabled)"}]
+                                :error-missing :missing-model-value}]
                        :initial {:subcommand "serve"}
                        :positionals {:required 0 :error nil :keys []}}
                 :summary "Start MCP server (JSON-RPC over stdio)"
                 :usage "serve [options]"
-                :epilog "Communicates via JSON-RPC over stdio (stdin/stdout).\nConfigure your MCP client to launch: noumenon serve [options]\nThe server auto-updates the knowledge graph on each query by default;\npass --no-auto-update to disable."}
+                :epilog "Communicates via JSON-RPC over stdio (stdin/stdout).\nConfigure your MCP client to launch: noumenon serve [options]\nTool calls forward to a running daemon over HTTP; the bridge is\nstateless and never opens local Datomic."}
    "daemon"    {:spec {:flags [{:flag "--db-dir" :key :db-dir :parse :string
                                 :desc "Override storage directory (default: data/datomic/)"
                                 :error-missing :missing-db-dir-value}
