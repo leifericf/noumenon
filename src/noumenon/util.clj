@@ -191,11 +191,19 @@
                            :field "target" :unknown (vec unknown)})))))))
 
 (defn validate-params!
-  "Validate a named-query :params map: cap on entry count, key length,
-   and value length. Throws ex-info :status 400 on any breach. Accepts
-   nil/missing or an empty map."
+  "Validate a named-query :params value: must be nil or a map of name→value
+   pairs. Caps entry count, key length, and value length. Throws ex-info
+   :status 400 on any breach. Without the type guard, callers that ran
+   `(into {} (map …) raw)` over a JSON array crashed with a
+   destructure-mid-transducer exception that surfaced as a bare 500."
   [params]
   (when params
+    (when-not (map? params)
+      (let [msg "params must be an object"]
+        (throw (ex-info msg
+                        {:status 400 :message msg :user-message msg
+                         :field "params"
+                         :type (some-> params class .getName)}))))
     (when (> (count params) max-params-count)
       (let [msg (str "params: max " max-params-count " entries")]
         (throw (ex-info msg {:status 400 :message msg :user-message msg}))))

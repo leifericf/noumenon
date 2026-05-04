@@ -433,6 +433,52 @@
     (sh "git" "commit" "-q" "-m" "init")
     dir))
 
+(deftest query-params-non-map-rejected-with-400
+  (testing "POST /api/query (and friends) used to return 500 'Internal
+            server error' when `params` was a JSON array instead of an
+            object — the handler's keywordization step destructured each
+            scalar as a [k v] pair and threw IllegalArgumentException
+            before any validator ran. Now `params` is type-checked up
+            front and a non-object surfaces as 400 with 'params must be
+            an object'."
+    (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+          send    (fn [uri body]
+                    (let [resp (handler (post-with-body uri body))
+                          parsed (json/read-str (:body resp) :key-fn keyword)]
+                      {:status (:status resp) :error (:error parsed)}))]
+      (testing "/api/query rejects array params"
+        (let [{:keys [status error]} (send "/api/query"
+                                           {:repo_path "any"
+                                            :query_name "recent-commits"
+                                            :params [1 2]})]
+          (is (= 400 status))
+          (is (re-find #"(?i)params" (str error)) error)
+          (is (re-find #"(?i)object|map" (str error))
+              (str "expected 'object/map' wording, got: " error))))
+      (testing "/api/query-as-of rejects array params"
+        (let [{:keys [status error]} (send "/api/query-as-of"
+                                           {:repo_path "any"
+                                            :query_name "recent-commits"
+                                            :as_of "2026-01-01T00:00:00Z"
+                                            :params [1 2]})]
+          (is (= 400 status))
+          (is (re-find #"(?i)params" (str error)) error)))
+      (testing "/api/query-federated rejects array params"
+        (let [{:keys [status error]} (send "/api/query-federated"
+                                           {:repo_path "/nonexistent"
+                                            :query_name "recent-commits"
+                                            :basis_sha "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+                                            :params [1 2]})]
+          (is (= 400 status))
+          (is (re-find #"(?i)params" (str error)) error)))
+      (testing "/api/query rejects scalar params"
+        (let [{:keys [status error]} (send "/api/query"
+                                           {:repo_path "any"
+                                            :query_name "recent-commits"
+                                            :params 42})]
+          (is (= 400 status))
+          (is (re-find #"(?i)params" (str error)) error))))))
+
 (deftest repos-register-rejects-bad-urls-with-400
   (testing "POST /api/repos with file://, http://localhost, http://127.0.0.1
             (and other URLs that fail git/validate-clone-url!) used to

@@ -67,14 +67,14 @@
           (mw/ok (run-ask ctx params config nil)))))))
 
 (defn handle-query-exec [request config]
-  (let [params (mw/parse-json-body request)]
+  (let [params     (mw/parse-json-body request)
+        raw-params (or (:params params) {})]
     (mw/validate-string-length! "query_name" (:query_name params) mw/max-query-name-len)
+    (mw/validate-query-params! raw-params)
     (mw/with-repo params (:db-dir config)
       (fn [{:keys [db meta-db]}]
         (let [query-name    (:query_name params)
-              raw-params    (or (:params params) {})
               kw-params     (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
-              _             (mw/validate-query-params! kw-params)
               exclude-paths (mw/validate-exclude-paths! (:exclude_paths params))
               result        (query/run-named-query meta-db db query-name kw-params
                                                    {:exclude-paths exclude-paths})]
@@ -115,9 +115,11 @@
                     :results          (take limit (vec results))})))))))
 
 (defn handle-query-as-of [request config]
-  (let [params    (mw/parse-json-body request)
-        as-of-str (:as_of params)]
+  (let [params     (mw/parse-json-body request)
+        as-of-str  (:as_of params)
+        raw-params (or (:params params) {})]
     (mw/validate-string-length! "query_name" (:query_name params) mw/max-query-name-len)
+    (mw/validate-query-params! raw-params)
     (when-not as-of-str
       (throw (ex-info "Missing as_of" {:status 400 :message "as_of is required (ISO-8601 or epoch ms)"})))
     (when-not (or (string? as-of-str) (number? as-of-str))
@@ -134,9 +136,7 @@
       (mw/with-repo params (:db-dir config)
         (fn [{:keys [conn meta-db]}]
           (let [query-name    (:query_name params)
-                raw-params    (or (:params params) {})
                 kw-params     (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)
-                _             (mw/validate-query-params! kw-params)
                 exclude-paths (mw/validate-exclude-paths! (:exclude_paths params))
                 limit         (min (or (some-> (:limit params) str parse-long) 500) 10000)
                 db            (d/as-of (d/db conn) as-of-inst)
@@ -174,6 +174,7 @@
         query-name  (:query_name params)
         branch      (:branch params)
         raw-params  (or (:params params) {})
+        _           (mw/validate-query-params! raw-params)
         kw-params   (into {} (map (fn [[k v]] [(keyword (str/replace (name k) "_" "-")) v])) raw-params)]
     (when-not (and repo-path basis-sha query-name)
       (throw (ex-info "Missing required fields"
@@ -186,7 +187,6 @@
                       {:status 400 :message "basis_sha must be a 40-char lowercase hex SHA"})))
     (when-let [reason (util/validate-repo-path repo-path)]
       (throw (ex-info reason {:status 400 :message (str "repo_path " reason)})))
-    (mw/validate-query-params! kw-params)
     (mw/with-repo {:repo_path repo-path} (:db-dir config)
       (fn [{:keys [db meta-db db-name]}]
         (let [delta-opts (federated-delta-opts request db-name branch)
