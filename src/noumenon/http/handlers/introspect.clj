@@ -9,19 +9,17 @@
             [noumenon.introspect :as introspect]
             [noumenon.llm :as llm]
             [noumenon.query :as query]
+            [noumenon.repo :as repo]
             [noumenon.sessions :as sessions]
             [noumenon.util :as util]))
 
+;; resolve-extra-repos lifted to noumenon.repo so CLI and HTTP share
+;; one implementation. The wrapper here forwards to it with HTTP's
+;; lookup-uri-fn so db-name lookups go through the cached middleware path.
+
 (defn- resolve-extra-repos
-  "Resolve comma-separated repo identifiers to [{:db db :repo-name name} ...]."
   [extra-repos-str db-dir]
-  (when (seq extra-repos-str)
-    (->> (str/split extra-repos-str #",")
-         (mapv (fn [raw]
-                 (let [raw     (str/trim raw)
-                       {:keys [db-name conn]}
-                       (mw/resolve-repo raw db-dir)]
-                   {:db (d/db conn) :repo-name db-name}))))))
+  (repo/resolve-extra-repos extra-repos-str db-dir mw/lookup-repo-uri))
 
 (defn- build-introspect-opts [{:keys [db meta-conn db-name db-dir repo-path]} params config
                               {:keys [stop-flag run-id progress-fn]}]
@@ -54,7 +52,7 @@
       (:target params)
       (assoc :allowed-targets
              (->> (str/split (:target params) #",")
-                  (keep (comp mw/allowed-introspect-targets keyword str/trim))
+                  (keep (comp util/valid-introspect-targets keyword str/trim))
                   set)))))
 
 (defn handle-introspect [request config]

@@ -27,7 +27,8 @@
 (def max-layers-len 64)
 
 (def allowed-layers #{:raw :import :enrich :full :embedded})
-(def allowed-introspect-targets #{:examples :system-prompt :rules :code :train})
+;; introspect targets live in noumenon.util as `valid-introspect-targets`;
+;; CLI and HTTP both use that single set instead of a redundant copy here.
 
 (def validate-string-length! util/validate-string-length!)
 

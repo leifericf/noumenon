@@ -2,6 +2,9 @@
   "Unified repository identifier resolution.
    Accepts filesystem paths, Git URLs, Perforce depot paths, or database names."
   (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [datomic.client.api :as d]
+            [noumenon.db :as db]
             [noumenon.git :as git]
             [noumenon.util :as util :refer [log!]]))
 
@@ -80,3 +83,23 @@
             (throw (ex-info (str "Repository not found: " identifier
                                  ". Use a filesystem path, Git URL, or database name.")
                             {:identifier identifier}))))))))
+
+(defn resolve-extra-repos
+  "Resolve a comma-separated string of repo identifiers into
+   `[{:db <datomic-db> :repo-name <db-name>} …]`. Used by introspect's
+   multi-repo evaluation path on every transport so a single piece of
+   logic decides how to open extra-repo handles. Returns nil for
+   nil/blank input. Does not validate length on individual identifiers
+   — callers that need that should run the cap before calling."
+  ([extra-repos-str db-dir]
+   (resolve-extra-repos extra-repos-str db-dir nil))
+  ([extra-repos-str db-dir lookup-uri-fn]
+   (when (and extra-repos-str (not (str/blank? extra-repos-str)))
+     (->> (str/split extra-repos-str #",")
+          (mapv (fn [raw]
+                  (let [raw     (str/trim raw)
+                        {:keys [db-name]}
+                        (resolve-repo raw db-dir
+                                      (cond-> {} lookup-uri-fn (assoc :lookup-uri-fn lookup-uri-fn)))
+                        conn    (db/get-or-create-conn db-dir db-name)]
+                    {:db (d/db conn) :repo-name db-name})))))))

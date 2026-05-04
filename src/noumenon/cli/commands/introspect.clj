@@ -1,9 +1,7 @@
 (ns noumenon.cli.commands.introspect
   "CLI command handler for the introspect self-improvement loop."
   (:require [clojure.string :as str]
-            [datomic.client.api :as d]
             [noumenon.cli.util :as cu]
-            [noumenon.db :as db]
             [noumenon.git :as git]
             [noumenon.introspect :as introspect]
             [noumenon.llm :as llm]
@@ -35,14 +33,7 @@
                                                         :model       model
                                                         :temperature 0.0
                                                         :max-tokens  4096})))
-                    extra (when (seq extra-repos)
-                            (->> (str/split extra-repos #",")
-                                 (mapv (fn [raw]
-                                         (let [raw     (str/trim raw)
-                                               {:keys [db-name]}
-                                               (repo/resolve-repo raw db-dir {})
-                                               conn (db/connect-and-ensure-schema db-dir db-name)]
-                                           {:db (d/db conn) :repo-name db-name})))))
+                    extra (repo/resolve-extra-repos extra-repos db-dir)
                     bare-repo? (and git-commit (git/bare-repo? (:repo-path opts)))
                     _ (when bare-repo?
                         (log! "[--git-commit ignored] target is a bare git repo (no working tree); commits cannot be made."))
