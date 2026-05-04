@@ -22,9 +22,16 @@
   (str (.getAbsolutePath (io/file (System/getProperty "java.io.tmpdir")))
        "/noumenon-jason-test-" (random-uuid)))
 
-(defn- elixir-available? []
+(defn- elixir-available?
+  "True only when `elixir --version` actually executes successfully.
+   `which elixir` is not enough — Elixir is a shell script that
+   `exec erl …`s, so a machine with `elixir` on PATH but no Erlang
+   runtime returns `which`-success / version-failure. Without the
+   real check, downstream import-extraction silently produces zero
+   edges and a count-query NPEs in the assertion below."
+  []
   (try
-    (zero? (:exit (shell/sh "which" "elixir")))
+    (zero? (:exit (shell/sh "elixir" "--version")))
     (catch Exception _ false)))
 
 (defn- ensure-jason-clone! []
@@ -77,6 +84,8 @@
           db   (d/db conn)
           edges (d/q '[:find (count ?f)
                        :where [?f :file/imports _]]
-                     db)]
+                     db)
+          edge-count (or (ffirst edges) 0)]
       (testing "at least one file has import edges"
-        (is (pos? (ffirst edges)))))))
+        (is (pos? edge-count)
+            (str "expected positive edge count, got " edge-count))))))
