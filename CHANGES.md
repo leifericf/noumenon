@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- **`noum list-databases --delete` refuses to wipe the meta DB** — the CLI's `--delete` branch had no reserved-name guard, so a typo could destroy `noumenon-internal` and take every prompt, query, rules artifact, benchmark/introspect run record, ask session, token, and setting with it. The HTTP `DELETE /api/databases/:name` handler already rejected this with a 400; the CLI now matches with a `Cannot delete reserved database: <name>` error and exit 1. The CLI delete path also now calls `db/evict-conn!` after a successful delete (matching the HTTP handler), so a stale cached connection doesn't survive past the deletion.
 - **`noum analyze --no-promote` now actually bypasses the promotion cache** — the `--no-promote` flag was only exposed on the HTTP and MCP transports; the CLI didn't even define it, so users who wanted to force a fresh LLM call had no way to do so via `noum analyze`. Added the flag to the analyze CLI spec and plumbed it through `build-analyze-opts` to `analyze-repo!`'s `:no-promote?` parameter, matching HTTP's `(boolean (:no_promote params))` shape so missing/false/true all produce a definite boolean. CLI, HTTP, and MCP now agree on the contract.
 
 ### Removed

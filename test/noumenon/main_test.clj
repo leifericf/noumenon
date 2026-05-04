@@ -458,3 +458,17 @@
       (is (= 0 exit) (str "Expected exit 0, stderr: " stderr)))
     (testing "stdout contains query results"
       (is (not (str/blank? stdout))))))
+
+(deftest list-databases-delete-rejects-meta-db
+  (testing "noum list-databases --delete <meta-db-name> must refuse and
+            exit 1 — wiping the meta DB destroys every prompt, query,
+            rules artifact, benchmark/introspect history record, ask
+            session, token, and setting. The HTTP delete handler
+            already declines this; the CLI now matches."
+    (let [tmp-dir (str (System/getProperty "java.io.tmpdir") "/noumenon-meta-guard-" (random-uuid))
+          ;; Touch the dir so db-exists? returns true for the meta name.
+          _ (.mkdirs (java.io.File. (str tmp-dir "/noumenon/noumenon-internal")))
+          {:keys [exit stderr]} (run-capturing ["list-databases" "--db-dir" tmp-dir
+                                                "--delete" "noumenon-internal"])]
+      (is (= 1 exit))
+      (is (re-find #"(?i)cannot delete reserved" stderr) stderr))))

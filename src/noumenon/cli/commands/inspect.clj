@@ -82,14 +82,22 @@
   [opts]
   (let [db-dir (util/resolve-db-dir opts)]
     (if-let [db-name (:delete opts)]
-      (let [client (db/create-client db-dir)]
-        (if-not (cu/db-exists? db-dir db-name)
-          (do (cu/print-error! (str "Database \"" db-name "\" not found.")) {:exit 1})
-          (do (db/delete-db client db-name)
-              (log! (str "Deleted database \"" db-name "\"."))
-              (log! "WARNING: All analysis data has been destroyed. Re-running analyze may be expensive.")
-              (log! (str "Re-import: " cli/program-name " import <repo-path>"))
-              {:exit 0})))
+      (cond
+        (= db-name db/meta-db-name)
+        (do (cu/print-error! (str "Cannot delete reserved database: " db-name))
+            {:exit 1})
+
+        (not (cu/db-exists? db-dir db-name))
+        (do (cu/print-error! (str "Database \"" db-name "\" not found.")) {:exit 1})
+
+        :else
+        (let [client (db/create-client db-dir)]
+          (db/delete-db client db-name)
+          (db/evict-conn! db-dir db-name)
+          (log! (str "Deleted database \"" db-name "\"."))
+          (log! "WARNING: All analysis data has been destroyed. Re-running analyze may be expensive.")
+          (log! (str "Re-import: " cli/program-name " import <repo-path>"))
+          {:exit 0}))
       (let [names (db/list-db-dirs db-dir)]
         (if (seq names)
           (let [client (db/create-client db-dir)
