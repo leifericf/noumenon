@@ -372,16 +372,24 @@
         selected      (or model default-model)
         resolved   (normalize-model-name selected)]
     (when-not selected
-      (throw (ex-info (str "No model selected for provider " (name provider-kw)
-                           ". Set :default-model in NOUMENON_LLM_PROVIDERS_EDN or pass --model.")
-                      {:provider provider-kw})))
+      (let [msg (str "No model selected for provider " (name provider-kw)
+                     ". Set :default-model in NOUMENON_LLM_PROVIDERS_EDN or pass --model.")]
+        (throw (ex-info msg
+                        {:status 400 :message msg :user-message msg
+                         :provider provider-kw}))))
     (when (and default-model (seq configured)
                (not (configured (normalize-model-name default-model))))
-      (throw (ex-info (str "Configured :default-model is not listed in :models for provider " (name provider-kw))
-                      {:provider provider-kw :default-model default-model :allowed (sort configured)})))
+      (let [msg (str "Configured :default-model is not listed in :models for provider " (name provider-kw))]
+        (throw (ex-info msg
+                        {:status 400 :message msg :user-message msg
+                         :provider provider-kw :default-model default-model
+                         :allowed (sort configured)}))))
     (when (and (seq configured) (not (configured resolved)))
-      (throw (ex-info (str "Model " resolved " is not configured for provider " (name provider-kw))
-                      {:provider provider-kw :model resolved :allowed (sort configured)})))
+      (let [msg (str "Model " resolved " is not configured for provider " (name provider-kw))]
+        (throw (ex-info msg
+                        {:status 400 :message msg :user-message msg
+                         :provider provider-kw :model resolved
+                         :allowed (sort configured)}))))
     resolved))
 
 (defn- normalize-base-url

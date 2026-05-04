@@ -320,3 +320,44 @@
            clojure.lang.ExceptionInfo
            #"No model selected"
            (llm/resolve-opts {:provider "glm"}))))))
+
+(deftest resolve-opts-config-errors-carry-http-status-400
+  (testing "Configuration-class throws (no model selected, default-model
+            not listed, model not configured) carry `:status 400` so HTTP
+            handlers render them as 400 with the actionable message
+            instead of swallowing them as bare 500 'Internal server
+            error'. The same throws are also user-actionable — the
+            client can pass `model` in the request body to override —
+            so 400 is the right code."
+    (testing "missing model selection carries :status 400"
+      (with-redefs [llm/getenv (fn [k]
+                                 (case k
+                                   "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:api-key \"k\" :models [\"m1\"]}}"
+                                   nil))]
+        (let [err (try (llm/resolve-opts {:provider "glm"})
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? err))
+          (is (= 400 (:status (ex-data err)))
+              (str "expected :status 400, got: " (pr-str (ex-data err))))
+          (is (re-find #"No model selected" (.getMessage err))))))
+    (testing "default-model not in :models carries :status 400"
+      (with-redefs [llm/getenv (fn [k]
+                                 (case k
+                                   "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:api-key \"k\" :models [\"m1\"] :default-model \"m2\"}}"
+                                   nil))]
+        (let [err (try (llm/resolve-opts {:provider "glm"})
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? err))
+          (is (= 400 (:status (ex-data err)))))))
+    (testing "explicit model not in configured :models carries :status 400"
+      (with-redefs [llm/getenv (fn [k]
+                                 (case k
+                                   "NOUMENON_LLM_PROVIDERS_EDN" "{:glm {:api-key \"k\" :models [\"m1\"] :default-model \"m1\"}}"
+                                   nil))]
+        (let [err (try (llm/resolve-opts {:provider "glm" :model "not-listed"})
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? err))
+          (is (= 400 (:status (ex-data err)))))))))
