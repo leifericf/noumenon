@@ -434,6 +434,24 @@
     (sh "git" "commit" "-q" "-m" "init")
     dir))
 
+(deftest duplicate-query-params-rejected-with-400
+  (testing "Repeated keys in the query string used to silently take
+            the last value via `(into {} …)`. A request like
+            `?repo_path=/safe&repo_path=/etc` reached the handler with
+            `/etc`, so a defender filtering on the first occurrence
+            would miss the actual input. The dispatcher now rejects
+            duplicate keys with 400 'duplicate query parameter <key>'."
+    (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+          resp    (handler {:request-method :get
+                            :uri "/api/completions"
+                            :query-string "repo_path=/safe&repo_path=/etc&prefix=foo"
+                            :headers {}})
+          body    (json/read-str (:body resp) :key-fn keyword)]
+      (is (= 400 (:status resp)))
+      (is (re-find #"(?i)duplicate.*repo_path" (str (:error body)))
+          (str "expected duplicate-key error naming the field, got: "
+               (:error body))))))
+
 (deftest clamp-limit-floors-and-caps
   (testing "Negative limits silently produced empty result lists
             because `(min -5 10000)` is -5 and `(take -5 …)` returns

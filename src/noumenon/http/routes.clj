@@ -85,15 +85,27 @@
         routes))
 
 (defn- parse-query-params
-  "Parse query string into a keyword map. Returns {} if no query string."
+  "Parse query string into a keyword map. Returns {} if no query string.
+   Throws ex-info with `:status 400` on duplicate keys — silently
+   collapsing repeated values via `(into {} …)` lets a request like
+   `?x=safe&x=evil` slip the second value past any defender that
+   filtered on the first occurrence (HTTP parameter pollution)."
   [query-string]
   (if (or (nil? query-string) (str/blank? query-string))
     {}
-    (->> (str/split query-string #"&")
-         (map #(str/split % #"=" 2))
-         (filter #(= 2 (count %)))
-         (map (fn [[k v]] [(keyword k) (java.net.URLDecoder/decode v "UTF-8")]))
-         (into {}))))
+    (let [pairs (->> (str/split query-string #"&")
+                     (map #(str/split % #"=" 2))
+                     (filter #(= 2 (count %)))
+                     (mapv (fn [[k v]] [(keyword k) (java.net.URLDecoder/decode v "UTF-8")])))
+          ks    (mapv first pairs)
+          dup   (some (fn [[k n]] (when (> n 1) k)) (frequencies ks))]
+      (when dup
+        (let [field (name dup)
+              msg   (str "duplicate query parameter " field)]
+          (throw (ex-info msg
+                          {:status 400 :message msg :user-message msg
+                           :field field}))))
+      (into {} pairs))))
 
 (defn make-handler
   "Create the ring handler. Config map keys:
@@ -108,9 +120,23 @@
   (fn [request]
     (let [method (keyword (str/lower-case (name (:request-method request))))
           path   (:uri request)
-          qp     (parse-query-params (:query-string request))]
-      (if (= method :options)
+          qp     (try
+                   (parse-query-params (:query-string request))
+                   (catch clojure.lang.ExceptionInfo e
+                     {::parse-error e}))]
+      (cond
+        (= method :options)
         (mw/with-cors {:status 204 :headers {} :body nil} request)
+
+        (::parse-error qp)
+        (let [e    (::parse-error qp)
+              data (ex-data e)]
+          (mw/with-cors
+            (mw/error-response (or (:status data) 400)
+                               (or (:message data) "Bad request"))
+            request))
+
+        :else
         (mw/with-cors
           (if-let [{:keys [handler params]} (match-route method path)]
             (let [request (assoc request
