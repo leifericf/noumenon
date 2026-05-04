@@ -62,7 +62,7 @@
                   :properties repo-path-prop
                   :required ["repo_path"]}}
    {:name "noumenon_update"
-    :description "Update the knowledge graph with latest changes. Runs import + enrich for changed files. For git-p4 clones, automatically syncs from Perforce first. Fast and cheap (no LLM calls by default). Pass analyze=true to also re-analyze changed files with LLM. Works as a first-time setup too — if no database exists, runs the full pipeline."
+    :description "Update the knowledge graph with latest changes. Runs import + enrich for changed files. For Perforce-stream clones (made via clj-p4), automatically syncs from Perforce first. Fast and cheap (no LLM calls by default). Pass analyze=true to also re-analyze changed files with LLM. Works as a first-time setup too — if no database exists, runs the full pipeline."
     :inputSchema {:type "object"
                   :properties (merge repo-path-prop
                                      {"analyze" {:type "boolean"

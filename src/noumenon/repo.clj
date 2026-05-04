@@ -6,6 +6,7 @@
             [datomic.client.api :as d]
             [noumenon.db :as db]
             [noumenon.git :as git]
+            [noumenon.p4 :as p4]
             [noumenon.util :as util :refer [log!]]))
 
 (defn- clone-or-reuse
@@ -27,13 +28,14 @@
       (.getCanonicalPath f))))
 
 (defn- clone-or-reuse-p4
-  "Clone a Perforce depot path via git-p4, or reuse an existing clone."
+  "Clone a Perforce stream via clj-p4 as a bare repo, or reuse the existing
+   clone. Bare-repo presence is detected by the `HEAD` file at the target."
   [depot-path opts]
-  (let [target (git/p4-clone-path depot-path)]
-    (if (.isDirectory (io/file target ".git"))
-      (do (log! (str "Using existing git-p4 clone at " target)) target)
-      (do (log! (str "Cloning P4 depot " depot-path " into " target " ..."))
-          (git/p4-clone! depot-path target opts)
+  (let [target (p4/clone-path depot-path)]
+    (if (.isFile (io/file target "HEAD"))
+      (do (log! (str "Using existing clj-p4 clone at " target)) target)
+      (do (log! (str "Cloning P4 stream " depot-path " into " target " ..."))
+          (p4/clone! depot-path target opts)
           target))))
 
 (defn resolve-repo
@@ -42,11 +44,11 @@
    Options:
      :lookup-uri-fn  — (fn [db-dir db-name]) → stored :repo/uri or nil
      :db-dir         — database storage directory
-     :p4-opts        — options for git-p4 clone (excludes, use-client-spec?, etc.)"
+     :p4-opts        — options for clj-p4 clone (excludes, max-changes, etc.)"
   [identifier db-dir {:keys [lookup-uri-fn p4-opts]}]
   (cond
-    ;; Perforce depot path — clone via git-p4 and use local path
-    (git/p4-depot-path? identifier)
+    ;; Perforce depot path — clone via clj-p4 and use local path
+    (p4/depot-path? identifier)
     (let [local (clone-or-reuse-p4 identifier (or p4-opts {}))]
       {:repo-path (.getCanonicalPath (io/file local))
        :db-name   (util/derive-db-name local)})

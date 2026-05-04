@@ -8,7 +8,8 @@
   http-kit/http-kit        {:mvn/version "2.8.0"}
   org.clojure/tools.namespace {:mvn/version "1.5.0"}
   com.taoensso/nippy          {:mvn/version "3.4.2"}
-  integrant/integrant         {:mvn/version "0.13.1"}}
+  integrant/integrant         {:mvn/version "0.13.1"}
+  io.github.leifericf/clj-p4  {:local/root "../clj-p4"}}
 
  :aliases
  {:test

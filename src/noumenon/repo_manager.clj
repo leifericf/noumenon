@@ -6,6 +6,7 @@
             [datomic.client.api :as d]
             [noumenon.db :as db]
             [noumenon.git :as git]
+            [noumenon.p4 :as p4]
             [noumenon.sync :as sync]
             [noumenon.util :as util :refer [log!]]))
 
@@ -30,8 +31,8 @@
    git@github.com:anthropics/claude-code.git -> anthropics-claude-code
    //depot/ProjectA/main/... -> ProjectA-main"
   [url]
-  (let [name (if (git/p4-depot-path? url)
-               (git/p4-depot->clone-name url)
+  (let [name (if (p4/depot-path? url)
+               (p4/depot->clone-name url)
                (let [cleaned (-> url (str/replace #"\.git$" "") (str/replace #"/$" ""))
                      parts   (str/split cleaned #"[/:]")
                      segments (take-last 2 parts)
@@ -64,7 +65,7 @@
    Returns {:db-name str :clone-path str :import-result map}."
   [meta-conn db-dir {:keys [url name branch p4-opts]}]
   (let [db-name    (or name (url->db-name url))
-        p4?        (git/p4-depot-path? url)
+        p4?        (p4/depot-path? url)
         clone-path (repo-clone-path db-dir db-name)
         clone-dir  (io/file clone-path)]
     ;; Prevent path traversal
@@ -77,7 +78,7 @@
       ;; with read access to the log.
       (log! (str "Cloning " url " into " db-name ".git ..."))
       (if p4?
-        (git/p4-clone! url clone-path (or p4-opts {}))
+        (p4/clone! url clone-path (or p4-opts {}))
         (git/clone-bare! url clone-path)))
     ;; Register in meta database
     (d/transact meta-conn
@@ -94,7 +95,7 @@
 
 (defn refresh-repo!
   "Fetch latest and run incremental import + enrich for a registered repo.
-   Detects git-p4 clones and uses p4-sync! instead of git fetch.
+   Detects clj-p4 clones and uses `noumenon.p4/sync!` instead of git fetch.
    Returns summary map."
   [db-dir db-name]
   (let [clone-path (repo-clone-path db-dir db-name)
@@ -105,8 +106,8 @@
       (throw (ex-info (str "Clone not found for " db-name)
                       {:db-name db-name :clone-path clone-path})))
     (log! (str "Fetching " db-name " ..."))
-    (if (git/p4-clone? clone-path)
-      (git/p4-sync! clone-path)
+    (if (p4/clone? clone-path)
+      (p4/sync! clone-path)
       (git/fetch! clone-path))
     (let [repo-uri (or (ffirst (d/q '[:find ?uri :where [_ :repo/uri ?uri]]
                                     (d/db conn)))

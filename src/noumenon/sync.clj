@@ -7,6 +7,7 @@
             [noumenon.git :as git]
             [noumenon.calls :as calls]
             [noumenon.imports :as imports]
+            [noumenon.p4 :as p4]
             [noumenon.util :refer [log!]]))
 
 ;; --- Staleness detection ---
@@ -235,10 +236,10 @@
         (count results)))))
 
 (defn- branch-vcs
-  "VCS identifier for the branch entity — :perforce for git-p4 clones, :git otherwise."
+  "VCS identifier for the branch entity — :perforce for clj-p4 clones, :git otherwise."
   [repo-path]
   (if (and (.isDirectory (java.io.File. (str repo-path)))
-           (git/p4-clone? repo-path))
+           (p4/clone? repo-path))
     :perforce
     :git))
 
@@ -381,12 +382,12 @@
 ;; --- Sync orchestration ---
 
 (defn- auto-sync-p4!
-  "If `repo-path` is a local git-p4 clone, pull from Perforce before reading HEAD."
+  "If `repo-path` is a local clj-p4 clone, pull from Perforce before reading HEAD."
   [repo-path]
   (when (and (.isDirectory (java.io.File. (str repo-path)))
-             (git/p4-clone? repo-path))
-    (log! "Detected git-p4 clone, syncing from Perforce...")
-    (git/p4-sync! repo-path)))
+             (p4/clone? repo-path))
+    (log! "Detected clj-p4 clone, syncing from Perforce...")
+    (p4/sync! repo-path)))
 
 (defn- compute-changes
   "Resolve {:fresh? :changes} from stored vs. current HEAD.
