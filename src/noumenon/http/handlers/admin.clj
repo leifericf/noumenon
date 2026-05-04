@@ -3,6 +3,7 @@
    registry, settings, database listing/deletion, reseed, and artifact
    history."
   (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.artifacts :as artifacts]
             [noumenon.ask-store :as ask-store]
@@ -51,15 +52,22 @@
     (mw/ok {:queries (count (artifacts/list-active-query-names (d/db meta-conn)))})))
 
 (defn handle-artifact-history [request config]
-  (let [params    (merge (mw/parse-json-body request) (:query-params request))
-        atype     (:type params)
-        aname     (:name params)
-        meta-conn (db/ensure-meta-db (:db-dir config))
-        history   (case atype
-                    "prompt" (artifacts/prompt-history meta-conn aname)
-                    "rules"  (artifacts/rules-history meta-conn)
-                    (throw (ex-info "Invalid type" {:status 400 :message "type must be 'prompt' or 'rules'"})))]
-    (mw/ok history)))
+  (let [params (merge (mw/parse-json-body request) (:query-params request))
+        atype  (:type params)
+        aname  (:name params)]
+    (when-not (#{"prompt" "rules"} atype)
+      (throw (ex-info "Invalid type"
+                      {:status 400 :message "type must be 'prompt' or 'rules'"})))
+    (when (and (= atype "prompt") (or (nil? aname) (str/blank? aname)))
+      (throw (ex-info "Missing name"
+                      {:status 400
+                       :message "name is required when type is 'prompt'"})))
+    (let [meta-conn (db/ensure-meta-db (:db-dir config))
+          history   (case atype
+                      "prompt" (do (mw/validate-string-length! "name" aname 256)
+                                   (artifacts/prompt-history meta-conn aname))
+                      "rules"  (artifacts/rules-history meta-conn))]
+      (mw/ok history))))
 
 ;; --- Ask sessions ---
 

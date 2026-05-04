@@ -433,6 +433,26 @@
     (sh "git" "commit" "-q" "-m" "init")
     dir))
 
+(deftest artifact-history-prompt-without-name-returns-400
+  (testing "GET /api/artifacts/history?type=prompt (no `name`) used to
+            return 500 'Internal server error' because the handler
+            forwarded a nil name into a Datalog query expecting it
+            bound. The MCP handler already rejected this; the HTTP
+            handler now matches with a clean 400 'name is required
+            when type is prompt'."
+    (let [tmp     (str "/tmp/noumenon-arthist-test-" (System/currentTimeMillis))
+          handler (http/make-handler {:db-dir tmp})
+          resp    (handler {:request-method :get
+                            :uri "/api/artifacts/history"
+                            :query-string "type=prompt"
+                            :headers {}})
+          body    (json/read-str (:body resp) :key-fn keyword)]
+      (is (= 400 (:status resp)))
+      (is (re-find #"(?i)name" (str (:error body)))
+          (str "expected 'name is required' wording, got: " (:error body)))
+      (is (not (re-find #"(?i)internal server error" (str (:error body))))
+          (str "must not surface as generic 500, got: " (:error body))))))
+
 (deftest query-params-non-map-rejected-with-400
   (testing "POST /api/query (and friends) used to return 500 'Internal
             server error' when `params` was a JSON array instead of an
