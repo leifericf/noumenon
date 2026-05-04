@@ -11,6 +11,7 @@
             [noumenon.llm]
             [noumenon.repo-manager :as repo-mgr]
             [noumenon.sync]
+            [noumenon.synthesize]
             [noumenon.util :as util]))
 
 (deftest health-endpoint
@@ -705,3 +706,55 @@
       (is (= head-sha (get-in status-body [:data :head-sha]))
           (str "import must persist the HEAD sha; got: "
                (pr-str (:data status-body)))))))
+
+(deftest http-synthesize-uses-raised-max-tokens
+  (testing "POST /api/synthesize must build its prompt-fn with
+            `:max-tokens 16384` so the synth output (long architectural
+            descriptions) doesn't get truncated at the provider default.
+            CLI synthesize already does this; HTTP must match."
+    (let [seen (atom [])
+          repo-path (make-tmp-git-repo! "synth-maxtokens")
+          db-dir    (str "/tmp/noumenon-synth-test-" (System/currentTimeMillis))
+          handler   (http/make-handler {:db-dir db-dir})]
+      (handler (post-with-body "/api/import" {:repo_path repo-path}))
+      (with-redefs [noumenon.llm/wrap-as-prompt-fn-from-opts
+                    (fn [opts]
+                      (swap! seen conj opts)
+                      {:prompt-fn (fn [_] {:text "{}" :usage {}})
+                       :model-id "stub" :provider-kw :stub})
+                    noumenon.synthesize/synthesize-repo!
+                    (fn [_ _ _] {:components 0})]
+        (handler (post-with-body "/api/synthesize" {:repo_path repo-path})))
+      (is (some #(= 16384 (:max-tokens %)) @seen)
+          (str "expected at least one wrap-as-prompt-fn-from-opts call "
+               "with :max-tokens 16384; saw: " (pr-str @seen))))))
+
+(deftest http-digest-synth-step-uses-raised-max-tokens
+  (testing "Inside POST /api/digest, the synthesize step must build a
+            separate prompt-fn with `:max-tokens 16384` (matching CLI
+            digest), so a daemon-mode digest doesn't silently truncate
+            architecture summaries."
+    (let [seen (atom [])
+          repo-path (make-tmp-git-repo! "digest-maxtokens")
+          db-dir    (str "/tmp/noumenon-digest-test-" (System/currentTimeMillis))
+          handler   (http/make-handler {:db-dir db-dir})]
+      (handler (post-with-body "/api/import" {:repo_path repo-path}))
+      (with-redefs [noumenon.llm/wrap-as-prompt-fn-from-opts
+                    (fn [opts]
+                      (swap! seen conj opts)
+                      {:prompt-fn (fn [_] {:text "{}" :usage {}})
+                       :model-id "stub" :provider-kw :stub})
+                    noumenon.analyze/analyze-repo!
+                    (fn [& _] {:files-analyzed 0 :files-promoted 0
+                               :files-skipped 0 :files-errored 0
+                               :files-parse-errored 0
+                               :total-usage {:input-tokens 0 :output-tokens 0
+                                             :cost-usd 0 :duration-ms 0}})
+                    noumenon.synthesize/synthesize-repo!
+                    (fn [_ _ _] {:components 0})]
+        (handler (post-with-body "/api/digest"
+                                 {:repo_path repo-path
+                                  :skip_benchmark true})))
+      (is (some #(= 16384 (:max-tokens %)) @seen)
+          (str "digest must build a prompt-fn with :max-tokens 16384 "
+               "for the synth step; saw: " (pr-str @seen))))))

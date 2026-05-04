@@ -130,9 +130,15 @@
               result (sync/update-repo! conn repo-path repo-path opts)]
           (mw/ok result))))))
 
+(def ^:private synth-max-tokens
+  "Synth output (long architectural component descriptions) routinely
+   exceeds the provider default token cap. Match the CLI's raise."
+  16384)
+
 (defn- run-synthesize [{:keys [conn meta-db db-name]} params config progress-fn]
   (let [{:keys [prompt-fn model-id provider-kw]}
-        (llm/wrap-as-prompt-fn-from-opts (mw/resolve-provider params config))]
+        (llm/wrap-as-prompt-fn-from-opts
+         (assoc (mw/resolve-provider params config) :max-tokens synth-max-tokens))]
     (when progress-fn (progress-fn {:current 0 :total 0 :message "Synthesizing architecture..."}))
     (synthesize/synthesize-repo! conn prompt-fn
                                  {:meta-db meta-db :provider (name provider-kw)
@@ -173,10 +179,13 @@
                                       (select-keys r [:files-analyzed :files-promoted :total-usage]))))
         synth-r   (when-not (:skip_synthesize params)
                     (step-progress "synthesize"
-                                   #(synthesize/synthesize-repo!
-                                     conn prompt-fn
-                                     {:meta-db meta-db :provider (name provider-kw) :model-id model-id
-                                      :repo-name (last (str/split repo-path #"/"))})))
+                                   #(let [synth-llm (llm/wrap-as-prompt-fn-from-opts
+                                                     (assoc (mw/resolve-provider params config)
+                                                            :max-tokens synth-max-tokens))]
+                                      (synthesize/synthesize-repo!
+                                       conn (:prompt-fn synth-llm)
+                                       {:meta-db meta-db :provider (name provider-kw) :model-id model-id
+                                        :repo-name (last (str/split repo-path #"/"))}))))
         bench-r   (when-not (:skip_benchmark params)
                     (step-progress "benchmark"
                                    #(let [db     (d/db conn)
