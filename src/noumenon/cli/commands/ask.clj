@@ -40,6 +40,19 @@
           {:exit   0
            :result {:answer answer :status (:status result) :usage (:usage result)}}))))
 
+(def ^:private max-ask-iterations
+  "Upper bound shared with the HTTP /api/ask handler — caps the agent
+   loop at 50 regardless of caller-supplied --max-iterations so a typo
+   can't blow through cost budgets."
+  50)
+
+(def ^:private default-ask-iterations 10)
+
+(defn- clamp-iterations
+  "Clamp to [1, max-ask-iterations]. Missing → default-ask-iterations."
+  [n]
+  (-> (or n default-ask-iterations) (max 1) (min max-ask-iterations)))
+
 (defn do-ask
   "Run the ask subcommand."
   [{:keys [question model provider max-iterations continue-from verbose] :as opts}]
@@ -55,13 +68,14 @@
                                                    :model       model
                                                    :temperature 0.3
                                                    :max-tokens  4096})
-                  eidx   (embed/get-cached-index (:db-dir ctx) db-name)
-                  result (agent/ask meta-db db question
-                                    (cond-> {:invoke-fn invoke-fn :repo-name db-name
-                                             :embed-index eidx}
-                                      max-iterations (assoc :max-iterations max-iterations)
-                                      continue-from  (assoc :continue-from continue-from)))]
-              (when verbose (log-verbose-steps result max-iterations))
+                  eidx     (embed/get-cached-index (:db-dir ctx) db-name)
+                  max-iter (clamp-iterations max-iterations)
+                  result   (agent/ask meta-db db question
+                                      (cond-> {:invoke-fn invoke-fn :repo-name db-name
+                                               :embed-index eidx
+                                               :max-iterations max-iter}
+                                        continue-from (assoc :continue-from continue-from)))]
+              (when verbose (log-verbose-steps result max-iter))
               (format-ask-result result))))
         (catch clojure.lang.ExceptionInfo e
           (cu/print-error! (.getMessage e))

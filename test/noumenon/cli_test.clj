@@ -1,6 +1,11 @@
 (ns noumenon.cli-test
   (:require [clojure.test :refer [deftest is testing]]
-            [noumenon.cli :as cli]))
+            [noumenon.agent :as agent]
+            [noumenon.cli :as cli]
+            [noumenon.cli.commands.ask :as c-ask]
+            [noumenon.cli.util :as cu]
+            [noumenon.embed :as embed]
+            [noumenon.llm :as llm]))
 
 ;; --- Error envelopes carry :subcommand uniformly ---
 ;;
@@ -51,6 +56,39 @@
   (let [result (cli/parse-args ["status"])]
     (is (= :no-repo-path (:error result)))
     (is (= "status" (:subcommand result)))))
+
+(deftest do-ask-caps-max-iterations-at-50
+  (testing "CLI do-ask must clamp --max-iterations to the same upper
+            bound the HTTP /api/ask handler enforces (50). Without the
+            cap a CLI caller could pass --max-iterations 10000 and
+            spend through any --max-cost / --stop-after budget the
+            agent loop would otherwise have respected."
+    (let [seen (atom nil)]
+      (with-redefs [cu/with-valid-repo  (fn [_opts run!] (run! {:db-dir "/tmp"}))
+                    cu/with-existing-db (fn [ctx run!]
+                                          (run! (assoc ctx
+                                                       :db        :stub-db
+                                                       :meta-db   :stub-meta-db
+                                                       :db-name   "stub")))
+                    llm/make-messages-fn-from-opts
+                    (fn [_] {:invoke-fn (fn [_] {:text "" :usage {}})})
+                    embed/get-cached-index (fn [_ _] nil)
+                    agent/ask (fn [_ _ _ opts]
+                                (reset! seen opts)
+                                {:answer "ok" :status :answered :usage {}})]
+        (testing "10000 clamps to 50"
+          (c-ask/do-ask {:question "q" :max-iterations 10000})
+          (is (= 50 (:max-iterations @seen))
+              (str "expected :max-iterations 50, got: " (pr-str @seen))))
+        (testing "user-supplied value below cap passes through"
+          (reset! seen nil)
+          (c-ask/do-ask {:question "q" :max-iterations 7})
+          (is (= 7 (:max-iterations @seen))))
+        (testing "absent value defaults to 10"
+          (reset! seen nil)
+          (c-ask/do-ask {:question "q"})
+          (is (= 10 (:max-iterations @seen))
+              (str "expected default :max-iterations 10, got: " (pr-str @seen))))))))
 
 (deftest parse-args-analyze-no-promote-flag
   (testing "analyze --no-promote parses to :no-promote true so the CLI
