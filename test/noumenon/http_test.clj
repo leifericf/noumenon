@@ -433,6 +433,40 @@
     (sh "git" "commit" "-q" "-m" "init")
     dir))
 
+(deftest query-missing-query_name-returns-clean-400
+  (testing "POST /api/query and /api/query-as-of used to forward a
+            blank/missing query_name into run-named-query, which
+            constructed an 'Unknown query: ' error string with the full
+            89-query registry concatenated — a 4 KB response for what
+            should be 'query_name is required'. Both endpoints now
+            reject the missing field up front."
+    (let [handler (http/make-handler {:db-dir "/tmp/noumenon-http-test-nonexistent/"})
+          send    (fn [uri body]
+                    (let [resp (handler (post-with-body uri body))
+                          parsed (json/read-str (:body resp) :key-fn keyword)]
+                      {:status (:status resp) :error (:error parsed)}))]
+      (testing "/api/query rejects missing query_name with 400"
+        (let [{:keys [status error]} (send "/api/query" {:repo_path "any"})]
+          (is (= 400 status))
+          (is (re-find #"query_name" (str error)) error)
+          (is (not (re-find #"Unknown query" (str error)))
+              (str "must not surface as 'Unknown query: ' help-bomb, got: " error))
+          (is (< (count (str error)) 200)
+              (str "error string should be terse, got " (count (str error)) " chars"))))
+      (testing "/api/query rejects blank query_name with 400"
+        (let [{:keys [status error]} (send "/api/query"
+                                           {:repo_path "any" :query_name ""})]
+          (is (= 400 status))
+          (is (re-find #"query_name" (str error)) error)
+          (is (not (re-find #"Unknown query" (str error))) error)))
+      (testing "/api/query-as-of rejects missing query_name with 400"
+        (let [{:keys [status error]} (send "/api/query-as-of"
+                                           {:repo_path "any"
+                                            :as_of "2026-01-01T00:00:00Z"})]
+          (is (= 400 status))
+          (is (re-find #"query_name" (str error)) error)
+          (is (not (re-find #"Unknown query" (str error))) error))))))
+
 (deftest artifact-history-prompt-without-name-returns-400
   (testing "GET /api/artifacts/history?type=prompt (no `name`) used to
             return 500 'Internal server error' because the handler

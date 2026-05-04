@@ -69,6 +69,11 @@
 (defn handle-query-exec [request config]
   (let [params     (mw/parse-json-body request)
         raw-params (or (:params params) {})]
+    (when (or (nil? (:query_name params))
+              (and (string? (:query_name params))
+                   (str/blank? (:query_name params))))
+      (throw (ex-info "Missing query_name"
+                      {:status 400 :message "query_name is required"})))
     (mw/validate-string-length! "query_name" (:query_name params) mw/max-query-name-len)
     (mw/validate-query-params! raw-params)
     (mw/with-repo params (:db-dir config)
@@ -118,6 +123,11 @@
   (let [params     (mw/parse-json-body request)
         as-of-str  (:as_of params)
         raw-params (or (:params params) {})]
+    (when (or (nil? (:query_name params))
+              (and (string? (:query_name params))
+                   (str/blank? (:query_name params))))
+      (throw (ex-info "Missing query_name"
+                      {:status 400 :message "query_name is required"})))
     (mw/validate-string-length! "query_name" (:query_name params) mw/max-query-name-len)
     (mw/validate-query-params! raw-params)
     (when-not as-of-str
