@@ -51,26 +51,42 @@
 (def ^:private lock-file
   (str (fs/path paths/data-dir "noumenon" "noumenon-internal" ".lock")))
 
-(defn- lock-holder
-  "Return \"PID N (cmdline)\" if any process holds the Datomic lock, nil
-   otherwise. Uses lsof + ps; both work identically on macOS and Linux.
-   Silently returns nil if either tool is missing or the lock is free."
+(defn- lock-holder-pid
+  "Return the integer PID of any process currently holding the Datomic
+   meta-db lock, or nil. Uses lsof; works identically on macOS and Linux.
+   Silently returns nil if lsof is missing or the lock is free."
   []
   (try
     (let [{:keys [exit out]} (proc/shell {:out :string :err :string :continue true}
                                          "lsof" "-Fp" lock-file)]
       (when (zero? exit)
-        (when-let [pid (some->> (str/split-lines out)
-                                (some #(when (str/starts-with? % "p") (subs % 1))))]
-          (let [cmd (->> (proc/shell {:out :string :err :string :continue true}
-                                     "ps" "-p" pid "-o" "command=")
-                         :out
-                         str/trim)
-                short-cmd (if (> (count cmd) 120)
-                            (str (subs cmd 0 60) " … " (subs cmd (- (count cmd) 60)))
-                            cmd)]
-            (str "PID " pid (when (seq short-cmd) (str " (" short-cmd ")")))))))
+        (some->> (str/split-lines out)
+                 (some #(when (str/starts-with? % "p") (subs % 1)))
+                 parse-long)))
     (catch Exception _ nil)))
+
+(defn- pid-cmdline
+  "Best-effort short cmdline for a PID (truncated with middle ellipsis
+   past 120 chars). Returns nil if `ps` fails."
+  [pid]
+  (try
+    (let [cmd (->> (proc/shell {:out :string :err :string :continue true}
+                               "ps" "-p" (str pid) "-o" "command=")
+                   :out
+                   str/trim)]
+      (when (seq cmd)
+        (if (> (count cmd) 120)
+          (str (subs cmd 0 60) " … " (subs cmd (- (count cmd) 60)))
+          cmd)))
+    (catch Exception _ nil)))
+
+(defn- lock-holder
+  "Return \"PID N (cmdline)\" if any process holds the Datomic lock, nil
+   otherwise."
+  []
+  (when-let [pid (lock-holder-pid)]
+    (let [cmd (pid-cmdline pid)]
+      (str "PID " pid (when cmd (str " (" cmd ")"))))))
 
 (defn- failure-message [headline]
   (str headline
@@ -133,32 +149,52 @@
       (zero? attempts)           false
       :else (do (Thread/sleep 500) (recur (dec attempts))))))
 
-(defn stop!
-  "Stop the daemon recorded in daemon.edn. SIGTERM, wait up to 5s, then
-   SIGKILL with another 2s wait. Only delete daemon.edn after the process
-   is confirmed gone — leaving the file in place lets the next stop! see
-   an unkillable daemon, rather than orphaning a JVM with no record."
-  []
-  (if-let [{:keys [pid]} (read-daemon-info)]
+(defn- kill-pid!
+  "SIGTERM the process, wait up to 5s, then SIGKILL with another 2s wait.
+   Returns :term, :kill, or :alive."
+  [pid]
+  (try (proc/shell {:out :string :err :string} "kill" (str pid))
+       (catch Exception _))
+  (if (wait-for-exit pid 5000)
+    :term
     (do
-      (try (proc/shell {:out :string :err :string} "kill" (str pid))
+      (try (proc/shell {:out :string :err :string} "kill" "-9" (str pid))
            (catch Exception _))
-      (cond
-        (wait-for-exit pid 5000)
-        (do (fs/delete-if-exists paths/daemon-file)
-            (tui/eprintln (str "Daemon stopped (PID " pid ").")))
+      (if (wait-for-exit pid 2000) :kill :alive))))
 
-        :else
-        (do
-          (try (proc/shell {:out :string :err :string} "kill" "-9" (str pid))
-               (catch Exception _))
-          (if (wait-for-exit pid 2000)
-            (do (fs/delete-if-exists paths/daemon-file)
-                (tui/eprintln (str "Daemon force-killed (PID " pid ").")))
-            (throw (ex-info (str "Daemon (PID " pid ") refused to die after SIGKILL. "
-                                 "Leaving daemon.edn in place for inspection.")
-                            {:pid pid}))))))
-    (tui/eprintln "No managed daemon to stop.")))
+(defn stop!
+  "Stop the running daemon. Normal path reads daemon.edn for the PID.
+   Orphan path: when daemon.edn is missing but lsof finds a process
+   holding the meta-db lock, adopt that PID and kill it with the same
+   SIGTERM-then-SIGKILL fallback. Without this, a daemon whose
+   daemon.edn was lost (e.g. an earlier failed stop, manual deletion,
+   or a partial cleanup) was unkillable through the launcher and the
+   user had to fall back to `kill -9` from outside the tool. Daemon.edn
+   is only deleted after the process is confirmed gone."
+  []
+  (cond
+    (read-daemon-info)
+    (let [{:keys [pid]} (read-daemon-info)]
+      (case (kill-pid! pid)
+        :term  (do (fs/delete-if-exists paths/daemon-file)
+                   (tui/eprintln (str "Daemon stopped (PID " pid ").")))
+        :kill  (do (fs/delete-if-exists paths/daemon-file)
+                   (tui/eprintln (str "Daemon force-killed (PID " pid ").")))
+        :alive (throw (ex-info (str "Daemon (PID " pid ") refused to die after SIGKILL. "
+                                    "Leaving daemon.edn in place for inspection.")
+                               {:pid pid}))))
+
+    :else
+    (if-let [orphan-pid (lock-holder-pid)]
+      (let [cmd (pid-cmdline orphan-pid)
+            label (str "PID " orphan-pid (when cmd (str " (" cmd ")")))]
+        (tui/eprintln (str "No daemon.edn; adopting orphan " label "."))
+        (case (kill-pid! orphan-pid)
+          :term  (tui/eprintln (str "Orphan daemon stopped (PID " orphan-pid ")."))
+          :kill  (tui/eprintln (str "Orphan daemon force-killed (PID " orphan-pid ")."))
+          :alive (throw (ex-info (str "Orphan daemon (PID " orphan-pid ") refused to die after SIGKILL.")
+                                 {:pid orphan-pid}))))
+      (tui/eprintln "No managed daemon to stop."))))
 
 (defn ensure!
   "Ensure the daemon is running. Start it if not. Returns {:port N}."
