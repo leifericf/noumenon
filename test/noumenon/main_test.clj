@@ -6,32 +6,54 @@
 
 ;; --- Tier 0: Pure function tests ---
 
+(defn- db-name-basename
+  "Strip the `-<12-hex>` suffix that derive-db-name appends, leaving the
+   sanitized basename portion for value-equality assertions."
+  [s]
+  (str/replace s #"-[0-9a-f]{12}$" ""))
+
 (deftest derive-db-name-simple
-  (is (= "ring" (util/derive-db-name "/path/to/ring"))))
+  (is (= "ring" (db-name-basename (util/derive-db-name "/path/to/ring")))))
 
 (deftest derive-db-name-trailing-slash
-  (is (= "ring" (util/derive-db-name "/path/to/ring/"))))
+  (is (= "ring" (db-name-basename (util/derive-db-name "/path/to/ring/")))))
 
 (deftest derive-db-name-multiple-trailing-slashes
-  (is (= "ring" (util/derive-db-name "/path/to/ring///"))))
+  (is (= "ring" (db-name-basename (util/derive-db-name "/path/to/ring///")))))
 
 (deftest derive-db-name-single-component
-  (is (= "ring" (util/derive-db-name "ring"))))
+  (is (= "ring" (db-name-basename (util/derive-db-name "ring")))))
 
 (deftest derive-db-name-sanitizes-special-chars
-  (is (= "my-repo" (util/derive-db-name "/path/to/my-repo")))
-  (is (= "my_repo" (util/derive-db-name "/path/to/my_repo")))
-  (is (= "myrepo" (util/derive-db-name "/path/to/my repo")))
-  (is (= "myrepo" (util/derive-db-name "/path/to/my$repo"))))
+  (is (= "my-repo" (db-name-basename (util/derive-db-name "/path/to/my-repo"))))
+  (is (= "my_repo" (db-name-basename (util/derive-db-name "/path/to/my_repo"))))
+  (is (= "myrepo"  (db-name-basename (util/derive-db-name "/path/to/my repo"))))
+  (is (= "myrepo"  (db-name-basename (util/derive-db-name "/path/to/my$repo")))))
 
 (deftest derive-db-name-resolves-dotdot
-  (is (= "path" (util/derive-db-name "/path/to/..")))
+  (is (= "path" (db-name-basename (util/derive-db-name "/path/to/.."))))
   (is (some? (util/derive-db-name ".."))))
 
 (deftest derive-db-name-rejects-empty-after-sanitize
   (is (thrown-with-msg? clojure.lang.ExceptionInfo
                         #"Cannot derive database name"
                         (util/derive-db-name "/path/to/$$$"))))
+
+(deftest derive-db-name-disambiguates-same-basename
+  (testing "Two filesystem paths that share a basename must yield distinct
+            db-names, otherwise their knowledge graphs silently merge into
+            the same Datomic database."
+    (let [a (util/derive-db-name "/tmp/a/repo")
+          b (util/derive-db-name "/tmp/b/repo")]
+      (is (not= a b))
+      (is (str/starts-with? a "repo-"))
+      (is (str/starts-with? b "repo-"))))
+  (testing "The same path always yields the same db-name (deterministic)."
+    (is (= (util/derive-db-name "/tmp/a/repo")
+           (util/derive-db-name "/tmp/a/repo"))))
+  (testing "Trailing slash and identical canonical path collapse to one db-name."
+    (is (= (util/derive-db-name "/tmp/a/repo")
+           (util/derive-db-name "/tmp/a/repo/")))))
 
 (deftest resolve-db-dir-default
   (let [result (util/resolve-db-dir {})]

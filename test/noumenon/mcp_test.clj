@@ -8,7 +8,8 @@
   (let [tmp-root (.toFile (java.nio.file.Files/createTempDirectory "noumenon-mcp-test" (make-array java.nio.file.attribute.FileAttribute 0)))
         repo-dir  (io/file tmp-root "mino")]
     (.mkdir repo-dir)
-    (is (= "mino" (#'mcp/repo-path->db-name (.getAbsolutePath repo-dir))))))
+    (is (re-matches #"mino-[0-9a-f]{12}"
+                    (#'mcp/repo-path->db-name (.getAbsolutePath repo-dir))))))
 
 (deftest repo-path->db-name-passes-through-db-name-input
   (is (= "mino" (#'mcp/repo-path->db-name "mino"))))

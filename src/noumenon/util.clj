@@ -68,14 +68,24 @@
         (not (.exists (io/file f ".git")))   "not a git repository"))))
 
 (defn derive-db-name
-  "Extract database name from a repo path: canonicalize, take basename, sanitize.
-   Only alphanumeric, hyphen, underscore, and dot are kept. Rejects '..' and empty results."
+  "Extract database name from a repo path. Format:
+   `<sanitized-basename>-<12-hex-hash-of-canonical-path>`.
+
+   The hash suffix prevents two paths that happen to share a basename
+   (e.g. `/foo/dir1/repo` and `/foo/dir2/repo`, or two clones of the
+   same repo at different locations) from silently writing into the
+   same Datomic database. Same canonical path always yields the same
+   db-name, so re-running on the same repo is idempotent.
+
+   Only alphanumeric, hyphen, underscore, and dot are kept in the basename.
+   Rejects '..' and empty results."
   [repo-path]
-  (let [canonical (.getCanonicalPath (java.io.File. (str repo-path)))
-        raw       (-> canonical (str/replace #"/+$" "") (str/split #"/") last)
-        sanitized (str/replace raw #"[^a-zA-Z0-9\-_.]" "")]
+  (let [canonical   (.getCanonicalPath (java.io.File. (str repo-path)))
+        raw         (-> canonical (str/replace #"/+$" "") (str/split #"/") last)
+        sanitized   (str/replace raw #"[^a-zA-Z0-9\-_.]" "")
+        hash-suffix (subs (sha256-hex canonical) 0 12)]
     (if (and (seq sanitized) (not (re-matches #"\.+" sanitized)))
-      sanitized
+      (str sanitized "-" hash-suffix)
       (throw (ex-info "Cannot derive database name from repo path"
                       {:repo-path repo-path :basename raw :sanitized sanitized})))))
 

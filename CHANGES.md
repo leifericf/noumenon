@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- **`derive-db-name` disambiguates same-basename repos with a path hash** — two filesystem paths that happened to share a basename (e.g. monorepo subdirs both named `repo`, or two clones of the same project at different locations) silently collapsed to the same Datomic database. The user's knowledge graph for one repo was getting merged with another's commits, files, and analyses with no warning. db-name format is now `<sanitized-basename>-<12-hex-of-canonical-path>`; same canonical path always yields the same db-name (so re-running on the same repo is still idempotent), but different paths now never collide. Existing databases under the old bare-basename names will not be recognized after upgrade — re-import the affected repos. Tests that hardcoded `"ring"` / `"jason"` / `"mino"` as db-names now derive the name through `util/derive-db-name` so they continue to track the CLI's actual derivation.
+
 ## 0.10.1
 
 ### Fixes

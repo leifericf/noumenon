@@ -8,7 +8,8 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [datomic.client.api :as d]
             [noumenon.db :as db]
-            [noumenon.test-helpers :as th]))
+            [noumenon.test-helpers :as th]
+            [noumenon.util :as util]))
 
 ;; --- Test infrastructure ---
 
@@ -59,7 +60,7 @@
 (deftest jason-spot-check-elixir-file
   (when (elixir-available?)
     (run-capturing ["import" "--db-dir" db-dir jason-dir])
-    (let [conn   (db/connect-and-ensure-schema db-dir "jason")
+    (let [conn   (db/connect-and-ensure-schema db-dir (util/derive-db-name jason-dir))
           db     (d/db conn)
           entity (d/pull db '[:file/path :file/ext :file/lang]
                          [:file/path "lib/jason.ex"])]
@@ -72,7 +73,7 @@
   (when (elixir-available?)
     (run-capturing ["import" "--db-dir" db-dir jason-dir])
     (run-capturing ["enrich" "--db-dir" db-dir jason-dir])
-    (let [conn (db/connect-and-ensure-schema db-dir "jason")
+    (let [conn (db/connect-and-ensure-schema db-dir (util/derive-db-name jason-dir))
           db   (d/db conn)
           edges (d/q '[:find (count ?f)
                        :where [?f :file/imports _]]

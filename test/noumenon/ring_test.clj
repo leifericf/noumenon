@@ -8,7 +8,8 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [datomic.client.api :as d]
             [noumenon.db :as db]
-            [noumenon.test-helpers :as th]))
+            [noumenon.test-helpers :as th]
+            [noumenon.util :as util]))
 
 ;; --- Test infrastructure ---
 
@@ -81,7 +82,7 @@
 
 (deftest ring-spot-check-known-file
   (run-capturing ["import" "--db-dir" db-dir ring-dir])
-  (let [conn (db/connect-and-ensure-schema db-dir "ring")
+  (let [conn (db/connect-and-ensure-schema db-dir (util/derive-db-name ring-dir))
         db   (d/db conn)
         ;; Ring's project.clj should exist
         entity (d/pull db '[:file/path :file/ext :file/lang :file/size]
@@ -94,7 +95,7 @@
 
 (deftest ring-spot-check-known-commit
   (run-capturing ["import" "--db-dir" db-dir ring-dir])
-  (let [conn (db/connect-and-ensure-schema db-dir "ring")
+  (let [conn (db/connect-and-ensure-schema db-dir (util/derive-db-name ring-dir))
         db   (d/db conn)
         ;; Get the initial commit
         initial-sha (-> (shell/sh "git" "-C" ring-dir "rev-list" "--max-parents=0" "HEAD")
@@ -109,7 +110,7 @@
 
 (deftest ring-person-deduplication
   (run-capturing ["import" "--db-dir" db-dir ring-dir])
-  (let [conn    (db/connect-and-ensure-schema db-dir "ring")
+  (let [conn    (db/connect-and-ensure-schema db-dir (util/derive-db-name ring-dir))
         db      (d/db conn)
         persons (count (d/q '[:find ?e :where [?e :person/email _]] db))
         commits (count (d/q '[:find ?e :where [?e :git/type :commit]] db))]
