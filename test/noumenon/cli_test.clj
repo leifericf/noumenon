@@ -173,6 +173,17 @@
             (str "expected :git-commit? false on bare repo; got: "
                  (pr-str (:git-commit? @seen))))))))
 
+(deftest parse-args-query-limit-flag
+  (testing "noum query --limit 25 parses to :limit 25 so the CLI can
+            cap result-set size like HTTP /api/query does."
+    (let [result (cli/parse-args ["query" "--limit" "25" "recent-commits" "."])]
+      (is (= "query" (:subcommand result)))
+      (is (= 25 (:limit result))
+          (str "expected :limit 25, got: " (pr-str result)))))
+  (testing "absent flag leaves :limit unset"
+    (let [result (cli/parse-args ["query" "recent-commits" "."])]
+      (is (nil? (:limit result))))))
+
 (deftest do-introspect-honors-git-commit-on-working-tree
   (testing "On a regular (non-bare) repo, --git-commit propagates
             unchanged so the user opt-in works as documented."

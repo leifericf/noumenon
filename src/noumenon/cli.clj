@@ -207,7 +207,11 @@
            {:flag "--param" :key :params :parse :kv-pair
             :desc "Supply query input as key=value (repeatable)"
             :error-missing :missing-param-value
-            :error-invalid :invalid-param-value}]
+            :error-invalid :invalid-param-value}
+           {:flag "--limit" :key :limit :parse :pos-int
+            :desc "Cap result-set rows (default: 500, max: 10000)"
+            :error-invalid :invalid-limit
+            :error-missing :missing-limit-value}]
    :initial {:subcommand "query"}
    :positionals {:required 2 :error :query-missing-args :keys [:query-name :repo-path]}})
 

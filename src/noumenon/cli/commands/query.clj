@@ -65,7 +65,7 @@
 
 (defn do-query
   "Run the query subcommand."
-  [{:keys [query-name list-queries params] :as opts}]
+  [{:keys [query-name list-queries params limit] :as opts}]
   (if list-queries
     (let [meta-conn (db/ensure-meta-db (util/resolve-db-dir opts))]
       (do-query-list (d/db meta-conn)))
@@ -76,10 +76,11 @@
           ctx
           (fn [{:keys [db meta-db]}]
             (let [kw-params (into {} (map (fn [[k v]] [(keyword k) v])) params)
+                  cap       (query/clamp-limit limit)
                   {:keys [ok error]} (query/run-named-query meta-db db query-name kw-params)]
               (if error
                 (do (cu/print-error! error)
                     (when (str/starts-with? (str error) "Missing required inputs")
                       (log! "Hint: use --param key=value to supply query inputs."))
                     {:exit 1})
-                {:exit 0 :result ok}))))))))
+                {:exit 0 :result (vec (take cap ok))}))))))))

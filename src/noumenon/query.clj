@@ -13,6 +13,25 @@
   (when-let [url (io/resource resource-path)]
     (-> url slurp edn/read-string)))
 
+;; --- Result-set limit ---
+
+(def default-result-limit
+  "Default `:limit` applied to named-query result sets across every
+   transport (CLI, HTTP, MCP via HTTP). Picked to match the HTTP
+   handler's pre-existing default."
+  500)
+
+(def max-result-limit
+  "Hard upper bound. Callers asking for more than this are clamped."
+  10000)
+
+(defn clamp-limit
+  "Coerce a request `limit` into the inclusive range [1, 10000].
+   Missing / unparseable values fall back to `default-result-limit`."
+  [v]
+  (let [parsed (or (some-> v str parse-long) default-result-limit)]
+    (-> parsed (max 1) (min max-result-limit))))
+
 ;; --- Schema introspection ---
 
 (defn list-attributes

@@ -51,6 +51,8 @@
    :invalid-param-value          #(str "Invalid --param value: " (:value %) ". Expected key=value format.")
    :invalid-max-files            #(str "Invalid --max-files value: " (:value %))
    :missing-max-files-value      "Missing value for --max-files."
+   :invalid-limit                #(str "Invalid --limit value: " (:value %))
+   :missing-limit-value          "Missing value for --limit."
    :missing-path-value           "Missing value for --path."
    :missing-include-value        "Missing value for --include."
    :missing-exclude-value        "Missing value for --exclude."
