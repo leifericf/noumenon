@@ -1,6 +1,7 @@
 (ns noumenon.cli-test
   (:require [clojure.test :refer [deftest is testing]]
             [noumenon.agent :as agent]
+            [noumenon.ask-store :as ask-store]
             [noumenon.cli :as cli]
             [noumenon.cli.commands.ask :as c-ask]
             [noumenon.cli.util :as cu]
@@ -56,6 +57,41 @@
   (let [result (cli/parse-args ["status"])]
     (is (= :no-repo-path (:error result)))
     (is (= "status" (:subcommand result)))))
+
+(deftest do-ask-saves-session-to-meta-db
+  (testing "CLI do-ask must persist an ask-session record to the meta
+            DB just like the HTTP /api/ask handler does. Without it,
+            CLI ask calls are invisible to the introspect loop's
+            feedback/training signal, and `noum ask --continue-from
+            <id>` can't reference its own prior sessions."
+    (let [save-args (atom nil)]
+      (with-redefs [cu/with-valid-repo  (fn [_opts run!] (run! {:db-dir "/tmp"}))
+                    cu/with-existing-db (fn [ctx run!]
+                                          (run! (assoc ctx
+                                                       :db        :stub-db
+                                                       :meta-db   :stub-meta-db
+                                                       :meta-conn :stub-meta-conn
+                                                       :db-name   "stub")))
+                    llm/make-messages-fn-from-opts
+                    (fn [_] {:invoke-fn (fn [_] {:text "" :usage {}})})
+                    embed/get-cached-index (fn [_ _] nil)
+                    agent/ask (fn [_ _ _ _]
+                                {:answer "ok" :status :answered :usage {}})
+                    ask-store/save-session!
+                    (fn [_meta-conn _result opts]
+                      (reset! save-args opts)
+                      "test-session-id")]
+        (c-ask/do-ask {:question "what?"})
+        (let [opts @save-args]
+          (is (some? opts) "save-session! must have been invoked")
+          (is (= :cli (:channel opts))
+              (str ":channel must be :cli; got: " (:channel opts)))
+          (is (= "what?" (:question opts)))
+          (is (= "stub" (:repo opts)))
+          (is (instance? java.util.Date (:started-at opts)))
+          (is (number? (:duration-ms opts))
+              (str ":duration-ms must be a number; got: "
+                   (pr-str (:duration-ms opts)))))))))
 
 (deftest do-ask-caps-max-iterations-at-50
   (testing "CLI do-ask must clamp --max-iterations to the same upper
