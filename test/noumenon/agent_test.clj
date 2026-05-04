@@ -71,12 +71,45 @@
     (is (some #(= :file/path (:ident %)) attrs))
     (is (not (some #(= :db/ident (:ident %)) attrs)))))
 
+(deftest list-attributes-resolves-value-type-and-cardinality-to-keywords
+  (testing "Datomic Local does not auto-resolve refs in :find — without an
+            explicit `[?vt :db/ident ...]` join, list-attributes returns
+            the raw entity ID for value-type/cardinality, which makes
+            schema-summary print numbers like '20 35' instead of
+            human-readable keywords. Downstream agents and the MCP
+            noumenon_get_schema tool need the keywords to interpret the
+            schema at all."
+    (let [db    (make-test-db)
+          attrs (query/list-attributes db)
+          path  (some #(when (= :file/path (:ident %)) %) attrs)]
+      (is (some? path) "expected :file/path among returned attrs")
+      (is (keyword? (:value-type path))
+          (str ":value-type must be a keyword (like :db.type/string), "
+               "got: " (pr-str (:value-type path))))
+      (is (= "db.type" (namespace (:value-type path)))
+          (str "value-type keyword must live under :db.type/...; got: "
+               (pr-str (:value-type path))))
+      (is (keyword? (:cardinality path))
+          (str ":cardinality must be a keyword (like :db.cardinality/one), "
+               "got: " (pr-str (:cardinality path))))
+      (is (= "db.cardinality" (namespace (:cardinality path)))
+          (str "cardinality keyword must live under :db.cardinality/...; got: "
+               (pr-str (:cardinality path)))))))
+
 (deftest schema-summary-returns-string
   (let [db      (make-test-db)
         summary (query/schema-summary db)]
     (is (string? summary))
     (is (pos? (count summary)))
-    (is (re-find #":file/path" summary))))
+    (is (re-find #":file/path" summary))
+    (testing "renders value-type/cardinality as their idents, not as
+              raw entity-id numbers"
+      (is (re-find #":db\.type/" summary)
+          (str "expected :db.type/<x> in summary; got: "
+               (subs summary 0 (min 200 (count summary)))))
+      (is (re-find #":db\.cardinality/" summary)
+          (str "expected :db.cardinality/<x> in summary; got: "
+               (subs summary 0 (min 200 (count summary))))))))
 
 ;; --- Tier 0: prompt rendering ---
 

@@ -17,13 +17,19 @@
 
 (defn list-attributes
   "Return a sorted seq of {:ident kw :value-type kw :cardinality kw :doc str}
-   for all user-defined attributes (excludes :db and :fressian prefixes)."
+   for all user-defined attributes (excludes :db and :fressian prefixes).
+
+   Datomic Local does not auto-resolve refs in `:find`, so the value-type
+   and cardinality entity refs are joined to their `:db/ident` keywords
+   here — otherwise downstream renderings would see raw entity IDs."
   [db]
-  (->> (d/q '[:find ?ident ?vt ?card ?doc
+  (->> (d/q '[:find ?ident ?vt-ident ?card-ident ?doc
               :where
               [?a :db/ident ?ident]
               [?a :db/valueType ?vt]
+              [?vt :db/ident ?vt-ident]
               [?a :db/cardinality ?card]
+              [?card :db/ident ?card-ident]
               [(get-else $ ?a :db/doc "") ?doc]]
             db)
        (remove (fn [[ident]]
