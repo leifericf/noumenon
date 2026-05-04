@@ -4,8 +4,11 @@
             [noumenon.ask-store :as ask-store]
             [noumenon.cli :as cli]
             [noumenon.cli.commands.ask :as c-ask]
+            [noumenon.cli.commands.introspect :as c-intro]
             [noumenon.cli.util :as cu]
             [noumenon.embed :as embed]
+            [noumenon.git :as git]
+            [noumenon.introspect :as introspect]
             [noumenon.llm :as llm]))
 
 ;; --- Error envelopes carry :subcommand uniformly ---
@@ -141,3 +144,55 @@
     (let [result (cli/parse-args ["analyze" "/some/path"])]
       (is (= "analyze" (:subcommand result)))
       (is (not (:no-promote result))))))
+
+(deftest do-introspect-disables-git-commit-on-bare-repo
+  (testing "Passing --git-commit against a bare git repo (no working
+            tree) must not propagate :git-commit? true into the
+            introspect run-loop. HTTP already gates this; CLI now
+            matches so a user who accidentally points introspect at a
+            bare clone doesn't get a confusing failure deep in the
+            commit step."
+    (let [seen (atom nil)]
+      (with-redefs [cu/with-valid-repo  (fn [_opts run!] (run! {:db-dir "/tmp"
+                                                                :repo-path "/tmp/bare.git"}))
+                    cu/with-existing-db (fn [ctx run!]
+                                          (run! (assoc ctx
+                                                       :db        :stub-db
+                                                       :meta-db   :stub-meta-db
+                                                       :meta-conn :stub-meta-conn
+                                                       :db-name   "stub")))
+                    llm/make-messages-fn-from-opts
+                    (fn [_] {:invoke-fn (fn [_] {:text "" :usage {}})})
+                    git/bare-repo? (fn [_] true)
+                    introspect/run-loop! (fn [opts]
+                                           (reset! seen opts)
+                                           {:improvements 0 :iterations 0
+                                            :final-score 0.0 :run-id "test"})]
+        (c-intro/do-introspect {:repo-path "/tmp/bare.git" :git-commit true})
+        (is (false? (boolean (:git-commit? @seen)))
+            (str "expected :git-commit? false on bare repo; got: "
+                 (pr-str (:git-commit? @seen))))))))
+
+(deftest do-introspect-honors-git-commit-on-working-tree
+  (testing "On a regular (non-bare) repo, --git-commit propagates
+            unchanged so the user opt-in works as documented."
+    (let [seen (atom nil)]
+      (with-redefs [cu/with-valid-repo  (fn [_opts run!] (run! {:db-dir "/tmp"
+                                                                :repo-path "/tmp/work"}))
+                    cu/with-existing-db (fn [ctx run!]
+                                          (run! (assoc ctx
+                                                       :db        :stub-db
+                                                       :meta-db   :stub-meta-db
+                                                       :meta-conn :stub-meta-conn
+                                                       :db-name   "stub")))
+                    llm/make-messages-fn-from-opts
+                    (fn [_] {:invoke-fn (fn [_] {:text "" :usage {}})})
+                    git/bare-repo? (fn [_] false)
+                    introspect/run-loop! (fn [opts]
+                                           (reset! seen opts)
+                                           {:improvements 0 :iterations 0
+                                            :final-score 0.0 :run-id "test"})]
+        (c-intro/do-introspect {:repo-path "/tmp/work" :git-commit true})
+        (is (true? (boolean (:git-commit? @seen)))
+            (str "expected :git-commit? true on working-tree repo; got: "
+                 (pr-str (:git-commit? @seen))))))))

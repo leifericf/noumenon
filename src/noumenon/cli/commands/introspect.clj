@@ -4,6 +4,7 @@
             [datomic.client.api :as d]
             [noumenon.cli.util :as cu]
             [noumenon.db :as db]
+            [noumenon.git :as git]
             [noumenon.introspect :as introspect]
             [noumenon.llm :as llm]
             [noumenon.repo :as repo]
@@ -42,6 +43,9 @@
                                                (repo/resolve-repo raw db-dir {})
                                                conn (db/connect-and-ensure-schema db-dir db-name)]
                                            {:db (d/db conn) :repo-name db-name})))))
+                    bare-repo? (and git-commit (git/bare-repo? (:repo-path opts)))
+                    _ (when bare-repo?
+                        (log! "[--git-commit ignored] target is a bare git repo (no working tree); commits cannot be made."))
                     _ (log! (str "\n[COST WARNING] introspect runs up to "
                                  (or max-iterations 10)
                                  " benchmark evaluations. Use --max-cost to set a budget."))
@@ -55,7 +59,7 @@
                                      :max-iterations      (or max-iterations 10)
                                      :max-hours           max-hours
                                      :max-cost            max-cost
-                                     :git-commit?         git-commit
+                                     :git-commit?         (and git-commit (not bare-repo?))
                                      :model-config        {:provider provider :model model}
                                      :eval-runs           (or eval-runs 1)
                                      :allowed-targets     (when target
