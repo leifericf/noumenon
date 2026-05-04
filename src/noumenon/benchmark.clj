@@ -1646,11 +1646,17 @@
 
 (defn- load-run-context
   "Build the per-run context for non-already-completed stages: an isolated LLM (for :raw),
-   the raw-context string, and an embed index. Skipped when nothing remains to run."
+   the raw-context string, and an embed index. Skipped when nothing remains to run.
+
+   `:isolated-llm` is only built when `model-config` carries an explicit
+   `:model` — without it `resolve-model-id` would throw on any provider
+   that lacks a `:default-model` setting (a brittle path for tests and
+   any caller that supplies an `invoke-llm` mock). When nil, `select-llm-fn`
+   falls back to the main `invoke-llm` for `:raw` stages."
   [{:keys [layers has-remaining? model-config repo-path db-dir db-name]}]
   (let [has-raw?      (some #{:raw} layers)
         has-embedded? (some #{:embedded} layers)]
-    {:isolated-llm (when has-raw?
+    {:isolated-llm (when (and has-raw? (:model model-config))
                      (llm/make-isolated-prompt-fn (select-keys model-config [:provider :model])))
      :raw-ctx      (when (and has-remaining? has-raw?) (raw-context repo-path))
      :embed-ctx    (when (and has-remaining? has-embedded?)

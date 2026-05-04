@@ -25,14 +25,22 @@
 
 (defmacro with-bench-mocks
   "Wrap body with standard benchmark mocks: load-questions, query-context,
-   raw-context, repo-head-sha, pick-benchmark-targets. Accepts optional :questions override."
+   raw-context, repo-head-sha, pick-benchmark-targets, and a stub for
+   make-isolated-prompt-fn so :raw stages reuse the mock invoke-llm.
+   Accepts optional :questions override."
   [opts & body]
   (let [qs (or (:questions opts) `test-qs)]
     `(with-redefs [bench/load-questions        (fn [] ~qs)
                    bench/query-context          (fn [_meta-db# _db# _qn#] "mock query context")
                    bench/raw-context            (fn [_rp#] "mock raw context")
                    bench/repo-head-sha          (fn [_rp#] "abc123")
-                   bench/pick-benchmark-targets (fn [_meta-db# _db#] {:target-file "mock/target.clj"})]
+                   bench/pick-benchmark-targets (fn [_meta-db# _db#] {:target-file "mock/target.clj"})
+                   ;; The :raw layer normally runs against an isolated
+                   ;; provider-resolved LLM. In tests there's no API
+                   ;; key configured; returning nil here makes
+                   ;; `select-llm-fn` fall back to the test's mock
+                   ;; `invoke-llm` for :raw stages too.
+                   llm/make-isolated-prompt-fn (fn [_opts#] nil)]
        ~@body)))
 
 ;; --- Tier 0: Pure function tests ---
