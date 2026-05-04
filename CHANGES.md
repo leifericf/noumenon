@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- **`noum analyze --no-promote` now actually bypasses the promotion cache** — the `--no-promote` flag was only exposed on the HTTP and MCP transports; the CLI didn't even define it, so users who wanted to force a fresh LLM call had no way to do so via `noum analyze`. Added the flag to the analyze CLI spec and plumbed it through `build-analyze-opts` to `analyze-repo!`'s `:no-promote?` parameter, matching HTTP's `(boolean (:no_promote params))` shape so missing/false/true all produce a definite boolean. CLI, HTTP, and MCP now agree on the contract.
+
 ### Removed
 
 - **Dead `mcp.handlers.*` namespace tree** — `fd43977 refactor(mcp): make the MCP server a pure proxy` (2026-04-30) made the bridge forward every `tools/call` to the daemon over HTTP and removed the in-process handler dispatch. The five handler namespaces (`mcp.handlers.{query,mutation,benchmark,introspect,meta}`) and their support helpers in `mcp/util.clj` (`with-conn`, `lookup-repo-uri`, `resolve-extra-repos`, `selector-opts`, `validate-llm-inputs!`, `provider+model`, `validate-layers`, length-cap defs, `allowed-layers`/`allowed-introspect-targets` sets) have been carrying no live callers since then. Deletion is no behavior change — the actual MCP behavior is whatever the HTTP daemon does. Audit findings about MCP-vs-HTTP drift in those handlers were false positives against dead code; this removes the surface area so future audits see only live code paths.

@@ -134,9 +134,13 @@
    :desc "Re-analyze files: all, prompt-changed, model-changed, stale (default: only unanalyzed files)"
    :error-missing :missing-reanalyze-value})
 
+(def ^:private no-promote-flag
+  {:flag "--no-promote" :key :no-promote :parse :bool
+   :desc "Bypass the content-addressed promotion cache; always invoke the LLM"})
+
 (def ^:private analyze-flags
   (vec (concat [model-flag (assoc provider-flag :valid all-valid-providers)
-                max-files-flag reanalyze-flag db-dir-flag]
+                max-files-flag reanalyze-flag no-promote-flag db-dir-flag]
                verbose-flags concurrency-flags selector-flags)))
 
 ;; --- Declarative command specs ---

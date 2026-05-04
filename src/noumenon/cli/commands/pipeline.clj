@@ -44,7 +44,7 @@
 
 (defn- build-analyze-opts
   "Build the options map for analyze-repo! from CLI opts."
-  [{:keys [concurrency min-delay max-files path include exclude lang]
+  [{:keys [concurrency min-delay max-files path include exclude lang no-promote]
     :or   {concurrency 3 min-delay 0}} model-id provider meta-db]
   (cond-> {:meta-db      meta-db
            :model-id     model-id
@@ -54,7 +54,8 @@
            :path         path
            :include      include
            :exclude      exclude
-           :lang         lang}
+           :lang         lang
+           :no-promote?  (boolean no-promote)}
     max-files (assoc :max-files max-files)))
 
 (defn do-analyze

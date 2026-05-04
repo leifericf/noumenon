@@ -51,3 +51,19 @@
   (let [result (cli/parse-args ["status"])]
     (is (= :no-repo-path (:error result)))
     (is (= "status" (:subcommand result)))))
+
+(deftest parse-args-analyze-no-promote-flag
+  (testing "analyze --no-promote parses to :no-promote true so the CLI
+            can plumb it through to analyze-repo!. HTTP and the MCP
+            tool description already expose this flag; the CLI was the
+            only surface where bypassing the content-addressed
+            promotion cache wasn't reachable."
+    (let [result (cli/parse-args ["analyze" "--no-promote" "/some/path"])]
+      (is (= "analyze" (:subcommand result)))
+      (is (= true (:no-promote result))
+          (str "expected :no-promote true on parsed opts; got: "
+               (pr-str result)))))
+  (testing "absent flag leaves :no-promote unset (falsy)"
+    (let [result (cli/parse-args ["analyze" "/some/path"])]
+      (is (= "analyze" (:subcommand result)))
+      (is (not (:no-promote result))))))
