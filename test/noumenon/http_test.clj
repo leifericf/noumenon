@@ -433,6 +433,25 @@
     (sh "git" "commit" "-q" "-m" "init")
     dir))
 
+(deftest reader-can-post-session-feedback
+  (testing "Reader role must be allowed to attach feedback to its own
+            ask session — that is the introspect loop's whole signal-
+            harvesting mechanism. Listing/inspecting OTHER users'
+            sessions stays admin-only; only the per-session POST is
+            reader-allowed."
+    (testing "POST /api/ask/sessions/:id/feedback does not require admin"
+      (is (false? (boolean (auth/requires-admin?
+                            :post "/api/ask/sessions/abc-123/feedback"))))
+      (is (false? (boolean (auth/requires-admin?
+                            :post "/api/ask/sessions/9b3d2/feedback")))))
+    (testing "GET /api/ask/sessions still requires admin"
+      (is (true? (boolean (auth/requires-admin? :get "/api/ask/sessions")))))
+    (testing "GET /api/ask/sessions/<id> still requires admin"
+      (is (true? (boolean (auth/requires-admin? :get "/api/ask/sessions/abc-123")))))
+    (testing "Other admin-only routes remain admin-only (smoke check)"
+      (is (true? (boolean (auth/requires-admin? :post "/api/import"))))
+      (is (true? (boolean (auth/requires-admin? :post "/api/tokens")))))))
+
 (deftest query-missing-query_name-returns-clean-400
   (testing "POST /api/query and /api/query-as-of used to forward a
             blank/missing query_name into run-named-query, which

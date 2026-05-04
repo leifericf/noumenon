@@ -109,13 +109,29 @@
   "Method + path combos that need admin even though GET is normally reader-safe."
   #{[:delete "/api/databases"]})
 
+(def ^:private reader-allowed-patterns
+  "Method+path combos that override admin-only-prefixes — endpoints a
+   reader must reach to participate in their own session lifecycle.
+   `POST /api/ask/sessions/:id/feedback` is the introspect loop's
+   feedback-harvesting hook; gating it as admin defeats the whole
+   point. The list/detail endpoints under the same prefix stay
+   admin-only."
+  [[:post #"^/api/ask/sessions/[^/]+/feedback$"]])
+
+(defn- reader-allowed?
+  [method path]
+  (some (fn [[m re]]
+          (and (= m method) (re-matches re path)))
+        reader-allowed-patterns))
+
 (defn requires-admin?
   "True if this request requires admin role."
   [method path]
-  (or (some #(clojure.string/starts-with? path %) admin-only-prefixes)
-      (and (= method :delete)
-           (some #(clojure.string/starts-with? path (second %))
-                 (filter #(= (first %) :delete) admin-only-methods)))))
+  (and (not (reader-allowed? method path))
+       (or (some #(clojure.string/starts-with? path %) admin-only-prefixes)
+           (and (= method :delete)
+                (some #(clojure.string/starts-with? path (second %))
+                      (filter #(= (first %) :delete) admin-only-methods))))))
 
 (defn writes-data?
   "True if this request performs writes (superset of requires-admin?)."
