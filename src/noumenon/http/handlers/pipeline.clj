@@ -17,13 +17,17 @@
             [noumenon.util :as util]))
 
 (defn- run-import [{:keys [conn repo-path]} progress-fn]
-  (let [git-r   (git/import-commits! conn repo-path repo-path progress-fn)
-        files-r (files/import-files! conn repo-path repo-path)]
+  (let [git-r    (git/import-commits! conn repo-path repo-path progress-fn)
+        files-r  (files/import-files! conn repo-path repo-path)
+        head-sha (git/head-sha repo-path)]
+    (when head-sha
+      (d/transact conn {:tx-data [{:repo/uri repo-path :repo/head-sha head-sha}]}))
     {:commits-imported (:commits-imported git-r)
      :commits-skipped  (:commits-skipped git-r)
      :files-imported   (:files-imported files-r)
      :files-skipped    (:files-skipped files-r)
-     :dirs-imported    (:dirs-imported files-r)}))
+     :dirs-imported    (:dirs-imported files-r)
+     :head-sha         head-sha}))
 
 (defn handle-import [request config]
   (let [params (mw/parse-json-body request)]

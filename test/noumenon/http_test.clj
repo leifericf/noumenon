@@ -1,10 +1,13 @@
 (ns noumenon.http-test
   (:require [clojure.data.json :as json]
+            [clojure.java.shell :as shell]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [noumenon.auth :as auth]
             [noumenon.http :as http]
             [noumenon.http.handlers.query]
-            [noumenon.repo-manager :as repo-mgr]))
+            [noumenon.repo-manager :as repo-mgr]
+            [noumenon.util :as util]))
 
 (deftest health-endpoint
   (let [handler (http/make-handler {:db-dir    "data/datomic/"
@@ -411,3 +414,44 @@
         "missing Host header (unusual proxy setup) and missing branch —
          parent-host is omitted, parent-db-name is still set; the
          breadcrumb is informational and partial is acceptable")))
+
+(defn- make-tmp-git-repo!
+  "Create a fresh git repo with one commit. Returns the absolute path."
+  [name]
+  (let [dir (str (System/getProperty "java.io.tmpdir") "/noumenon-import-test-"
+                 name "-" (System/currentTimeMillis))
+        sh  (fn [& args]
+              (let [{:keys [exit err]} (apply shell/sh (concat args [:dir dir]))]
+                (when (not= 0 exit)
+                  (throw (ex-info (str "git failed: " err) {:exit exit})))))]
+    (.mkdirs (java.io.File. dir))
+    (sh "git" "init" "-q")
+    (sh "git" "config" "user.email" "t@t")
+    (sh "git" "config" "user.name" "t")
+    (spit (str dir "/a.txt") "hello")
+    (sh "git" "add" "a.txt")
+    (sh "git" "commit" "-q" "-m" "init")
+    dir))
+
+(deftest http-import-writes-head-sha
+  (testing "POST /api/import populates :repo/head-sha so a follow-up
+            GET /api/status/<db-name> returns the actual SHA. MCP
+            noumenon_status documents 'compare with git rev-parse HEAD'
+            as the freshness check, which is meaningless when head-sha
+            is null after the documented first step (import)."
+    (let [repo-path   (make-tmp-git-repo! "head-sha")
+          db-dir      (str "/tmp/noumenon-import-test-db-" (System/currentTimeMillis))
+          handler     (http/make-handler {:db-dir db-dir})
+          db-name     (util/derive-db-name repo-path)
+          import-resp (handler (post-with-body "/api/import" {:repo_path repo-path}))
+          status-resp (handler {:request-method :get
+                                :uri (str "/api/status/" db-name)
+                                :headers {}})
+          status-body (json/read-str (:body status-resp) :key-fn keyword)
+          head-sha    (-> (shell/sh "git" "-C" repo-path "rev-parse" "HEAD")
+                          :out str/trim)]
+      (is (= 200 (:status import-resp)))
+      (is (= 200 (:status status-resp)))
+      (is (= head-sha (get-in status-body [:data :head-sha]))
+          (str "import must persist the HEAD sha; got: "
+               (pr-str (:data status-body)))))))
