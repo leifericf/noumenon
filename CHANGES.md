@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.3
+
 ### Fixes
 
 - **Introspect `extra_repos` resolver and target-set are no longer duplicated** — `resolve-extra-repos` had near-identical inline copies in CLI introspect (`cli/commands/introspect.clj`) and HTTP introspect (`http/handlers/introspect.clj`); they used different conn-open helpers (`db/connect-and-ensure-schema` vs `db/get-or-create-conn`) but were otherwise the same shape. Lifted to `noumenon.repo/resolve-extra-repos` so both transports go through one definition. The redundant `mw/allowed-introspect-targets` set definition in `http/middleware.clj` is removed in favor of the canonical `util/valid-introspect-targets` that CLI already used.
