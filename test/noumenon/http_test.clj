@@ -708,6 +708,50 @@
           (str "import must persist the HEAD sha; got: "
                (pr-str (:data status-body)))))))
 
+(deftest http-enrich-analyze-synthesize-require-imported-db
+  (testing "POST /api/enrich, /api/analyze, and /api/synthesize must
+            return 404 when the resolved DB has not been imported yet.
+            Without this guard, db/get-or-create-conn silently creates
+            an empty Datomic DB and the handler returns success with
+            zero work — the user thinks the operation worked but
+            actually nothing was imported and there's now a phantom
+            database on disk."
+    (let [repo-path (make-tmp-git-repo! "imported-guard")
+          db-dir    (str "/tmp/noumenon-imported-guard-" (System/currentTimeMillis))
+          handler   (http/make-handler {:db-dir db-dir})]
+      (testing "/api/enrich on never-imported repo → 404"
+        (let [resp (handler (post-with-body "/api/enrich" {:repo_path repo-path}))
+              body (json/read-str (:body resp) :key-fn keyword)]
+          (is (= 404 (:status resp))
+              (str "expected 404 on un-imported repo; got: " (:status resp)
+                   " body: " (pr-str body)))
+          (is (re-find #"(?i)not.*imported|run.*import" (str (:error body)))
+              (str "error must point user at /api/import; got: " (:error body)))))
+      (testing "/api/analyze on never-imported repo → 404"
+        (let [resp (handler (post-with-body "/api/analyze" {:repo_path repo-path}))
+              body (json/read-str (:body resp) :key-fn keyword)]
+          (is (= 404 (:status resp)))
+          (is (re-find #"(?i)not.*imported|run.*import" (str (:error body)))
+              (str "got: " (:error body)))))
+      (testing "/api/synthesize on never-imported repo → 404"
+        (let [resp (handler (post-with-body "/api/synthesize" {:repo_path repo-path}))
+              body (json/read-str (:body resp) :key-fn keyword)]
+          (is (= 404 (:status resp)))
+          (is (re-find #"(?i)not.*imported|run.*import" (str (:error body)))
+              (str "got: " (:error body))))))))
+
+(deftest http-import-creates-db-without-imported-guard
+  (testing "POST /api/import on a never-imported repo must succeed —
+            this is the operation that establishes the DB. The
+            require-imported? guard applies only to enrich / analyze /
+            synthesize."
+    (let [repo-path (make-tmp-git-repo! "import-no-guard")
+          db-dir    (str "/tmp/noumenon-import-no-guard-" (System/currentTimeMillis))
+          handler   (http/make-handler {:db-dir db-dir})
+          resp      (handler (post-with-body "/api/import" {:repo_path repo-path}))]
+      (is (= 200 (:status resp))
+          (str "import must establish the DB; got " (:status resp))))))
+
 (deftest http-synthesize-reseeds-artifacts-first
   (testing "POST /api/synthesize must call artifacts/reseed! before
             building the LLM prompt-fn so an updated prompt/rules/query

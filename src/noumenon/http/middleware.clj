@@ -212,6 +212,30 @@
                 :db (d/db (:conn ctx))
                 :meta-db (d/db (:meta-conn ctx)))))))
 
+(defn with-imported-repo
+  "Like `with-repo`, but rejects with 404 when the resolved DB has not
+   been imported yet. Use for endpoints that require a populated graph
+   (enrich, analyze, synthesize) — without this guard,
+   `db/get-or-create-conn` silently creates an empty Datomic DB and
+   the operation reports zero work, leaving a phantom database
+   on disk. Endpoints that *establish* the DB (import, update, digest)
+   keep using `with-repo`. The on-disk check runs BEFORE the conn is
+   created so the guard cannot itself create the directory it's
+   guarding against."
+  [params db-dir f]
+  (let [repo-path (:repo_path params)]
+    (when-not repo-path
+      (throw (ex-info "Missing repo_path" {:status 400 :message "repo_path is required"})))
+    (util/validate-repo-path-input! repo-path)
+    (let [{:keys [db-name]}
+          (repo/resolve-repo repo-path db-dir {:lookup-uri-fn lookup-repo-uri})
+          db-path (io/file db-dir "noumenon" db-name)]
+      (when-not (.isDirectory db-path)
+        (let [msg (str "Database not yet imported for " db-name
+                       ". Run /api/import first.")]
+          (throw (ex-info msg {:status 404 :message msg}))))
+      (with-repo params db-dir f))))
+
 (defn with-db-name
   "Connect by database name (not repo path). For GET endpoints where
    we only need the database, not a filesystem path."

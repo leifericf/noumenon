@@ -68,7 +68,7 @@
                      ". Must be one of: all, prompt-changed, model-changed, stale")]
         (throw (ex-info msg {:status 400 :message msg :user-message msg
                              :field "reanalyze"}))))
-    (mw/with-repo params (:db-dir config)
+    (mw/with-imported-repo params (:db-dir config)
       (fn [ctx]
         (if (mw/wants-sse? request)
           (mw/with-sse request (partial run-analyze ctx params config))
@@ -84,7 +84,7 @@
 
 (defn handle-enrich [request config]
   (let [params (mw/parse-json-body request)]
-    (mw/with-repo params (:db-dir config)
+    (mw/with-imported-repo params (:db-dir config)
       (fn [ctx]
         (if (mw/wants-sse? request)
           (mw/with-sse request (partial run-enrich ctx params))
@@ -148,7 +148,7 @@
 
 (defn handle-synthesize [request config]
   (let [params (mw/parse-json-body request)]
-    (mw/with-repo params (:db-dir config)
+    (mw/with-imported-repo params (:db-dir config)
       (fn [ctx]
         (if (mw/wants-sse? request)
           (mw/with-sse request (partial run-synthesize ctx params config))
