@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.2
+
 ### Fixes
 
 - **`benchmark` no longer eagerly resolves a provider when there's no model to use** — `load-run-context` always called `llm/make-isolated-prompt-fn` for any run that included the `:raw` layer, which forced full provider resolution (model lookup, API-key validation) at construction time even if the caller had supplied an `invoke-llm` mock. Tests that didn't bother passing `:model-config` (defaulted to `{:provider "glm"}`) crashed with "No model selected for provider glm"; tests that did pass a `:provider "claude"` config crashed on the missing API key. The construction is now gated on `(:model model-config)` — explicit model present means the user wants the isolated path; without it, `select-llm-fn` falls back to the main `invoke-llm` for `:raw` stages, matching its existing fallback contract. The `with-bench-mocks` test helper also stubs `make-isolated-prompt-fn` so tests that DO pass an explicit model config (without a real API key) don't trigger the API-key check.
