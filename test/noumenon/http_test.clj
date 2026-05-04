@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [noumenon.analyze]
+            [noumenon.artifacts]
             [noumenon.auth :as auth]
             [noumenon.http :as http]
             [noumenon.http.handlers.query]
@@ -706,6 +707,57 @@
       (is (= head-sha (get-in status-body [:data :head-sha]))
           (str "import must persist the HEAD sha; got: "
                (pr-str (:data status-body)))))))
+
+(deftest http-synthesize-reseeds-artifacts-first
+  (testing "POST /api/synthesize must call artifacts/reseed! before
+            building the LLM prompt-fn so an updated prompt/rules/query
+            seed is picked up. CLI synthesize already does this; HTTP
+            now matches so daemon-mode synth is consistent with CLI."
+    (let [reseed-calls (atom 0)
+          repo-path (make-tmp-git-repo! "synth-reseed")
+          db-dir    (str "/tmp/noumenon-synth-reseed-" (System/currentTimeMillis))
+          handler   (http/make-handler {:db-dir db-dir})]
+      (handler (post-with-body "/api/import" {:repo_path repo-path}))
+      (with-redefs [noumenon.artifacts/reseed!
+                    (fn [_] (swap! reseed-calls inc) {})
+                    noumenon.llm/wrap-as-prompt-fn-from-opts
+                    (fn [_] {:prompt-fn (fn [_] {:text "{}" :usage {}})
+                             :model-id "stub" :provider-kw :stub})
+                    noumenon.synthesize/synthesize-repo!
+                    (fn [_ _ _] {:components 0})]
+        (handler (post-with-body "/api/synthesize" {:repo_path repo-path})))
+      (is (pos? @reseed-calls)
+          (str "expected at least one artifacts/reseed! call before synth; got: "
+               @reseed-calls)))))
+
+(deftest http-digest-reseeds-artifacts-before-synth
+  (testing "Inside POST /api/digest, the synthesize step must run
+            artifacts/reseed! first (matching CLI digest), so seed
+            edits get picked up across daemon boots."
+    (let [reseed-calls (atom 0)
+          repo-path (make-tmp-git-repo! "digest-reseed")
+          db-dir    (str "/tmp/noumenon-digest-reseed-" (System/currentTimeMillis))
+          handler   (http/make-handler {:db-dir db-dir})]
+      (handler (post-with-body "/api/import" {:repo_path repo-path}))
+      (with-redefs [noumenon.artifacts/reseed!
+                    (fn [_] (swap! reseed-calls inc) {})
+                    noumenon.llm/wrap-as-prompt-fn-from-opts
+                    (fn [_] {:prompt-fn (fn [_] {:text "{}" :usage {}})
+                             :model-id "stub" :provider-kw :stub})
+                    noumenon.analyze/analyze-repo!
+                    (fn [& _] {:files-analyzed 0 :files-promoted 0
+                               :files-skipped 0 :files-errored 0
+                               :files-parse-errored 0
+                               :total-usage {:input-tokens 0 :output-tokens 0
+                                             :cost-usd 0 :duration-ms 0}})
+                    noumenon.synthesize/synthesize-repo!
+                    (fn [_ _ _] {:components 0})]
+        (handler (post-with-body "/api/digest"
+                                 {:repo_path repo-path
+                                  :skip_benchmark true})))
+      (is (pos? @reseed-calls)
+          (str "expected at least one artifacts/reseed! call inside digest; got: "
+               @reseed-calls)))))
 
 (deftest http-synthesize-uses-raised-max-tokens
   (testing "POST /api/synthesize must build its prompt-fn with

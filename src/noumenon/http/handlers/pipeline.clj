@@ -5,6 +5,7 @@
   (:require [clojure.string :as str]
             [datomic.client.api :as d]
             [noumenon.analyze :as analyze]
+            [noumenon.artifacts :as artifacts]
             [noumenon.benchmark :as bench]
             [noumenon.delta :as delta]
             [noumenon.files :as files]
@@ -135,7 +136,8 @@
    exceeds the provider default token cap. Match the CLI's raise."
   16384)
 
-(defn- run-synthesize [{:keys [conn meta-db db-name]} params config progress-fn]
+(defn- run-synthesize [{:keys [conn meta-conn meta-db db-name]} params config progress-fn]
+  (artifacts/reseed! meta-conn)
   (let [{:keys [prompt-fn model-id provider-kw]}
         (llm/wrap-as-prompt-fn-from-opts
          (assoc (mw/resolve-provider params config) :max-tokens synth-max-tokens))]
@@ -152,7 +154,8 @@
           (mw/with-sse request (partial run-synthesize ctx params config))
           (mw/ok (run-synthesize ctx params config nil)))))))
 
-(defn- run-digest [{:keys [conn meta-db db-dir db-name repo-path]} params config progress-fn]
+(defn- run-digest [{:keys [conn meta-conn meta-db db-dir db-name repo-path]} params config progress-fn]
+  (artifacts/reseed! meta-conn)
   (let [{:keys [prompt-fn model-id provider-kw]}
         (llm/wrap-as-prompt-fn-from-opts (mw/resolve-provider params config))
         step-progress (fn [step-name inner-fn]
