@@ -2,9 +2,17 @@
 
 ## Unreleased
 
-### Fixes
+## 0.11.0
 
-- **`noumenon.p4/sync!` applies the same exclude policy as `clone!`** — `clone!` filtered binary noise (`*.fbx`, `*.uasset`, etc. from `resources/p4-excludes.edn`) but `sync!` was building its `clj-p4.api/sync!` request without an `:exclude` field, so any new changelist that added an excluded file type would silently include it on the next sync. Sync now computes the same default exclude vector and passes it through, keeping the imported history aligned with the policy across both the initial clone and every subsequent incremental import.
+### Changed
+
+- **clj-p4 upgraded to v0.6.1-alpha and pinned to a public Git tag** — `deps.edn` previously resolved clj-p4 via `:local/root "../clj-p4"`, which made noumenon non-buildable on any machine without a sibling clone of the library. The coordinate is now `{:git/tag "v0.6.1-alpha" :git/sha "332b280"}`, matching the format `cognitect-labs/test-runner` already uses in the same file. clj-p4 v0.4.0-alpha renamed several namespaces (`clj-p4.exclude` → `clj-p4.excludes`, `clj-p4.spec` → `clj-p4.predicates`, `clj-p4.shell.proc` → `clj-p4.io.subprocess`) and renamed `api/sync!` to `api/fetch!`; v0.6.0-alpha removed the pre-compiled `:exclude` escape hatch outright (now throws `:legacy-exclude-removed` at the boundary). `noumenon.p4` was still calling all four; the adapter is rewritten against the post-0.4.0-alpha API surface. No public-API change for `noumenon.p4`'s callers (`noumenon.repo`, `noumenon.repo-manager`, `noumenon.sync`).
+- **Binary filtering is delegated to clj-p4** — clj-p4 v0.5.0+ ships its own curated binary-category set (nine categories, ~77 patterns, including Wwise `.bnk`/`.wem` and Unreal cooked content `.uasset`/`.umap`/`.upk`/`.ubulk` that the noumenon-side list also covered) plus a Perforce-type catch-all that drops any revision whose `:rev/type` is `:binary`/`:apple`/`:resource`. Both `noumenon.p4/clone!` and `noumenon.p4/sync!` now pass `:exclude-binaries? true :exclude-categories :all`, replacing the noumenon-side `:exclude` pattern vector compiled from `resources/p4-excludes.edn`. This subsumes the post-0.10.3 fix that made `sync!` forward the same exclude vector as `clone!` — clone-vs-sync symmetry is now structural (identical fixed policy at both call sites) rather than a bug that had to be tracked.
+
+### Removed
+
+- **`resources/p4-excludes.edn`** — 42-line categorised extension blocklist that duplicated clj-p4's own built-in list. clj-p4 owns the responsibility now; the file is gone, the resource loader (`excludes-resource` delay in `noumenon.p4`) is gone, and the `compile-excludes` private helper is gone.
+- **`:no-default-excludes?`, `:extra-excludes`, `:includes` options on `noumenon.p4/clone!`** — these were documented in the function's docstring but had no actual producer in `src/` or `test/`. If a future caller needs path-level carve-outs, plumb `:excludes`/`:includes` through `p4-opts` directly to `clj-p4.api/clone!`/`fetch!`.
 
 ## 0.10.3
 
