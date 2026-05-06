@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Docker image build adds `git` to the build stage** — the v0.11.0 release pushed clj-p4 from `:local/root` to `{:git/tag "v0.6.1-alpha"}`, so `clojure -T:build uber` now needs to clone the dependency via git inside the build container. The build stage's `apk add --no-cache curl bash` did not include git, so the docker job in the release workflow failed at `clojure -T:build uber` with a tools.deps git-clone error. The runtime stage already had git for noumenon's own clone-and-import workflow; the build stage now matches.
+
 ## 0.11.0
 
 ### Changed
