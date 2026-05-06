@@ -5,28 +5,28 @@
 
    Connection details (`P4PORT`, `P4USER`, `P4CLIENT`, `P4PASSWD`,
    `P4CHARSET`) come from the environment, just like the historical
-   git-p4 wrapper. Clones are bare; sync derives the stream from the most
-   recent commit's `git-p4:` trailer."
+   git-p4 wrapper. Clones are bare; sync derives the source from the
+   most recent commit's `git-p4:` trailer.
+
+   Binary filtering is delegated to clj-p4. Revisions Perforce itself
+   classifies as binary (`:rev/type` ∈ `:binary`/`:apple`/`:resource`)
+   are dropped, and clj-p4's built-in extension category set is applied
+   on top via `:exclude-categories :all`."
   (:require [clj-p4.api :as api]
-            [clj-p4.exclude :as p4-exclude]
-            [clj-p4.spec :as p4-spec]
-            [clojure.edn :as edn]
-            [clojure.java.io :as io]
+            [clj-p4.io.subprocess :as p4-proc]
+            [clj-p4.predicates :as p4-pred]
             [clojure.string :as str]
             [noumenon.util :refer [log!]]))
-
-(def ^:private excludes-resource
-  (delay (some-> (io/resource "p4-excludes.edn") slurp edn/read-string)))
 
 (defn depot-path?
   "True if `s` looks like a Perforce depot path."
   [s]
-  (p4-spec/depot-path? s))
+  (p4-pred/depot-path? s))
 
 (defn validate-depot-path!
   "Throws on invalid depot paths; returns the path otherwise."
   [s]
-  (p4-spec/validate-depot-path! s))
+  (p4-pred/validate-depot-path! s))
 
 (defn available?
   "True if the `p4` CLI is on PATH."
@@ -44,7 +44,7 @@
      //depot/ProjectA/main/... → ProjectA-main
      //stream/main/...         → main"
   [depot-path]
-  (let [{:depot/keys [depot segments]} (p4-spec/parse-depot-path depot-path)
+  (let [{:depot/keys [depot segments]} (p4-pred/parse-depot-path depot-path)
         parts (if (seq segments) segments [depot])]
     (-> (str/join "-" parts)
         (str/replace #"[^a-zA-Z0-9\-_.]" ""))))
@@ -65,32 +65,27 @@
   (when (= :process-change (:op/kind op))
     (log! (str "p4 change " (:op/change op)))))
 
-(defn- compile-excludes [opts]
-  (let [patterns (p4-exclude/exclude-patterns
-                  (assoc opts :resource @excludes-resource))]
-    (p4-exclude/compile-patterns patterns)))
-
 (defn clone!
   "Clone a Perforce stream into `target-dir` as a bare git repo. Options:
-     :no-default-excludes?  skip the `p4-excludes.edn` resource defaults.
-     :extra-excludes        additional patterns to exclude.
-     :includes              patterns to remove from the union (whitelist).
-     :max-changes           cap on imported changelists."
+     :max-changes  cap on imported changelists.
+
+   Binary filtering is delegated to clj-p4 — see the namespace docstring."
   [depot-path target-dir opts]
   (validate-depot-path! depot-path)
   (log! (str "clj-p4: cloning " depot-path " into " target-dir))
-  (api/clone! {:conn        (conn-from-env)
-               :stream      depot-path
-               :target      (str target-dir)
-               :exclude     (compile-excludes (or opts {}))
-               :max-changes (:max-changes opts)
-               :progress-fn progress-fn})
+  (api/clone! {:conn               (conn-from-env)
+               :source             depot-path
+               :target             (str target-dir)
+               :exclude-binaries?  true
+               :exclude-categories :all
+               :max-changes        (:max-changes opts)
+               :progress-fn        progress-fn})
   (log! "clj-p4: clone complete")
   (str target-dir))
 
 (defn- last-commit-message [repo-path]
   (try
-    (-> (clj-p4.shell.proc/run-checked!
+    (-> (p4-proc/run-checked!
          ["git" "-C" (str repo-path) "log" "-1" "--pretty=%B"
           "refs/heads/main"])
         :stdout-bytes
@@ -98,7 +93,7 @@
     (catch Exception _ nil)))
 
 (defn- stream-from-trailer
-  "Extract the stream depot-path from a `git-p4:` commit trailer."
+  "Extract the source depot-path from a `git-p4:` commit trailer."
   [msg]
   (when msg
     (when-let [[_ s] (re-find #"depot-paths\s*=\s*\"([^\"]+?)/?\"" msg)]
@@ -106,20 +101,20 @@
 
 (defn sync!
   "Bring an existing clj-p4 clone at `repo-path` up to date with Perforce.
-   Derives the stream from the most recent commit's `git-p4:` trailer.
-   Applies the same default `p4-excludes.edn` policy `clone!` uses, so
-   files excluded at clone time stay excluded on every subsequent sync."
+   Derives the source from the most recent commit's `git-p4:` trailer.
+   Same binary-filter policy as `clone!` — clj-p4 owns it."
   [repo-path]
-  (let [stream (-> (last-commit-message repo-path) stream-from-trailer)]
-    (when-not stream
-      (throw (ex-info (str "Cannot determine Perforce stream for "
+  (let [source (-> (last-commit-message repo-path) stream-from-trailer)]
+    (when-not source
+      (throw (ex-info (str "Cannot determine Perforce source for "
                            repo-path " — re-clone needed")
                       {:repo-path (str repo-path)})))
-    (log! (str "clj-p4: syncing " repo-path " from " stream))
-    (api/sync! {:conn        (conn-from-env)
-                :stream      stream
-                :target      (str repo-path)
-                :exclude     (compile-excludes {})
-                :progress-fn progress-fn})
+    (log! (str "clj-p4: syncing " repo-path " from " source))
+    (api/fetch! {:conn               (conn-from-env)
+                 :source             source
+                 :target             (str repo-path)
+                 :exclude-binaries?  true
+                 :exclude-categories :all
+                 :progress-fn        progress-fn})
     (log! "clj-p4: sync complete")
     true))
