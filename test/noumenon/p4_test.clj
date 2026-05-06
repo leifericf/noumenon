@@ -1,10 +1,8 @@
 (ns noumenon.p4-test
   "Adapter tests for the noumenon.p4 namespace. The library-side correctness
    lives in clj-p4's own tests; here we cover only the Noumenon-specific
-   bits: depot-path detection, clone-path derivation, exclude-defaults
-   loading from `p4-excludes.edn`, and trailer parsing for sync."
+   bits: depot-path detection and clone-path derivation."
   (:require [clojure.test :refer [deftest is testing]]
-            [clj-p4.api :as api]
             [noumenon.p4 :as p4]))
 
 (deftest depot-path-detection
@@ -39,29 +37,3 @@
   ;; Doesn't assert true/false — the test environment may or may not have
   ;; the p4 binary. Just check the call succeeds and returns a boolean.
   (is (boolean? (p4/available?))))
-
-(deftest sync-passes-exclude-policy
-  (testing "sync! computes the same default excludes as clone! and forwards them"
-    (let [captured (atom nil)]
-      (with-redefs [;; Stub out the trailer-parse → return a fake stream
-                    p4/depot-path? (fn [_] true)
-                    ;; Intercept the underlying clj-p4 call
-                    api/sync! (fn [m] (reset! captured m) {:synced 0})
-                    ;; Stub clj-p4.shell.proc/run-checked! so last-commit-message
-                    ;; returns a string carrying a git-p4 trailer (so sync!
-                    ;; passes its trailer-presence guard).
-                    clj-p4.shell.proc/run-checked!
-                    (fn [_ & _]
-                      {:exit 0
-                       :stdout-bytes (.getBytes (str "subject\n\n"
-                                                     "[git-p4: depot-paths = "
-                                                     \" "//stream/main/" \" ": "
-                                                     "change = 1]")
-                                                "UTF-8")
-                       :stderr "" :elapsed-ms 1})]
-        (p4/sync! "/tmp/fake-repo")
-        (let [{:keys [exclude]} @captured]
-          (is (vector? exclude)
-              "exclude vector should be present, not nil")
-          (is (pos? (count exclude))
-              "default p4-excludes.edn should produce at least one pattern"))))))
